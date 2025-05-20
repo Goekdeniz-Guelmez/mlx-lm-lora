@@ -1,12 +1,15 @@
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 import time
+from typing import Optional, List, Tuple, Dict, Any
 
 from mlx.nn.utils import average_gradients
 from mlx.utils import tree_flatten
 import mlx.core as mx
 import mlx.nn as nn
 import numpy as np
+from tqdm import tqdm
 
 from mlx_lm.tuner.callbacks import TrainingCallback
 
@@ -278,15 +281,15 @@ def train_orpo(
     }
 
     start = time.perf_counter()
-    for it, batch in zip(
-        range(1, args.iters + 1),
-        iterate_orpo_batches(
+    pbar = tqdm(range(1, args.iters + 1), desc="Training", disable=rank != 0)
+    for it in pbar:
+        batch = next(iterate_orpo_batches(
             dataset=train_dataset,
             batch_size=args.batch_size,
             max_seq_length=args.max_seq_length,
             train=True,
-        ),
-    ):
+        ))
+
         if it == 1 or it % args.steps_per_eval == 0 or it == args.iters:
             stop = time.perf_counter()
             val_loss, val_rewards, val_ntokens, val_metrics = evaluate_orpo(
@@ -355,34 +358,37 @@ def train_orpo(
             peak_mem = mx.get_peak_memory() / 1e9
 
             if rank == 0:
+                pbar.set_postfix({
+                    'loss': f"{train_loss:.3f}",
+                    'it/s': f"{it_sec:.3f}",
+                })
                 print(
-                    f"Iter {it}: Train loss {train_loss:.3f}, "
-                    f"Chosen reward {train_rewards[0]:.3f}, "
-                    f"Rejected reward {train_rewards[1]:.3f}, "
-                    f"Accuracy {avg_metrics['accuracies']:.3f}, "
-                    f"Margin {avg_metrics['margins']:.3f}, "
-                    f"Learning Rate {learning_rate:.3e}, "
-                    f"It/sec {it_sec:.3f}, "
-                    f"Tokens/sec {tokens_sec:.3f}, "
-                    f"Peak mem {peak_mem:.3f} GB",
-                    flush=True,
+                    f"\nIter {it}: "
+                    f"loss {train_loss:.3f}, "
+                    f"chosen_r {train_rewards[0]:.3f}, "
+                    f"rejected_r {train_rewards[1]:.3f}, "
+                    f"acc {avg_metrics['accuracies']:.3f}, "
+                    f"margin {avg_metrics['margins']:.3f}, "
+                    f"lr {learning_rate:.3e}, "
+                    f"it/s {it_sec:.3f}, "
+                    f"tok/s {tokens_sec:.3f}, "
+                    f"peak_mem {peak_mem:.3f}GB"
                 )
 
             if training_callback is not None:
-                training_callback.on_train_loss_report(
-                    {
-                        "iteration": it,
-                        "train_loss": train_loss,
-                        "train_chosen_reward": train_rewards[0],
-                        "train_rejected_reward": train_rewards[1],
-                        **{f"train_{k}": v for k, v in avg_metrics.items()},
-                        "learning_rate": learning_rate,
-                        "iterations_per_second": it_sec,
-                        "tokens_per_second": tokens_sec,
-                        "trained_tokens": trained_tokens,
-                        "peak_memory": peak_mem,
-                    }
-                )
+                train_info = {
+                    "iteration": it,
+                    "train_loss": train_loss,
+                    "train_chosen_reward": train_rewards[0],
+                    "train_rejected_reward": train_rewards[1],
+                    **{f"train_{k}": v for k, v in avg_metrics.items()},
+                    "learning_rate": learning_rate,
+                    "iterations_per_second": it_sec,
+                    "tokens_per_second": tokens_sec,
+                    "trained_tokens": trained_tokens,
+                    "peak_memory": peak_mem,
+                }
+                training_callback.on_train_loss_report(train_info)
 
             losses = 0
             rewards = mx.zeros((2,))

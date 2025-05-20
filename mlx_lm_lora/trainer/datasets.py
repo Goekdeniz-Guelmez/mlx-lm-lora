@@ -20,11 +20,27 @@ class GRPODataset:
     ):
         self._data = []
         for item in data:
-            prompt_str = str(item[prompt_key])
-            answer_str = str(item[answer_key])
+            # Get prompt with fallbacks for different key names
+            for key in [prompt_key, "instruction", "question"]:
+                if key in item:
+                    prompt_str = str(item[key])
+                    break
+            else:
+                raise ValueError(f"No prompt field found in data. Expected one of: {prompt_key}, 'instruction', 'question'")
+                
+            # Get answer with fallbacks for different key names
+            for key in [answer_key, "output", "response", "completion"]:
+                if key in item:
+                    answer_str = str(item[key])
+                    break
+            else:
+                raise ValueError(f"No answer field found in data. Expected one of: {answer_key}, 'output', 'response', 'completion'")
+                
+            # Get optional type info
             type_info = item.get(type_key, None)
+            
             if use_chat_template:
-                default_system_str = "A conversation between User and Assistant. The user asks a question, and the Assistant solves it. The assistant first thinks about the reasoning process in the mind and then provides the user with the answer. The reasoning process and answer are enclosed within <think> </think> and <answer> </answer> tags, respectively, i.e., <think> reasoning process here </think><answer> answer here </answer>."
+                default_system_str = "You are a helpful assistant."
                 system_str = item.get(system_key, default_system_str)
                 prompt_tokens = tokenizer.apply_chat_template(
                     [
@@ -35,11 +51,22 @@ class GRPODataset:
                 )
                 answer_tokens = tokenizer.encode(answer_str)
             else:
-                if use_prompt:
-                    prompt_tokens = tokenizer.encode(f"""A conversation between User and Assistant. The user asks a question, and the Assistant solves it. The assistant first thinks about the reasoning process in the mind and then provides the user with the answer. The reasoning process and answer are enclosed within <think> </think> and <answer> </answer> tags, respectively, i.e., <think> reasoning process here </think><answer> answer here </answer>. User: {prompt_str} Assistant: """)
+                # If system prompt is provided, prepend it to the prompt
+                if system_key in item:
+                    system_str = str(item[system_key])
+                    if use_prompt:
+                        prompt_tokens = tokenizer.encode(f"{system_str}\n\n{prompt_str}")
+                    else:
+                        # For poker agent, just use the regular format with system as a separate field
+                        prompt_tokens = tokenizer.encode(prompt_str)
                 else:
-                    prompt_tokens = tokenizer.encode(prompt_str)
+                    if use_prompt:
+                        prompt_tokens = tokenizer.encode(f"A conversation between User and Assistant. The user asks a question, and the Assistant solves it. The assistant first thinks about the reasoning process in the mind and then provides the user with the answer. The reasoning process and answer are enclosed within <think> </think> and <answer> </answer> tags, respectively, i.e., <think> reasoning process here </think><answer> answer here </answer>. User: {prompt_str} Assistant: ")
+                    else:
+                        prompt_tokens = tokenizer.encode(prompt_str)
+                
                 answer_tokens = tokenizer.encode(answer_str)
+                
             self._data.append((prompt_tokens, answer_tokens, prompt_str, answer_str, type_info))
 
     def __getitem__(self, idx: int) -> Tuple[List[int], List[int], str, str]:
@@ -384,14 +411,39 @@ def create_dataset(
     preference_score_feature = getattr(config, "preference_score_feature", "preference_score")
 
     # For GRPO
-    use_prompt = getattr(config, "use_prompt", "normal")
+    use_prompt = getattr(config, "use_prompt", False)
     type_feature = getattr(config, "type_feature", "type")
     answer_feature = getattr(config, "answer_feature", "answer")
-    use_chat_template = getattr(config, "use_chat_template", "normal")
+    use_chat_template = getattr(config, "use_chat_template", False)
 
+    # Make sure we have at least one entry in the dataset
+    if not data or len(data) == 0:
+        return []
+    
+    # Get the first sample to check the format
     sample = data[0]
-
-    if train_mode == "orpo":
+    
+    # For GRPO, just check if necessary fields exist in any form
+    if train_mode == "grpo":
+        # Look for prompt field with alternative names if needed
+        prompt_exists = any(field in sample for field in [prompt_feature, "instruction", "question"])
+        # Look for answer field with alternative names if needed
+        answer_exists = any(field in sample for field in [answer_feature, "output", "response", "completion"])
+        
+        if prompt_exists and answer_exists:
+            return GRPODataset(
+                data=data,
+                tokenizer=tokenizer,
+                prompt_key=prompt_feature,
+                answer_key=answer_feature,
+                system_key=system_feature,
+                type_key=type_feature,
+                use_chat_template=use_chat_template,
+                use_prompt=use_prompt
+            )
+        else:
+            raise ValueError(f"Unsupported data format for GRPO training. Required fields: {prompt_feature} and {answer_feature}. Found: {list(sample.keys())}")
+    elif train_mode == "orpo":
         if chosen_feature in sample and rejected_feature in sample:
             return ORPODataset(
                 data=data,
@@ -416,20 +468,6 @@ def create_dataset(
                 )
         else:
             raise ValueError("Unsupported data format for DPO training.")
-    elif train_mode == "grpo":
-        if answer_feature in sample and prompt_feature in sample:
-            return GRPODataset(
-                data=data,
-                tokenizer=tokenizer,
-                prompt_key=prompt_feature,
-                answer_key=answer_feature,
-                system_key=system_feature,
-                type_key=type_feature,
-                use_chat_template=use_chat_template,
-                use_prompt=use_prompt
-            )
-        else:
-            raise ValueError("Unsupported data format for GRPO training.")
     elif train_mode == "sft":
         if prompt_feature in sample and completion_feature in sample:
             return CompletionsDataset(
@@ -445,6 +483,8 @@ def create_dataset(
             return TextDataset(data, tokenizer, text_key=text_feature)
         else:
             raise ValueError("Unsupported data format for SFT training.")
+    else:
+        raise ValueError(f"Unsupported training mode: {train_mode}")
 
 
 def load_local_dataset(

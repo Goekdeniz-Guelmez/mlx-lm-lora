@@ -7,6 +7,7 @@ from mlx.utils import tree_flatten
 import mlx.core as mx
 import mlx.nn as nn
 import numpy as np
+from tqdm import tqdm
 
 from mlx_lm.tuner.callbacks import TrainingCallback
 
@@ -681,15 +682,15 @@ def train_grpo(
         accumulated_metrics[f"{func_name}_coverage"] = 0
 
     start = time.perf_counter()
-    for it, batch in zip(
-        range(1, args.iters + 1),
-        iterate_batches(
+    pbar = tqdm(range(1, args.iters + 1), desc="Training", disable=rank != 0)
+    for it in pbar:
+        batch = next(iterate_batches(
             dataset=train_dataset,
             batch_size=args.batch_size,
             max_seq_length=args.max_seq_length,
             train=True,
-        ),
-    ):
+        ))
+
         if it == 1 or it % args.steps_per_eval == 0 or it == args.iters:
             stop = time.perf_counter()
             val_loss, val_ntokens, val_metrics = evaluate_grpo(
@@ -712,45 +713,27 @@ def train_grpo(
             )
             val_time = time.perf_counter() - stop
             if rank == 0:
-                val_metrics_str = (
-                    f"Val loss {val_loss:.3f}, "
-                    f"Val total_rewards_mean {val_metrics['total_rewards_mean']:.3f}, "
-                    f"Val total_rewards_std {val_metrics['total_rewards_std']:.3f}, "
-                    f"Val grouped_rewards_mean {val_metrics['grouped_rewards_mean']:.3f}, "
-                    f"Val grouped_rewards_std {val_metrics['grouped_rewards_std']:.3f}, "
-                    f"Val Average Generated Tokens {val_metrics['average_generated_tokens']}, "
-                    f"Val kl {val_metrics['kl']:.3f}"
-                )
-
-                for i, reward_func in enumerate(reward_funcs):
-                    val_metrics_str += (
-                        f", Val {reward_func.__name__}_mean {val_metrics[f'{reward_func.__name__}_mean']:.3f}, "
-                        f"Val {reward_func.__name__}_std {val_metrics[f'{reward_func.__name__}_std']:.3f}"
-                    )
-
                 print(
-                    f"Iter {it}: {val_metrics_str}, " f"Val took {val_time:.3f}s",
+                    f"Iter {it}: "
+                    f"Val loss {val_loss:.3f}, "
+                    f"Val took {val_time:.3f}s",
                     flush=True,
                 )
 
             if training_callback is not None:
-                training_callback.on_val_loss_report(
-                    {
-                        "iteration": it,
-                        "val_loss": val_loss,
-                        **{f"val_{k}": v for k, v in val_metrics.items()},
-                        "val_time": val_time,
-                    }
-                )
+                val_info = {
+                    "iteration": it,
+                    "val_loss": val_loss,
+                    "val_time": val_time,
+                }
+                training_callback.on_val_loss_report(val_info)
 
             start = time.perf_counter()
 
-        loss, toks, metrics = step(batch)
-        losses += loss
+        lvalue, toks, metrics = step(batch)
+        losses += lvalue
         n_tokens += toks
         steps += 1
-
-        mx.clear_cache()
 
         for k, v in metrics.items():
             accumulated_metrics[k] += v
@@ -760,12 +743,11 @@ def train_grpo(
         if it % args.steps_per_report == 0 or it == args.iters:
             stop = time.perf_counter()
 
-            train_loss = mx.distributed.all_sum(losses, stream=mx.cpu).item()
-            train_loss /= steps * mx.distributed.init().size()
+            train_loss = mx.distributed.all_sum(losses).item() / (steps * world_size)
             avg_metrics = {
                 k: v / (steps * world_size) for k, v in accumulated_metrics.items()
             }
-            n_tokens = mx.distributed.all_sum(n_tokens, stream=mx.cpu).item()
+            n_tokens = mx.distributed.all_sum(n_tokens).item()
             learning_rate = optimizer.learning_rate.item()
             it_sec = args.steps_per_report / (stop - start)
             tokens_sec = float(n_tokens) / (stop - start)
@@ -773,45 +755,36 @@ def train_grpo(
             peak_mem = mx.get_peak_memory() / 1e9
 
             if rank == 0:
-                train_metrics_str = (
-                    f"Train loss {float(train_loss):.3f}, "
-                    f"Total rewards mean {float(avg_metrics['total_rewards_mean']):.3f}, "
-                    f"Total rewards std {float(avg_metrics['total_rewards_std']):.3f}, "
-                    f"Grouped rewards mean {float(avg_metrics['grouped_rewards_mean']):.3f}, "
-                    f"Grouped rewards std {float(avg_metrics['grouped_rewards_std']):.3f}, "
-                    f"Average Generated Tokens {float(avg_metrics['average_generated_tokens'])}, "
-                    f"KL {float(avg_metrics['kl']):.3f}"
-                )
-
-                for i, reward_func in enumerate(reward_funcs):
-                    func_name = reward_func.__name__
-                    train_metrics_str += (
-                        f", {func_name} mean {float(avg_metrics[f'{func_name}_mean']):.3f}, "
-                        f"{func_name} std {float(avg_metrics[f'{func_name}_std']):.3f}"
-                    )
-
+                pbar.set_postfix({
+                    'loss': f"{train_loss:.3f}",
+                    'it/s': f"{it_sec:.3f}",
+                })
                 print(
-                    f"Iter {it}: {train_metrics_str}, "
-                    f"Learning Rate {learning_rate:.3e}, "
-                    f"It/sec {it_sec:.3f}, "
-                    f"Tokens/sec {tokens_sec:.3f}, "
-                    f"Peak mem {peak_mem:.3f} GB",
-                    flush=True,
+                    f"\nIter {it}: "
+                    f"loss {train_loss:.3f}, "
+                    f"total_r_mean {avg_metrics['total_rewards_mean']:.3f}, "
+                    f"total_r_std {avg_metrics['total_rewards_std']:.3f}, "
+                    f"group_r_mean {avg_metrics['grouped_rewards_mean']:.3f}, "
+                    f"group_r_std {avg_metrics['grouped_rewards_std']:.3f}, "
+                    f"kl {avg_metrics['kl']:.3f}, "
+                    f"lr {learning_rate:.3e}, "
+                    f"it/s {it_sec:.3f}, "
+                    f"tok/s {tokens_sec:.3f}, "
+                    f"peak_mem {peak_mem:.3f}GB"
                 )
 
             if training_callback is not None:
-                training_callback.on_train_loss_report(
-                    {
-                        "iteration": it,
-                        "train_loss": train_loss,
-                        **{f"train_{k}": v for k, v in avg_metrics.items()},
-                        "learning_rate": learning_rate,
-                        "iterations_per_second": it_sec,
-                        "tokens_per_second": tokens_sec,
-                        "trained_tokens": trained_tokens,
-                        "peak_memory": peak_mem,
-                    }
-                )
+                train_info = {
+                    "iteration": it,
+                    "train_loss": train_loss,
+                    **{f"train_{k}": v for k, v in avg_metrics.items()},
+                    "learning_rate": learning_rate,
+                    "iterations_per_second": it_sec,
+                    "tokens_per_second": tokens_sec,
+                    "trained_tokens": trained_tokens,
+                    "peak_memory": peak_mem,
+                }
+                training_callback.on_train_loss_report(train_info)
 
             losses = 0
             n_tokens = 0
@@ -827,6 +800,7 @@ def train_grpo(
             )
             mx.save_safetensors(str(checkpoint), adapter_weights)
             print(
+                f"\n"
                 f"Iter {it}: Saved adapter weights to "
                 f"{args.adapter_file} and {checkpoint}."
             )

@@ -232,7 +232,7 @@ if the Prompt template accept a system message, you can extend the Dataset with 
 
 Contrastive Preference Optimization (CPO) as introduced in the paper Contrastive Preference Optimization: Pushing the Boundaries of LLM Performance in Machine Translation by Haoran Xu, Amr Sharaf, Yunmo Chen, Weiting Tan, Lingfeng Shen, Benjamin Van Durme, Kenton Murray, and Young Jin Kim. At a high-level, CPO trains models to avoid generating adequate, but not perfect translations in Machine Translation (MT) tasks. However, CPO is a general approximation of the DPO loss and can be applied to other domains, such as chat.
 
-CPO aims to mitigate two fundamental shortcomings of SFT. First, SFT’s methodology of minimizing the discrepancy between predicted outputs and gold-standard references inherently caps model performance at the quality level of the training data. Secondly, SFT lacks a mechanism to prevent the model from rejecting mistakes in translations. The CPO objective is derived from the DPO objective.
+CPO aims to mitigate two fundamental shortcomings of SFT. First, SFT's methodology of minimizing the discrepancy between predicted outputs and gold-standard references inherently caps model performance at the quality level of the training data. Secondly, SFT lacks a mechanism to prevent the model from rejecting mistakes in translations. The CPO objective is derived from the DPO objective.
 To use CPO training, set the training mode to 'cpo':
 
 ```shell
@@ -305,6 +305,134 @@ mlx_lm.lora \
 - `--reward-weights`: Optional list of weights for multiple reward functions. Must match number of reward functions. If not specified, all rewards weighted equally with 1.0
 - `--use-chat-template`: Whether to use the model's chat template for formatting prompts (default: False)
 - `--use-prompt`: Whether to use the prompt as part of the input for generation (default: False)
+- `--reward-functions`: Comma-separated list of reward function names to use (default: uses all built-in rewards)
+- `--list-reward-functions`: List all available reward functions and exit
+
+#### Custom Reward Functions
+
+You can create and use custom reward functions for domain-specific tasks. This is useful when you need to evaluate completions using criteria different from the default reward functions.
+
+##### Built-in Reward Functions
+
+The default reward functions are:
+- `r1_accuracy_reward_func`: Rewards exact matches between completions and reference answers
+- `r1_int_reward_func`: Rewards integer responses
+- `r1_strict_format_reward_func`: Rewards adherence to a specific format
+- `r1_soft_format_reward_func`: Similar to strict format but more lenient
+- `r1_count_xml`: Rewards proper XML tag usage
+
+To see all available reward functions:
+
+```shell
+mlx_lm_lora.train --list-reward-functions
+```
+
+To select specific reward functions:
+
+```shell
+mlx_lm_lora.train \
+    --model <path_to_model> \
+    --train \
+    --data <path_to_data> \
+    --train-mode grpo \
+    --reward-functions r1_accuracy_reward_func,action_format_reward_func
+```
+
+##### Creating Custom Reward Functions
+
+You can create custom reward functions by creating a Python file with your reward functions. The file should define functions decorated with `@register_reward_function()`.
+
+**Method 1: Using a custom reward functions file (recommended)**
+
+Create a Python file with your custom reward functions:
+
+```python
+# custom_rewards.py
+from typing import List, Optional
+from mlx_lm_lora.trainer.grpo_reward_functions import register_reward_function
+
+def extract_content_between_tags(text: str, start_tag: str, end_tag: str) -> str:
+    """Extract content between given tags"""
+    try:
+        content = text.split(start_tag)[-1]
+        content = content.split(end_tag)[0]
+        return content.strip()
+    except:
+        return ""
+
+@register_reward_function()
+def custom_tag_match_reward(
+    prompts: list, completions: list, answer: list, types: Optional[list] = None
+) -> list[float]:
+    """Reward function that extracts content from custom tags and compares with reference answers"""
+    if not completions or not answer:
+        return [0.0] * len(prompts)
+    
+    # Extract content from <result> tags
+    extracted_results = [extract_content_between_tags(c, "<result>", "</result>") for c in completions]
+    
+    # Compare with reference answers
+    return [
+        2.0 if result and expected and result.strip() == expected.strip() else 0.0 
+        for result, expected in zip(extracted_results, answer)
+    ]
+
+@register_reward_function()
+def format_adherence_reward(
+    prompts: list, completions: list, answer: list, types: Optional[list] = None
+) -> list[float]:
+    """Reward function that gives points based on adherence to expected format"""
+    if not completions:
+        return [0.0] * len(prompts)
+    
+    scores = []
+    for completion in completions:
+        if not completion:
+            scores.append(0.0)
+            continue
+        
+        score = 0.0
+        
+        # Check for reasoning section
+        reasoning_start = completion.find("<reasoning>")
+        reasoning_end = completion.find("</reasoning>")
+        
+        # Check for result section
+        result_start = completion.find("<result>")
+        result_end = completion.find("</result>")
+        
+        # Award points for proper tag structure and ordering
+        if reasoning_start != -1:
+            score += 0.2  # Has opening reasoning tag
+        if reasoning_end != -1 and reasoning_start < reasoning_end:
+            score += 0.2  # Has closing reasoning tag in correct order
+        if result_start != -1 and (reasoning_end == -1 or reasoning_end < result_start):
+            score += 0.2  # Has opening result tag in correct order
+        if result_end != -1 and result_start < result_end:
+            score += 0.2  # Has closing result tag in correct order
+            
+        # Check if result content exists
+        if result_start != -1 and result_end != -1:
+            result_content = completion[result_start + 8 : result_end].strip()
+            if result_content:
+                score += 0.2  # Result tag contains content
+        
+        scores.append(score)
+    
+    return scores
+```
+
+Then run training with your custom reward functions:
+
+```shell
+mlx_lm_lora.train \
+    --model <path_to_model> \
+    --train \
+    --data <path_to_data> \
+    --train-mode grpo \
+    --reward-functions-file path/to/custom_rewards.py \
+    --reward-functions custom_tag_match_reward,format_adherence_reward
+```
 
 #### Training Process
 
@@ -324,28 +452,6 @@ GRPO requires more compute resources than standard LoRA training since it genera
 If running into memory issues, you can also try:
 - Reducing `--max-completion-length`
 - Using a smaller model for initial experiments
-
-#### Example Command with Full Options
-
-```shell
-mlx_lm.lora \
-    --model <path_to_model> \
-    --train \
-    --data <path_to_data> \
-    --fine-tune-type grpo \
-    --group-size 4 \
-    --beta 0.1 \
-    --epsilon 1e-4 \
-    --max-completion-length 512 \
-    --reference-model-path <optional_path_to_reference_model> \
-    --temperature 1.0 \
-    --reward-weights 1.0 1.0 \
-    --use-chat-template False \
-    --use-prompt False \
-    --batch-size 4 \
-    --learning-rate 1e-5 \
-    --num-epochs 3
-```
 
 ---
 

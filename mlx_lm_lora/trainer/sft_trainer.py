@@ -8,6 +8,7 @@ from mlx.utils import tree_flatten
 import mlx.core as mx
 import mlx.nn as nn
 import numpy as np
+from tqdm import tqdm
 
 from mlx_lm.tuner.callbacks import TrainingCallback
 
@@ -222,15 +223,14 @@ def train_sft(
     trained_tokens = 0
     train_time = 0
     # Main training loop
-    for it, batch in zip(
-        range(1, args.iters + 1),
-        iterate_batches(
+    pbar = tqdm(range(1, args.iters + 1), desc="Training", disable=rank != 0)
+    for it in pbar:
+        batch = next(iterate_batches(
             dataset=train_dataset,
             batch_size=args.batch_size,
             max_seq_length=args.max_seq_length,
             train=True,
-        ),
-    ):
+        ))
         tic = time.perf_counter()
         if it == 1 or it % args.steps_per_eval == 0 or it == args.iters:
             tic = time.perf_counter()
@@ -280,14 +280,18 @@ def train_sft(
             trained_tokens += n_tokens
             peak_mem = mx.get_peak_memory() / 1e9
             if rank == 0:
+                pbar.set_postfix({
+                    'loss': f"{train_loss:.3f}",
+                    'it/s': f"{it_sec:.3f}",
+                })
                 print(
-                    f"Iter {it}: Train loss {train_loss:.3f}, "
-                    f"Learning Rate {learning_rate:.3e}, "
-                    f"It/sec {it_sec:.3f}, "
-                    f"Tokens/sec {tokens_sec:.3f}, "
-                    f"Trained Tokens {trained_tokens}, "
-                    f"Peak mem {peak_mem:.3f} GB",
-                    flush=True,
+                    f"\nIter {it}: "
+                    f"loss {train_loss:.3f}, "
+                    f"lr {learning_rate:.3e}, "
+                    f"it/s {it_sec:.3f}, "
+                    f"tok/s {tokens_sec:.3f}, "
+                    f"trained_tok {trained_tokens}, "
+                    f"peak_mem {peak_mem:.3f}GB"
                 )
 
             if training_callback is not None:
@@ -315,6 +319,7 @@ def train_sft(
             )
             mx.save_safetensors(str(checkpoint), adapter_weights)
             print(
+                f"\n"
                 f"Iter {it}: Saved adapter weights to "
                 f"{args.adapter_file} and {checkpoint}."
             )

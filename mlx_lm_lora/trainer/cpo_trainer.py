@@ -1,6 +1,8 @@
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 import time
+from typing import Optional, List, Tuple, Dict, Any
 
 from mlx.nn.utils import average_gradients
 from mlx.utils import tree_flatten
@@ -13,6 +15,7 @@ from .dpo_trainer import DPOTrainingArgs as CPOTrainingArgs
 import mlx.core as mx
 import mlx.nn as nn
 import numpy as np
+from tqdm import tqdm
 
 
 def get_token_scores(model, x, mask):
@@ -270,15 +273,15 @@ def train_cpo(
     }
 
     start = time.perf_counter()
-    for it, batch in zip(
-        range(1, args.iters + 1),
-        iterate_cpo_batches(
+    pbar = tqdm(range(1, args.iters + 1), desc="Training", disable=rank != 0)
+    for it in pbar:
+        batch = next(iterate_cpo_batches(
             dataset=train_dataset,
             batch_size=args.batch_size,
             max_seq_length=args.max_seq_length,
             train=True,
-        ),
-    ):
+        ))
+
         if it == 1 or it % args.steps_per_eval == 0 or it == args.iters:
             stop = time.perf_counter()
             val_loss, val_rewards, val_ntokens, val_metrics = evaluate_cpo(
@@ -287,10 +290,10 @@ def train_cpo(
                 batch_size=args.batch_size,
                 num_batches=args.val_batches,
                 max_seq_length=args.max_seq_length,
-                loss_fn=loss_fn,
                 beta=args.beta,
                 delta=args.delta,
                 loss_type=loss_type,
+                loss_fn=loss_fn,
             )
             val_time = time.perf_counter() - stop
             if rank == 0:
@@ -347,18 +350,21 @@ def train_cpo(
             peak_mem = mx.get_peak_memory() / 1e9
 
             if rank == 0:
+                pbar.set_postfix({
+                    'loss': f"{train_loss:.3f}",
+                    'it/s': f"{it_sec:.3f}",
+                })
                 print(
-                    f"Iter {it}: Train loss {train_loss:.3f}, "
-                    f"Chosen reward {train_rewards[0]:.3f}, "
-                    f"Rejected reward {train_rewards[1]:.3f}, "
-                    f"Accuracy {avg_metrics['accuracies']:.3f}, "
-                    f"Margin {avg_metrics['margins']:.3f}, "
-                    f"Learning Rate {learning_rate:.3e}, "
-                    f"It/sec {it_sec:.3f}, "
-                    f"Tokens/sec {tokens_sec:.3f}, "
-                    f"Trained Tokens {trained_tokens}, "
-                    f"Peak mem {peak_mem:.3f} GB",
-                    flush=True,
+                    f"\nIter {it}: "
+                    f"loss {train_loss:.3f}, "
+                    f"chosen_r {train_rewards[0]:.3f}, "
+                    f"rejected_r {train_rewards[1]:.3f}, "
+                    f"acc {avg_metrics['accuracies']:.3f}, "
+                    f"margin {avg_metrics['margins']:.3f}, "
+                    f"lr {learning_rate:.3e}, "
+                    f"it/s {it_sec:.3f}, "
+                    f"tok/s {tokens_sec:.3f}, "
+                    f"peak_mem {peak_mem:.3f}GB"
                 )
 
             if training_callback is not None:
@@ -380,9 +386,9 @@ def train_cpo(
             rewards = mx.zeros((2,))
             n_tokens = 0
             steps = 0
+            accumulated_metrics = {k: 0 for k in accumulated_metrics}
             start = time.perf_counter()
 
-        # Save adapter weights
         if it % args.steps_per_save == 0:
             adapter_weights = dict(tree_flatten(model.trainable_parameters()))
             mx.save_safetensors(str(args.adapter_file), adapter_weights)
@@ -395,7 +401,6 @@ def train_cpo(
                 f"{args.adapter_file} and {checkpoint}."
             )
 
-    # Save final weights
     adapter_weights = dict(tree_flatten(model.trainable_parameters()))
     mx.save_safetensors(str(args.adapter_file), adapter_weights)
     print(f"Saved final weights to {args.adapter_file}.")
