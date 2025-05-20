@@ -3,6 +3,8 @@ import argparse
 import math
 import yaml
 import re
+import importlib.util
+import sys
 
 import numpy as np
 
@@ -19,6 +21,10 @@ from .trainer.orpo_trainer import ORPOTrainingArgs, evaluate_orpo, train_orpo
 from .trainer.dpo_trainer import DPOTrainingArgs, evaluate_dpo, train_dpo
 from .trainer.cpo_trainer import CPOTrainingArgs, evaluate_cpo, train_cpo
 from .trainer.datasets import CacheDataset, load_dataset
+from .trainer.grpo_reward_functions import (
+    get_reward_function, get_default_reward_functions, 
+    list_available_reward_functions
+)
 
 from mlx_lm.tuner.utils import (
     build_schedule,
@@ -95,7 +101,27 @@ CONFIG_DEFAULTS = {
     "use_prompt": False,
     "temperature": 0.8,
     "reward_weights": None,
+    "reward_functions": None,
+    "reward_functions_file": None,
 }
+
+
+def load_reward_functions_from_file(file_path):
+    """Load reward functions from a Python file"""
+    if not file_path or not Path(file_path).exists():
+        return None
+    
+    try:
+        print(f"Loading custom reward functions from {file_path}")
+        spec = importlib.util.spec_from_file_location("custom_rewards", file_path)
+        custom_rewards = importlib.util.module_from_spec(spec)
+        sys.modules["custom_rewards"] = custom_rewards
+        spec.loader.exec_module(custom_rewards)
+        print("Successfully loaded custom reward functions")
+        return True
+    except Exception as e:
+        print(f"Error loading custom reward functions: {e}")
+        return None
 
 
 def build_parser():
@@ -304,6 +330,31 @@ def build_parser():
         help="Weights for each reward function. Must match the number of reward functions and be in this format [0.1, 0.2, 0.3, 0.4, 0.5]. If not given, all rewards are weighted equally with weight `1.0`.",
         default=None,
     )
+    parser.add_argument(
+        "--reward-functions",
+        type=str,
+        help=(
+            "Comma-separated list of reward function names to use. These must be registered in the reward_functions registry. "
+            "Use --list-reward-functions to see available functions. "
+            "Example: r1_accuracy_reward_func,action_format_reward_func"
+        ),
+        default=None,
+    )
+    parser.add_argument(
+        "--reward-functions-file",
+        type=str,
+        help=(
+            "Path to a Python file containing custom reward functions. "
+            "The file should define functions decorated with @register_reward_function(). "
+            "Example: path/to/my_reward_functions.py"
+        ),
+        default=None,
+    )
+    parser.add_argument(
+        "--list-reward-functions",
+        action="store_true",
+        help="List all available reward functions and exit",
+    )
     return parser
 
 
@@ -462,6 +513,23 @@ def train_model(
         )
 
     elif args.train_mode == "grpo":
+        # Load custom reward functions if specified
+        if args.reward_functions_file:
+            load_reward_functions_from_file(args.reward_functions_file)
+        
+        # Process reward functions
+        reward_funcs = get_default_reward_functions()
+        if args.reward_functions:
+            # Parse the comma-separated reward function names
+            func_names = [name.strip() for name in args.reward_functions.split(',')]
+            try:
+                reward_funcs = [get_reward_function(name) for name in func_names]
+                print(f"Using custom reward functions: {', '.join(func_names)}")
+            except KeyError as e:
+                print(f"Error: {str(e)}")
+                print(f"Available reward functions: {list_available_reward_functions()}")
+                return
+
         grpo_training_args = GRPOTrainingArgs(
             batch_size=args.batch_size,
             iters=args.iters,
@@ -502,6 +570,7 @@ def train_model(
             optimizer=opt,
             train_dataset=train_set,
             val_dataset=valid_set,
+            reward_funcs=reward_funcs,
             args=grpo_training_args,
             training_callback=training_callback,
         )
@@ -602,6 +671,22 @@ def evaluate_model(args, model: nn.Module, tokenizer, test_set):
         else:
             reference_model = model
 
+        # Load custom reward functions for evaluation too
+        if args.reward_functions_file:
+            load_reward_functions_from_file(args.reward_functions_file)
+        
+        # Process reward functions for evaluation
+        reward_funcs = get_default_reward_functions()
+        if args.reward_functions:
+            # Parse the comma-separated reward function names
+            func_names = [name.strip() for name in args.reward_functions.split(',')]
+            try:
+                reward_funcs = [get_reward_function(name) for name in func_names]
+            except KeyError as e:
+                print(f"Error: {str(e)}")
+                print(f"Available reward functions: {list_available_reward_functions()}")
+                return
+
         test_loss, _, test_rewards = evaluate_grpo(
             model=model,
             ref_model=reference_model.freeze(),
@@ -616,6 +701,7 @@ def evaluate_model(args, model: nn.Module, tokenizer, test_set):
             epsilon_high=args.epsilon_high,
             temperature=args.temperature,
             max_tokens=args.max_seq_length,
+            reward_funcs=reward_funcs,
         )
 
         test_ppl = math.exp(test_loss)
@@ -641,6 +727,17 @@ def evaluate_model(args, model: nn.Module, tokenizer, test_set):
 
 def run(args, training_callback: TrainingCallback = None):
     np.random.seed(args.seed)
+
+    # Handle listing reward functions
+    if args.list_reward_functions:
+        # Load custom reward functions if specified
+        if args.reward_functions_file:
+            load_reward_functions_from_file(args.reward_functions_file)
+            
+        print("Available reward functions:")
+        for name in list_available_reward_functions():
+            print(f"  - {name}")
+        return
 
     if args.wandb is not None:
         training_callback = WandBCallback(
@@ -684,18 +781,23 @@ def main(args=None):
         default_args.update(args)
         args = types.SimpleNamespace(**default_args)
 
+    # Apply config before other defaults
     if args.config:
         with open(args.config, "r") as f:
             config_args = yaml.load(f, Loader=yaml_loader)
+            # Apply all config values regardless of existing value
             for k, v in config_args.items():
-                if getattr(args, k, None) is None:
-                    setattr(args, k, v)
+                setattr(args, k, v)
 
     # Set all None args to defaults
     for k, v in CONFIG_DEFAULTS.items():
         if getattr(args, k, None) is None:
             setattr(args, k, v)
-
+            
+    # Ensure train_mode is set
+    if not hasattr(args, 'train_mode') or args.train_mode is None:
+        args.train_mode = "sft"  # Default to SFT if not specified
+    
     run(args)
 
 
