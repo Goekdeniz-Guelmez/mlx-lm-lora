@@ -859,6 +859,7 @@ def train_model(
             train_dataset=CacheDataset(train_set),
             val_dataset=CacheDataset(valid_set),
             training_callback=training_callback,
+            stream_data=args.stream_data
         )
 
     else:

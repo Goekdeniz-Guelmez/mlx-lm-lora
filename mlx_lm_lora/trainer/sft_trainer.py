@@ -96,19 +96,14 @@ def iterate_batches(
         if batch_size % step != 0:
             raise ValueError("The batch size must be divisible by the number of workers")
         
-        # Calculate how many samples to skip based on current iteration
-        # Skip (current_iter * stream_window_size) samples to get to the next window
-        samples_to_skip = current_iter * stream_window_size
-        
-        # Create a new dataset that skips the appropriate number of samples
-        # and takes only the next window of samples
-        windowed_dataset = dataset.skip(samples_to_skip).take(stream_window_size)
-        print(f"Processing streaming window: skip={samples_to_skip}, take={stream_window_size}")
-        
-        dataset_iter = iter(windowed_dataset)
-        
+        # Create an infinite loop for streaming data
         while True:
-            try:
+            # Skip to the appropriate position in the dataset and take the next window
+            windowed_dataset = dataset.skip(current_iter).take(stream_window_size)
+            dataset_iter = iter(windowed_dataset)
+            
+            # Process batches from the current window
+            for _ in range((stream_window_size + batch_size - 1) // batch_size):
                 # Collect batch_size samples from the current window
                 batch = []
                 offsets = []
@@ -124,13 +119,20 @@ def iterate_batches(
                         batch.append(sample)
                         offsets.append(offset)
                     except StopIteration:
-                        # No more data in this window
-                        if len(batch) == 0:
-                            return  # No samples were collected
-                        break  # Some samples were collected, process them
+                        break
                 
                 if len(batch) == 0:
+                    # No samples were collected, move to next window
                     break
+                
+                if len(batch) < batch_size // step and train:
+                    # If we couldn't collect a full batch and we're training,
+                    # we'll pad the batch with the last sample
+                    last_sample = batch[-1]
+                    last_offset = offsets[-1]
+                    while len(batch) < batch_size // step:
+                        batch.append(last_sample)
+                        offsets.append(last_offset)
                 
                 lengths = [len(x) for x in batch]
                 pad_to = 32
@@ -145,13 +147,16 @@ def iterate_batches(
                     lengths[j] = truncated_length
                 
                 batch = mx.array(batch_arr)
+                print(batch)
                 yield batch, mx.array(list(zip(offsets, lengths)))
                 
                 if not train:
-                    break
-                    
-            except Exception as e:
-                print(f"Error processing streaming batch: {e}")
+                    return
+            
+            # After processing the current window, increment current_iter by stream_window_size
+            current_iter += stream_window_size
+            
+            if not train:
                 break
     else:
         # Original code for non-streaming datasets (unchanged)
@@ -305,7 +310,7 @@ def train_sft(
                 max_seq_length=args.max_seq_length,
                 train=True,
                 stream_data=stream_data,
-                stream_window_size=100,
+                stream_window_size=len(train_dataset),
                 current_iter=window_counter if stream_data else 0
             )
         )

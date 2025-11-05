@@ -338,7 +338,7 @@ class ORPODataset:
 
 class TextDataset:
     """
-    Light-weight wrapper to hold a dataset.
+    Light-weight wrapper to hold a dataset with streaming capabilities.
     """
 
     def __init__(
@@ -362,6 +362,27 @@ class TextDataset:
 
     def __len__(self):
         return len(self._data)
+        
+    def skip(self, n):
+        """Skip the first n samples."""
+        if n >= len(self._data):
+            return TextDataset([], self.tokenizer, self.text_key)
+        
+        # Create a new list manually instead of using slice
+        new_data = []
+        for i in range(n, len(self._data)):
+            new_data.append(self._data[i])
+        
+        return TextDataset(new_data, self.tokenizer, self.text_key)
+
+    def take(self, n):
+        """Take only the first n samples."""
+        # Create a new list manually instead of using slice
+        new_data = []
+        for i in range(min(n, len(self._data))):
+            new_data.append(self._data[i])
+        
+        return TextDataset(new_data, self.tokenizer, self.text_key)
 
 
 class ChatDataset:
@@ -482,6 +503,41 @@ class CacheDataset:
 
     def __len__(self):
         return len(self._data)
+        
+    def skip(self, n):
+        """Skip the first n samples."""
+        if n >= len(self._data):
+            # Handle the case where underlying data is TextDataset
+            if isinstance(self._data, TextDataset):
+                empty_dataset = TextDataset([], self._data.tokenizer, self._data.text_key)
+            else:
+                # For other dataset types
+                empty_dataset = type(self._data)([])
+            return CacheDataset(empty_dataset)
+            
+        # Create a new dataset with the remaining items
+        if hasattr(self._data, 'skip'):
+            # Use the underlying dataset's skip if available
+            skipped_data = self._data.skip(n)
+        else:
+            # Otherwise try slicing
+            skipped_data = type(self._data)(self._data._data[n:])
+                    
+        return CacheDataset(skipped_data)
+
+    def take(self, n):
+        """Take only the first n samples."""
+        n = min(n, len(self._data))
+        
+        # Create a new dataset with just the first n items
+        if hasattr(self._data, 'take'):
+            # Use the underlying dataset's take if available
+            taken_data = self._data.take(n)
+        else:
+            # Otherwise try slicing
+            taken_data = type(self._data)(self._data._data[:n])
+                    
+        return CacheDataset(taken_data)
 
 
 def create_dataset(
@@ -602,7 +658,8 @@ def load_hf_dataset(
     data_id: str,
     tokenizer: PreTrainedTokenizer,
     config,
-    stream=False
+    stream=False,
+    window_size=100
 ):
     from datasets import exceptions, load_dataset
     
@@ -615,7 +672,7 @@ def load_hf_dataset(
                 split_dataset = load_dataset(data_id, split=n, streaming=stream)
                 
                 if stream:
-                    limited_dataset = list(split_dataset.take(10))
+                    limited_dataset = list(split_dataset.take(window_size))
                     from datasets import Dataset
                     dataset_to_process = Dataset.from_list(limited_dataset)
                     processed = create_dataset(dataset_to_process, tokenizer, config)
@@ -635,7 +692,6 @@ def load_hf_dataset(
         print(f"Unexpected error loading dataset: {str(e)}")
         raise
     
-    print(f"Dataset {data_id} fully processed and ready to return")
     return train, valid, test
 
 
@@ -708,7 +764,7 @@ def load_dataset(args, tokenizer: PreTrainedTokenizer, stream=False):
             train, valid, test = load_local_dataset(data_path, tokenizer, args)
         else:
             print(f"Loading Hugging Face dataset {args.data}.")
-            train, valid, test = load_hf_dataset(args.data, tokenizer, args, stream=stream)
+            train, valid, test = load_hf_dataset(args.data, tokenizer, args, stream=stream, window_size=args.data_samples_per_stream)
 
     if args.train and len(train) == 0:
         raise ValueError(
