@@ -454,7 +454,7 @@ This feature makes it able to use mlx-lm's powerfull batch genebrate to create a
 
 #### SFT
 
-With this you can create a synthetic SFT dataset using a teacher model. this creates multible files, the first file is a JSONL file that has ll the generated samples in it, the next ones are parquet verison for HF compatibility. Example:
+With this you can create a synthetic SFT dataset using a teacher model. this creates multible files, the first file is a JSONL file that has the generated samples in it, the next ones are parquet verison for HF compatibility. Example:
 
 ```shell
 python -m mlx_lm_lora.synthetic_sft \
