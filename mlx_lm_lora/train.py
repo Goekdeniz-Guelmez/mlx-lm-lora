@@ -1029,7 +1029,7 @@ def run(args, training_callback: TrainingCallback = None):
             tokenizer=tokenizer,
             save_path=args.adapter_path,
             adapter_path=None,
-            de_quantize=False,
+            de_quantize=True,
             export_gguf=False,
         )
 

@@ -66,6 +66,45 @@ class PreferenceDataset:
 
     def process(self, d):
         return d
+
+
+class JudgeDataset:
+    def __init__(
+        self,
+        data: List[Dict[str, str]],
+        tokenizer: PreTrainedTokenizer,
+        prompt_key: str = "prompt",
+        chosen_key: str = "chosen",
+        rejected_key: str = "regected",
+    ):
+        from .judge import DEFAULT_PAIRWISE_SYSTEM_PROMPT, RAW_TRAINING_SYSTEM_PROMPT
+        self.system = RAW_TRAINING_SYSTEM_PROMPT
+        self.prompt = DEFAULT_PAIRWISE_SYSTEM_PROMPT
+        self._data = data
+        self.tokenizer = tokenizer
+        self.prompt_key = prompt_key
+        self.chosen_key = chosen_key
+        self.rejected_key = rejected_key
+
+    def process(self, d):
+        prompt = d[self.prompt_key]
+        chosen_answer = d[self.chosen_key]
+        regected_answer = d[self.rejected_key]
+        final_prompt = self.prompt.format(prompt=prompt, response0=chosen_answer, response1=regected_answer)
+        messages = [
+            {"role": "system", "content": self.system},
+            {"role": "user", "content": final_prompt},
+        ]
+        d = self.tokenizer.apply_chat_template(messages, add_generation_prompt=True)
+        if d[-1] != self.tokenizer.eos_token_id:
+            d.append(self.tokenizer.eos_token_id)
+        return d
+
+    def __getitem__(self, idx: int):
+        return self._data[idx]
+
+    def __len__(self):
+        return len(self._data)
     
 
 class PromptDataset:
@@ -440,6 +479,17 @@ def create_dataset(
             )
         else:
             raise ValueError("Unsupported data format for ORPO training.")
+    if train_mode == "judge":
+        if chosen_feature in sample and rejected_feature in sample:
+            return JudgeDataset(
+                data=data,
+                tokenizer=tokenizer,
+                prompt_key=prompt_feature,
+                chosen_key=chosen_feature,
+                rejected_key=rejected_feature,
+            )
+        else:
+            raise ValueError("Unsupported data format for judge training.")
     elif train_mode in ["dpo", "cpo"]:
         if chosen_feature in sample and rejected_feature in sample:
             return DPODataset(
