@@ -456,6 +456,16 @@ This feature makes it able to use mlx-lm's powerfull batch genebrate to create a
 
 With this you can create a synthetic SFT dataset using a teacher model. this creates multible files, the first file is a JSONL file that has ll the generated samples in it, the next ones are parquet verison for HF compatibility. Example:
 
+```shell
+python -m mlx_lm_lora.synthetic_sft \
+--dataset-path Goekdeniz-Guelmez/Josiefication-prompts-online-po \
+--model mlx-community/Josiefied-Qwen3-4B-Instruct-2507-abliterated-v1-8bit \
+--output-dir ./sft_dataset \
+--num-samples 1000 \
+--valid-split 0.01 \
+--batch-size 16 \
+--max-tokens 4096
+```
 
 **Dataset Format:**
 
@@ -477,7 +487,7 @@ python -m mlx_lm_lora.synthetic_dpo \
 --system-promtp "can be a normal string or the path to a .txt file for longer prompts"t \
 --output-dir ./dpo_dataset \
 --num-samples 10000 \
---valid-split 0.1 \
+--valid-split 0.0001 \
 --test-split 0.2 \
 --batch-size 16 \
 --max-tokens 8192
@@ -508,7 +518,6 @@ python -m mlx_lm_lora.train_judge \
 **Dataset Format:** Same as DPO (with `prompt`, `chosen`, and `rejected` pairs).
 
 ---
-
 
 ## Configuration
 
