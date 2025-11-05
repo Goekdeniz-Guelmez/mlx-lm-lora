@@ -141,8 +141,8 @@ def build_parser():
         "--data",
         type=str,
         help=(
-            "Directory with {train, valid, test}.jsonl files or the name "
-            "of a Hugging Face dataset (e.g., 'mlx-community/wikisql')"
+            "Directory with {train, valid, test}.jsonl files or the name in the DPO-format "
+            "of a Hugging Face dataset (e.g., 'mlx-community/orpo-dpo-mix-40k-flat-mlx')"
         ),
     )
     parser.add_argument(
