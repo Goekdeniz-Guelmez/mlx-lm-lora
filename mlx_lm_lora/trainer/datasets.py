@@ -1,7 +1,8 @@
-from typing import Any, Dict, List, Union, Tuple
-from pathlib import Path
-import types
 import json
+import random
+import types
+from pathlib import Path
+from typing import Any, Dict, List, Tuple, Union
 
 from transformers import PreTrainedTokenizer
 
@@ -25,13 +26,15 @@ class GRPODataset:
             system_str = item.get(system_key, default_system_str)
             prompt_tokens = tokenizer.apply_chat_template(
                 [
-                    {'role': 'system', 'content': system_str},
-                    {'role': 'user', 'content': prompt_str}
+                    {"role": "system", "content": system_str},
+                    {"role": "user", "content": prompt_str},
                 ],
-                add_generation_prompt=True
+                add_generation_prompt=True,
             )
             answer_tokens = tokenizer.encode(answer_str)
-            self._data.append((prompt_tokens, answer_tokens, prompt_str, answer_str, type_info))
+            self._data.append(
+                (prompt_tokens, answer_tokens, prompt_str, answer_str, type_info)
+            )
 
     def __getitem__(self, idx: int) -> Tuple[List[int], List[int], str, str]:
         return self._data[idx]
@@ -66,7 +69,67 @@ class PreferenceDataset:
 
     def process(self, d):
         return d
-    
+
+
+class JudgeDataset:
+    def __init__(
+        self,
+        data: List[Dict[str, str]],
+        tokenizer: PreTrainedTokenizer,
+        prompt_key: str = "prompt",
+        chosen_key: str = "chosen",
+        rejected_key: str = "regected",
+        mask_prompt: bool = False,
+    ):
+        from .judge import DEFAULT_PAIRWISE_SYSTEM_PROMPT, RAW_TRAINING_SYSTEM_PROMPT
+
+        self.system = RAW_TRAINING_SYSTEM_PROMPT
+        self.prompt = DEFAULT_PAIRWISE_SYSTEM_PROMPT
+        self._data = data
+        self.tokenizer = tokenizer
+        self.prompt_key = prompt_key
+        self.chosen_key = chosen_key
+        self.rejected_key = rejected_key
+        self.mask_prompt = mask_prompt
+
+    def process(self, d):
+        prompt = d[self.prompt_key]
+        chosen_answer = d[self.chosen_key]
+        rejected_answer = d[self.rejected_key]
+
+        # Shuffle responses
+        responses = [chosen_answer, rejected_answer]
+        if random.random() < 0.5:
+            responses = [rejected_answer, chosen_answer]
+            label = 1
+        else:
+            label = 0
+
+        final_prompt = self.prompt.format(
+            prompt=prompt, response0=responses[0], response1=responses[1]
+        )
+        messages = [
+            {"role": "system", "content": self.system},
+            {"role": "user", "content": final_prompt},
+            {"role": "assistant", "content": str(label)},
+        ]
+        d = self.tokenizer.apply_chat_template(messages)
+        if d[-1] != self.tokenizer.eos_token_id:
+            d.append(self.tokenizer.eos_token_id)
+
+        if self.mask_prompt:
+            messages = messages[:-1]
+            offset = len(self.tokenizer.apply_chat_template(messages))
+            return (d, offset)
+        else:
+            return d
+
+    def __getitem__(self, idx: int):
+        return self._data[idx]
+
+    def __len__(self):
+        return len(self._data)
+
 
 class PromptDataset:
     def __init__(
@@ -81,7 +144,14 @@ class PromptDataset:
 
     def process(self, d):
         messages = d[self.chat_key]
-        return {"prompt": self.tokenizer.apply_chat_template(messages, add_generation_prompt=True), "prompt_text": self.tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)}
+        return {
+            "prompt": self.tokenizer.apply_chat_template(
+                messages, add_generation_prompt=True
+            ),
+            "prompt_text": self.tokenizer.apply_chat_template(
+                messages, add_generation_prompt=True, tokenize=False
+            ),
+        }
 
     def __getitem__(self, idx: int):
         return self._data[idx]
@@ -119,8 +189,16 @@ class DPODataset:
                 {"role": "assistant", "content": d[rejected_key]}
             ]
 
-            self._chosen_data.append(tokenizer.apply_chat_template(chosen_messages, add_generation_prompt=True))
-            self._rejected_data.append(tokenizer.apply_chat_template(rejected_messages, add_generation_prompt=True))
+            self._chosen_data.append(
+                tokenizer.apply_chat_template(
+                    chosen_messages, add_generation_prompt=True
+                )
+            )
+            self._rejected_data.append(
+                tokenizer.apply_chat_template(
+                    rejected_messages, add_generation_prompt=True
+                )
+            )
 
     def __getitem__(self, idx: int):
         return {"chosen": self._chosen_data[idx], "rejected": self._rejected_data[idx]}
@@ -130,7 +208,7 @@ class DPODataset:
 
     def process(self, d):
         return d
-    
+
 
 class ORPODataset:
     def __init__(
@@ -193,8 +271,12 @@ class ORPODataset:
                 elif isinstance(d[rejected_key], list):
                     rejected_messages.extend(d[rejected_key])
 
-                chosen_text = tokenizer.apply_chat_template(chosen_messages, add_generation_prompt=True)
-                rejected_text = tokenizer.apply_chat_template(rejected_messages, add_generation_prompt=True)
+                chosen_text = tokenizer.apply_chat_template(
+                    chosen_messages, add_generation_prompt=True
+                )
+                rejected_text = tokenizer.apply_chat_template(
+                    rejected_messages, add_generation_prompt=True
+                )
 
             else:
                 chosen_content = self._extract_content(d[chosen_key])
@@ -409,19 +491,16 @@ def create_dataset(
 ):
     mask_prompt = getattr(config, "mask_prompt", False)
     train_mode = getattr(config, "train_mode", "sft")
-
     text_feature = getattr(config, "text_feature", "text")
     chat_feature = getattr(config, "chat_feature", "messages")
     prompt_feature = getattr(config, "prompt_feature", "prompt")
     completion_feature = getattr(config, "completion_feature", "completion")
-
-    # For ORPO and DPO
     system_feature = getattr(config, "system_feature", "system")
     chosen_feature = getattr(config, "chosen_feature", "chosen")
     rejected_feature = getattr(config, "rejected_feature", "rejected")
-    preference_score_feature = getattr(config, "preference_score_feature", "preference_score")
-
-    # For GRPO
+    preference_score_feature = getattr(
+        config, "preference_score_feature", "preference_score"
+    )
     type_feature = getattr(config, "type_feature", "type")
     answer_feature = getattr(config, "answer_feature", "answer")
 
@@ -436,10 +515,22 @@ def create_dataset(
                 prompt_key=prompt_feature,
                 chosen_key=chosen_feature,
                 rejected_key=rejected_feature,
-                preference_score_key=preference_score_feature
+                preference_score_key=preference_score_feature,
             )
         else:
             raise ValueError("Unsupported data format for ORPO training.")
+    if train_mode == "judge":
+        if chosen_feature in sample and rejected_feature in sample:
+            return JudgeDataset(
+                data=data,
+                tokenizer=tokenizer,
+                prompt_key=prompt_feature,
+                chosen_key=chosen_feature,
+                rejected_key=rejected_feature,
+                mask_prompt=mask_prompt,
+            )
+        else:
+            raise ValueError("Unsupported data format for judge training.")
     elif train_mode in ["dpo", "cpo"]:
         if chosen_feature in sample and rejected_feature in sample:
             return DPODataset(
@@ -448,8 +539,8 @@ def create_dataset(
                 prompt_key=prompt_feature,
                 system_key=system_feature,
                 chosen_key=chosen_feature,
-                rejected_key=rejected_feature
-                )
+                rejected_key=rejected_feature,
+            )
         else:
             raise ValueError("Unsupported data format for Online DPO or CPO training.")
     elif train_mode in ["online_dpo", "xpo", "rlhf"]:
@@ -590,7 +681,6 @@ def load_custom_hf_dataset(args, tokenizer: PreTrainedTokenizer):
     if len(collection) == 1:
         return collection[0]
 
-    # Otherwise concatenate them
     return tuple(map(ConcatenatedDataset, zip(*collection)))
 
 

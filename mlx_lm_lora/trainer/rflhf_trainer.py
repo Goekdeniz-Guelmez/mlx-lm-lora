@@ -1,46 +1,42 @@
+import time
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
-from tqdm import tqdm
-import time
-
-from mlx.nn.utils import average_gradients
-from mlx.utils import tree_flatten, tree_map
-
-from mlx_lm.tuner.callbacks import TrainingCallback
-
-from .online_dpo_trainer import generate_for_online_dpo, iterate_online_dpo_batches, compute_score
-from .sft_trainer import SFTTrainingArgs, grad_checkpoint
-from .judge import LLMPPOJudge
 
 import mlx.core as mx
 import mlx.nn as nn
+from mlx.nn.utils import average_gradients
+from mlx.utils import tree_flatten, tree_map
+from mlx_lm.tuner.callbacks import TrainingCallback
+from tqdm import tqdm
+
+from .judge import LLMPPOJudge
+from .online_dpo_trainer import (
+    compute_score,
+    generate_for_online_dpo,
+    iterate_online_dpo_batches,
+)
+from .sft_trainer import SFTTrainingArgs, grad_checkpoint
 
 
 @dataclass
 class RLHFTrainingArgs(SFTTrainingArgs):
     beta: float = field(
-        default=0.1, 
-        metadata={"help": "KL penalty coefficient for RLHF training."}
+        default=0.1, metadata={"help": "KL penalty coefficient for RLHF training."}
     )
-    judge: str = field(
-        default=None,
-        metadata={"help": "Path to reward model weights."}
-    )
+    judge: str = field(default=None, metadata={"help": "Path to reward model weights."})
     reference_model_path: str = field(
-        default=None,
-        metadata={"help": "Path to reference model weights."}
+        default=None, metadata={"help": "Path to reference model weights."}
     )
     max_completion_length: int = field(
-        default=128,
-        metadata={"help": "Max tokens to generate per prompt."}
+        default=128, metadata={"help": "Max tokens to generate per prompt."}
     )
 
 
 def compute_kl_penalty(logits_policy, logits_ref, masks):
     policy_probs = nn.softmax(logits_policy, axis=-1)
     ref_probs = nn.softmax(logits_ref, axis=-1)
-    
+
     kl_div = policy_probs * (mx.log(policy_probs) - mx.log(ref_probs))
     kl_div = mx.sum(kl_div, axis=-1)
     return mx.sum(kl_div * masks, axis=-1)
@@ -55,32 +51,32 @@ def rlhf_loss(
 ):
     # Compute log probabilities for actual tokens
     labels = mx.argmax(policy_logits, axis=-1)
-    policy_log_probs = -nn.losses.cross_entropy(policy_logits, labels, reduction='none')
-    ref_log_probs = -nn.losses.cross_entropy(ref_logits, labels, reduction='none')
-    
+    policy_log_probs = -nn.losses.cross_entropy(policy_logits, labels, reduction="none")
+    ref_log_probs = -nn.losses.cross_entropy(ref_logits, labels, reduction="none")
+
     # Compute KL divergence per token
     kl_div = policy_log_probs - ref_log_probs
-    
+
     # Sum KL over sequence and average over batch
     kl_penalty = (kl_div * masks).sum(axis=-1)
-    
+
     # Policy gradient loss
     advantages = rewards - beta * kl_penalty
     loss = -advantages * (policy_log_probs * masks).sum(axis=-1)
-    
+
     # Normalize by token count
     token_count = masks.sum()
     loss = loss.sum() / token_count
-    
+
     # Compute metrics
     metrics = {
         "rewards": mx.mean(rewards),
         "kl_penalty": mx.mean(kl_penalty),
         "advantages": mx.mean(advantages),
         "policy_logps": mx.mean(policy_log_probs),
-        "ref_logps": mx.mean(ref_log_probs)
+        "ref_logps": mx.mean(ref_log_probs),
     }
-    
+
     mx.clear_cache()
     return loss, token_count, metrics
 
@@ -105,14 +101,14 @@ def evaluate_rlhf(
     judge_model: mx.array = None,
     judge_tokenizer: mx.array = None,
     tokenizer=None,
-    max_tokens: int = 512
+    max_tokens: int = 512,
 ):
     all_losses = 0
     all_metrics = None
     ntokens = 0
-    
+
     index_iterator = iter(range(num_batches)) if num_batches != -1 else iter(int, 1)
-    
+
     for _, batch in zip(
         index_iterator,
         iterate_online_dpo_batches(
@@ -122,54 +118,66 @@ def evaluate_rlhf(
         ),
     ):
         prompts, prompt_texts = batch
-        
+
         # Generate completions
-        completions = generate_for_online_dpo(model, tokenizer, prompts, max_tokens=max_tokens)
-        
-        judger = LLMPPOJudge(model=judge_model, tokenizer=judge_tokenizer, system_prompt=judge_config.get("system_prompt", None))
+        completions = generate_for_online_dpo(
+            model, tokenizer, prompts, max_tokens=max_tokens
+        )
+
+        judger = LLMPPOJudge(
+            model=judge_model,
+            tokenizer=judge_tokenizer,
+            system_prompt=judge_config.get("system_prompt", None),
+        )
         rewards = judger.judge(prompt_texts, completions=completions)
-        
+
         # Process completions into tokens and masks
         all_tokens = []
         all_masks = []
         all_rewards = []
-        
-        for i, (prompt_text, completion_pair, reward_pair) in enumerate(zip(prompt_texts, completions, rewards)):
+
+        for i, (prompt_text, completion_pair, reward_pair) in enumerate(
+            zip(prompt_texts, completions, rewards)
+        ):
             for j, (completion, reward) in enumerate(zip(completion_pair, reward_pair)):
                 full_text = prompt_text + completion
                 tokens = mx.array(tokenizer.encode(full_text))
                 mask = mx.ones(len(tokens))
-                
+
                 all_tokens.append(tokens)
                 all_masks.append(mask)
                 all_rewards.append(reward)
-        
+
         # Pad sequences to same length
         max_len = max(len(tokens) for tokens in all_tokens)
         padded_tokens = []
         padded_masks = []
-        
+
         for tokens, mask in zip(all_tokens, all_masks):
             pad_len = max_len - len(tokens)
             if pad_len > 0:
-                padded_tokens.append(mx.concatenate([tokens, mx.zeros(pad_len, dtype=tokens.dtype)]))
+                padded_tokens.append(
+                    mx.concatenate([tokens, mx.zeros(pad_len, dtype=tokens.dtype)])
+                )
                 padded_masks.append(mx.concatenate([mask, mx.zeros(pad_len)]))
             else:
                 padded_tokens.append(tokens)
                 padded_masks.append(mask)
-        
+
         batch_tokens = mx.stack(padded_tokens)
         batch_masks = mx.stack(padded_masks)
         batch_rewards = mx.array(all_rewards)
-        
+
         # Get model logits
-        policy_logits, targets, target_masks = get_model_logits(model, batch_tokens, batch_masks)
-        
+        policy_logits, targets, target_masks = get_model_logits(
+            model, batch_tokens, batch_masks
+        )
+
         if ref_model is not None:
             ref_logits, _, _ = get_model_logits(ref_model, batch_tokens, batch_masks)
         else:
             ref_logits = mx.zeros_like(policy_logits)
-        
+
         # Compute loss
         loss_value, toks, metrics = loss_fn(
             policy_logits=policy_logits,
@@ -178,27 +186,27 @@ def evaluate_rlhf(
             masks=target_masks,
             beta=beta,
         )
-        
+
         all_losses += loss_value * toks
         ntokens += toks
-        
+
         if all_metrics is None:
             all_metrics = {k: v * toks for k, v in metrics.items()}
         else:
             for k, v in metrics.items():
                 all_metrics[k] += v * toks
-    
+
     mx.eval(all_losses, ntokens)
-    
+
     # Distributed reduction
     all_losses = mx.distributed.all_sum(all_losses)
     ntokens = mx.distributed.all_sum(ntokens)
     all_metrics = {k: mx.distributed.all_sum(v) for k, v in all_metrics.items()}
-    
+
     # Compute averages
     avg_metrics = {k: (v / ntokens).item() for k, v in all_metrics.items()}
     avg_loss = (all_losses / ntokens).item()
-    
+
     return avg_loss, [], ntokens, avg_metrics
 
 
@@ -225,7 +233,7 @@ def train_rlhf(
 
     if args.grad_checkpoint:
         grad_checkpoint(model.layers[0])
-    
+
     grad_accum_steps = args.gradient_accumulation_steps
     if grad_accum_steps < 1:
         raise ValueError("gradient_accumulation_steps must be at least 1")
@@ -235,60 +243,72 @@ def train_rlhf(
     @partial(mx.compile, inputs=state, outputs=state)
     def step(batch, prev_grad, do_update):
         prompts, prompt_texts = batch
-        
+
         # Generate completions for each prompt
-        completions = generate_for_online_dpo(model, tokenizer, prompts, max_tokens=args.max_completion_length)
-        
+        completions = generate_for_online_dpo(
+            model, tokenizer, prompts, max_tokens=args.max_completion_length
+        )
+
         # Judge the completions
-        judger = LLMPPOJudge(model=judge_model, tokenizer=judge_tokenizer, system_prompt=judge_config.get("system_prompt", None))
+        judger = LLMPPOJudge(
+            model=judge_model,
+            tokenizer=judge_tokenizer,
+            system_prompt=judge_config.get("system_prompt", None),
+        )
         rewards = judger.judge(prompt_texts, completions=completions)
-        
+
         # Process completions into tokens and masks
         all_tokens = []
         all_masks = []
         all_rewards = []
-        
-        for i, (prompt_text, completion_pair, reward_pair) in enumerate(zip(prompt_texts, completions, rewards)):
+
+        for i, (prompt_text, completion_pair, reward_pair) in enumerate(
+            zip(prompt_texts, completions, rewards)
+        ):
             for j, (completion, reward) in enumerate(zip(completion_pair, reward_pair)):
                 full_text = prompt_text + completion
                 tokens = mx.array(tokenizer.encode(full_text))
                 mask = mx.ones(len(tokens))
-                
+
                 all_tokens.append(tokens)
                 all_masks.append(mask)
                 all_rewards.append(reward)
-        
+
         # Pad sequences to same length
         max_len = max(len(tokens) for tokens in all_tokens)
         padded_tokens = []
         padded_masks = []
-        
+
         for tokens, mask in zip(all_tokens, all_masks):
             pad_len = max_len - len(tokens)
             if pad_len > 0:
-                padded_tokens.append(mx.concatenate([tokens, mx.zeros(pad_len, dtype=tokens.dtype)]))
+                padded_tokens.append(
+                    mx.concatenate([tokens, mx.zeros(pad_len, dtype=tokens.dtype)])
+                )
                 padded_masks.append(mx.concatenate([mask, mx.zeros(pad_len)]))
             else:
                 padded_tokens.append(tokens)
                 padded_masks.append(mask)
-        
+
         batch_tokens = mx.stack(padded_tokens)
         batch_masks = mx.stack(padded_masks)
         batch_rewards = mx.array(all_rewards)
-        
+
         # Get model logits
-        policy_logits, targets, target_masks = get_model_logits(model, batch_tokens, batch_masks)
-        
+        policy_logits, targets, target_masks = get_model_logits(
+            model, batch_tokens, batch_masks
+        )
+
         if ref_model is not None:
             ref_logits, _, _ = get_model_logits(ref_model, batch_tokens, batch_masks)
         else:
             ref_logits = mx.zeros_like(policy_logits)
-        
+
         # Compute loss and gradients
         (lvalue, toks, metrics), grad = loss_value_and_grad(
             policy_logits, ref_logits, batch_rewards, target_masks
         )
-        
+
         if prev_grad is not None:
             grad = tree_map(lambda x, y: x + y, grad, prev_grad)
 
@@ -330,13 +350,15 @@ def train_rlhf(
 
     pbar = tqdm(range(1, args.iters + 1), desc="Training", disable=rank != 0)
     for it in pbar:
-        batch = next(iterate_online_dpo_batches(
-            dataset=train_dataset,
-            batch_size=args.batch_size,
-            max_seq_length=args.max_seq_length,
-            train=True,
-        ))
-        
+        batch = next(
+            iterate_online_dpo_batches(
+                dataset=train_dataset,
+                batch_size=args.batch_size,
+                max_seq_length=args.max_seq_length,
+                train=True,
+            )
+        )
+
         if it == 1 or it % args.steps_per_eval == 0 or it == args.iters:
             stop = time.perf_counter()
             val_loss, val_rewards, val_ntokens, val_metrics = evaluate_rlhf(

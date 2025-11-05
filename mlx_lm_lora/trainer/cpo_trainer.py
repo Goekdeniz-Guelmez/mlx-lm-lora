@@ -1,25 +1,24 @@
-from pathlib import Path
-from functools import partial
-from tqdm import tqdm
 import time
-
-from mlx.nn.utils import average_gradients
-from mlx.utils import tree_flatten, tree_map
-
-from mlx_lm.tuner.callbacks import TrainingCallback
-
-from .sft_trainer import grad_checkpoint
-from .dpo_trainer import DPOTrainingArgs as CPOTrainingArgs
+from functools import partial
+from pathlib import Path
 
 import mlx.core as mx
 import mlx.nn as nn
 import numpy as np
+from mlx.nn.utils import average_gradients
+from mlx.utils import tree_flatten, tree_map
+from mlx_lm.tuner.callbacks import TrainingCallback
+from tqdm import tqdm
+
+from .dpo_trainer import DPOTrainingArgs as CPOTrainingArgs
+from .sft_trainer import grad_checkpoint
 
 
 def get_token_scores(model, x, mask):
     inputs, targets = x[:, :-1], x[:, 1:]
     logits = model(inputs).astype(mx.float32)
     return -nn.losses.cross_entropy(logits, targets) * mask[:, :-1]
+
 
 def compute_score(scores, mask, loss_type):
     token_count = mask.sum(-1)
@@ -36,7 +35,7 @@ def cpo_loss(
     loss_type: str = "sigmoid",
 ):
     # Preference logits
-    logits = (policy_chosen_score - policy_rejected_score)
+    logits = policy_chosen_score - policy_rejected_score
 
     # Loss calculation
     if loss_type == "sigmoid":
@@ -135,7 +134,6 @@ def iterate_cpo_batches(dataset, batch_size, max_seq_length, train=False):
             break
 
 
-
 def evaluate_cpo(
     model,
     dataset,
@@ -167,8 +165,12 @@ def evaluate_cpo(
         policy_chosen_scores = get_token_scores(model, chosen, chosen_masks)
         policy_rejected_scores = get_token_scores(model, rejected, rejected_masks)
 
-        policy_chosen_score = compute_score(policy_chosen_scores, chosen_masks, loss_type)
-        policy_rejected_score = compute_score(policy_rejected_scores, rejected_masks, loss_type)
+        policy_chosen_score = compute_score(
+            policy_chosen_scores, chosen_masks, loss_type
+        )
+        policy_rejected_score = compute_score(
+            policy_rejected_scores, rejected_masks, loss_type
+        )
 
         loss_value, reward, toks, metrics = loss_fn(
             policy_chosen_score=policy_chosen_score,
@@ -221,7 +223,7 @@ def train_cpo(
 
     if args.grad_checkpoint:
         grad_checkpoint(model.layers[0])
-    
+
     grad_accum_steps = args.gradient_accumulation_steps
     if grad_accum_steps < 1:
         raise ValueError("gradient_accumulation_steps must be at least 1")
@@ -235,13 +237,20 @@ def train_cpo(
         policy_chosen_scores = get_token_scores(model, chosen, chosen_masks)
         policy_rejected_scores = get_token_scores(model, rejected, rejected_masks)
 
-        policy_chosen_score = compute_score(policy_chosen_scores, chosen_masks, args.loss_type)
-        policy_rejected_score = compute_score(policy_rejected_scores, rejected_masks, args.loss_type)
+        policy_chosen_score = compute_score(
+            policy_chosen_scores, chosen_masks, args.loss_type
+        )
+        policy_rejected_score = compute_score(
+            policy_rejected_scores, rejected_masks, args.loss_type
+        )
 
         (lvalue, reward, toks, metrics), grad = loss_value_and_grad(
-            policy_chosen_score, policy_rejected_score, chosen_masks=chosen_masks, rejected_masks=rejected_masks
+            policy_chosen_score,
+            policy_rejected_score,
+            chosen_masks=chosen_masks,
+            rejected_masks=rejected_masks,
         )
-        
+
         if prev_grad is not None:
             grad = tree_map(lambda x, y: x + y, grad, prev_grad)
 
@@ -254,7 +263,9 @@ def train_cpo(
 
         return lvalue, reward, toks, metrics, grad
 
-    def loss_wrapper(policy_chosen_score, policy_rejected_score, chosen_masks, rejected_masks):
+    def loss_wrapper(
+        policy_chosen_score, policy_rejected_score, chosen_masks, rejected_masks
+    ):
         return loss_fn(
             policy_chosen_score=policy_chosen_score,
             policy_rejected_score=policy_rejected_score,
@@ -266,7 +277,7 @@ def train_cpo(
         )
 
     loss_value_and_grad = nn.value_and_grad(model, loss_wrapper)
-    
+
     model.train()
     losses = 0
     rewards = mx.zeros((2,))
@@ -286,12 +297,14 @@ def train_cpo(
     start = time.perf_counter()
     pbar = tqdm(range(1, args.iters + 1), desc="Training", disable=rank != 0)
     for it in pbar:
-        batch = next(iterate_cpo_batches(
-            dataset=train_dataset,
-            batch_size=args.batch_size,
-            max_seq_length=args.max_seq_length,
-            train=True,
-        ))
+        batch = next(
+            iterate_cpo_batches(
+                dataset=train_dataset,
+                batch_size=args.batch_size,
+                max_seq_length=args.max_seq_length,
+                train=True,
+            )
+        )
 
         if it == 1 or it % args.steps_per_eval == 0 or it == args.iters:
             stop = time.perf_counter()
@@ -364,10 +377,12 @@ def train_cpo(
             peak_mem = mx.get_peak_memory() / 1e9
 
             if rank == 0:
-                pbar.set_postfix({
-                    'loss': f"{train_loss:.3f}",
-                    'it/s': f"{it_sec:.3f}",
-                })
+                pbar.set_postfix(
+                    {
+                        "loss": f"{train_loss:.3f}",
+                        "it/s": f"{it_sec:.3f}",
+                    }
+                )
                 tqdm.write(
                     f"\nIter {it}: "
                     f"loss {train_loss:.3f}, "
