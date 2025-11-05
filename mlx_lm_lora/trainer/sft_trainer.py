@@ -4,7 +4,7 @@ from pathlib import Path
 import time
 
 from mlx.nn.utils import average_gradients
-from mlx.utils import tree_flatten
+from mlx.utils import tree_flatten, tree_map
 import mlx.core as mx
 import mlx.nn as nn
 import numpy as np
@@ -189,21 +189,30 @@ def train_sft(
 
     if args.grad_checkpoint:
         grad_checkpoint(model.layers[0])
+    
+    loss_value_and_grad = nn.value_and_grad(model, loss)
+
+    grad_accum_steps = args.gradient_accumulation_steps
+    if grad_accum_steps < 1:
+        raise ValueError("grad_accumulation_steps must be at least 1")
 
     state = [model.state, optimizer.state, mx.random.state]
 
     @partial(mx.compile, inputs=state, outputs=state)
-    def step(batch):
-        # Forward and backward pass
+    def step(batch, prev_grad, do_update):
         (lvalue, toks), grad = loss_value_and_grad(model, *batch)
 
-        if (it + 1) % args.gradient_accumulation_steps == 0:
+        if prev_grad is not None:
+            grad = tree_map(lambda x, y: x + y, grad, prev_grad)
+
+        if do_update:
             grad = average_gradients(grad)
+            if grad_accum_steps > 1:
+                grad = tree_map(lambda x: x / grad_accum_steps, grad)
             optimizer.update(model, grad)
+            grad = None
 
-        return (lvalue / args.gradient_accumulation_steps), toks
-
-    loss_value_and_grad = nn.value_and_grad(model, loss)
+        return lvalue, toks, grad
 
     model.train()
     losses = 0
@@ -211,6 +220,7 @@ def train_sft(
     steps = 0
     trained_tokens = 0
     train_time = 0
+    grad_accum = None
     # Main training loop
     pbar = tqdm(range(1, args.iters + 1), desc="Training", disable=rank != 0)
     for it in pbar:
@@ -221,7 +231,7 @@ def train_sft(
             train=True,
         ))
         tic = time.perf_counter()
-        if it == 1 or it % args.steps_per_eval == 0 or it == args.iters:
+        if args.steps_per_eval is not None and (it == 1 or it % args.steps_per_eval == 0 or it == args.iters):
             tic = time.perf_counter()
             val_loss = evaluate_sft(
                 model=model,
@@ -251,11 +261,15 @@ def train_sft(
 
             tic = time.perf_counter()
 
-        lvalue, toks = step(batch)
+        lvalue, toks, grad_accum = step(
+            batch,
+            grad_accum,
+            it % grad_accum_steps == 0,
+        )
         losses += lvalue
         n_tokens += toks
         steps += 1
-        mx.eval(state, losses, n_tokens)
+        mx.eval(state, losses, n_tokens, grad_accum)
         train_time += time.perf_counter() - tic
 
         if it % args.steps_per_report == 0 or it == args.iters:
