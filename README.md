@@ -450,13 +450,28 @@ mlx_lm_lora.train \
 
 ### Synthetic Dataset Creation
 
+This feature makes it able to use mlx-lm's powerfull batch genebrate to create a synthetic datasets using a teacher model, this can be used for knowledge distiliation, etc., and is a powerfull tool to create custom model, fuly locally.
+
 #### SFT
+
+With this you can create a synthetic SFT dataset using a teacher model.
+
+**Dataset Format:**
+
+```jsonl
+{"prompt": "Question"}
+{"prompt": "Question"}
+{"prompt": "Question"}
+```
 
 #### Preference
 
+
+**Dataset Format:** Same as abouve
+
 ### Training Your Custom Preference Model
 
-This mode adds a second training stage on top of the judge (preference) stage. A reward model thats scores the policy’s generations and the policy is updated with a KL‑penalised PPO‑style loss.
+This feature adds a second training stage on top of the judge (preference) stage. A reward model thats scores the policy’s generations and the policy is updated with a KL‑penalised PPO‑style loss.
 
 1. Collect preference data  →  judge‑mode (online DPO) →  reward model
 2. Run RLHF (policy optimisation) using the reward model → final policy
