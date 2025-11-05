@@ -1,10 +1,11 @@
 from dataclasses import dataclass, field
+from functools import partial
 from typing import List, Optional
 from pathlib import Path
 from tqdm import tqdm
 import time
 
-from mlx.utils import tree_flatten
+from mlx.utils import tree_flatten, tree_map
 import mlx.core as mx
 import mlx.nn as nn
 import numpy as np
@@ -626,10 +627,15 @@ def train_grpo(
 
     if args.grad_checkpoint:
         grad_checkpoint(model.layers[0])
+    
+    grad_accum_steps = args.gradient_accumulation_steps
+    if grad_accum_steps < 1:
+        raise ValueError("gradient_accumulation_steps must be at least 1")
 
-    state = [model.state, optimizer.state]
+    state = [model.state, optimizer.state, mx.random.state]
 
-    def step(batch):
+    @partial(mx.compile, inputs=state, outputs=state)
+    def step(batch, prev_grad, do_update):
         prompt_tokens, targets, prompt_lens, target_lens, type_info = batch
 
         all_completions, all_completion_texts, batch_indices = generate_grpo(
@@ -662,14 +668,21 @@ def train_grpo(
             importance_sampling_level=args.importance_sampling_level,
         )
 
-        if (it + 1) % args.gradient_accumulation_steps == 0:
-            grad = average_gradients(grad)
-            optimizer.update(model, grad)
+        if prev_grad is not None:
+            grad = tree_map(lambda x, y: x + y, grad, prev_grad)
 
-        return (lvalue / args.gradient_accumulation_steps), toks, metrics
+        if do_update:
+            grad = average_gradients(grad)
+            if grad_accum_steps > 1:
+                grad = tree_map(lambda x: x / grad_accum_steps, grad)
+            optimizer.update(model, grad)
+            grad = None
+
+        return lvalue, toks, metrics, grad
 
     loss_value_and_grad = nn.value_and_grad(model, loss_fn)
 
+    model.train()
     losses = 0
     n_tokens = 0
     steps = 0
@@ -685,6 +698,7 @@ def train_grpo(
         "clip_ratio_high": 0,
         "clip_ratio_total": 0,
     }
+    grad_accum = None
     for reward_func in reward_funcs:
         func_name = reward_func.__name__
         accumulated_metrics[f"{func_name}_mean"] = 0
@@ -740,7 +754,11 @@ def train_grpo(
 
             start = time.perf_counter()
 
-        lvalue, toks, metrics = step(batch)
+        lvalue, toks, metrics, grad_accum = step(
+            batch,
+            grad_accum,
+            it % grad_accum_steps == 0,
+        )
         losses += lvalue
         n_tokens += toks
         steps += 1
@@ -748,7 +766,7 @@ def train_grpo(
         for k, v in metrics.items():
             accumulated_metrics[k] += v
 
-        mx.eval(state, losses, n_tokens)
+        mx.eval(state, losses, n_tokens, grad_accum)
 
         if it % args.steps_per_report == 0 or it == args.iters:
             stop = time.perf_counter()

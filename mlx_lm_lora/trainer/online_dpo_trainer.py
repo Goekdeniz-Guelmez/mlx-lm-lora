@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from typing import Union
 from tqdm import tqdm
@@ -7,7 +8,7 @@ import time
 from transformers import PreTrainedTokenizer
 
 from mlx.nn.utils import average_gradients
-from mlx.utils import tree_flatten
+from mlx.utils import tree_flatten, tree_map
 
 from mlx_lm.tuner.callbacks import TrainingCallback
 from mlx_lm.tokenizer_utils import TokenizerWrapper
@@ -351,10 +352,15 @@ def train_online_dpo(
 
     if args.grad_checkpoint:
         grad_checkpoint(model.layers[0])
+    
+    grad_accum_steps = args.gradient_accumulation_steps
+    if grad_accum_steps < 1:
+        raise ValueError("gradient_accumulation_steps must be at least 1")
 
     state = [model.state, optimizer.state]
 
-    def step(batch):
+    @partial(mx.compile, inputs=state, outputs=state)
+    def step(batch, prev_grad, do_update):
         prompts, prompt_texts = batch
         
         # Generate completions for each prompt
@@ -436,11 +442,17 @@ def train_online_dpo(
             chosen_mask_array, rejected_mask_array
         )
         
-        if (it + 1) % args.gradient_accumulation_steps == 0:
-            grad = average_gradients(grad)
-            optimizer.update(model, grad)
+        if prev_grad is not None:
+            grad = tree_map(lambda x, y: x + y, grad, prev_grad)
 
-        return (lvalue / args.gradient_accumulation_steps), reward, toks, metrics
+        if do_update:
+            grad = average_gradients(grad)
+            if grad_accum_steps > 1:
+                grad = tree_map(lambda x: x / grad_accum_steps, grad)
+            optimizer.update(model, grad)
+            grad = None
+
+        return lvalue, reward, toks, metrics, grad
 
     def loss_wrapper(policy_chosen_score, policy_rejected_score, reference_chosen_score, reference_rejected_score, chosen_masks, rejected_masks):
         return loss_fn(
@@ -457,6 +469,7 @@ def train_online_dpo(
 
     loss_value_and_grad = nn.value_and_grad(model, loss_wrapper)
 
+    model.train()
     losses = 0
     rewards = mx.zeros((2,))
     n_tokens = 0
@@ -470,6 +483,7 @@ def train_online_dpo(
         "rejected_logits_mean": 0,
         "chosen_logits_mean": 0,
     }
+    grad_accum = None
 
     start = time.perf_counter()
 
@@ -526,7 +540,11 @@ def train_online_dpo(
 
             start = time.perf_counter()
 
-        lvalue, reward, toks, metrics = step(batch)
+        lvalue, reward, toks, metrics, grad_accum = step(
+            batch,
+            grad_accum,
+            it % grad_accum_steps == 0,
+        )
         losses += lvalue
         rewards += reward
         n_tokens += toks
@@ -535,7 +553,7 @@ def train_online_dpo(
         for k, v in metrics.items():
             accumulated_metrics[k] += v
 
-        mx.eval(state, losses, n_tokens)
+        mx.eval(state, losses, rewards, n_tokens, grad_accum)
 
         if it % args.steps_per_report == 0 or it == args.iters:
             stop = time.perf_counter()

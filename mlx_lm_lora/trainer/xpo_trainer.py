@@ -1,10 +1,11 @@
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from tqdm import tqdm
 import time
 
 from mlx.nn.utils import average_gradients
-from mlx.utils import tree_flatten
+from mlx.utils import tree_flatten, tree_map
 
 from mlx_lm.tuner.callbacks import TrainingCallback
 
@@ -313,9 +314,14 @@ def train_xpo(
     if args.grad_checkpoint:
         grad_checkpoint(model.layers[0])
 
-    state = [model.state, optimizer.state]
+    grad_accum_steps = args.gradient_accumulation_steps
+    if grad_accum_steps < 1:
+        raise ValueError("gradient_accumulation_steps must be at least 1")
 
-    def step(batch, current_alpha):
+    state = [model.state, optimizer.state, mx.random.state]
+
+    @partial(mx.compile, inputs=state, outputs=state)
+    def step(batch, current_alpha, prev_grad, do_update):
         prompts, prompt_texts = batch
         
         # Generate completions for each prompt
@@ -401,11 +407,17 @@ def train_xpo(
             chosen_mask_counts, rejected_mask_counts, current_alpha
         )
         
-        if (it + 1) % args.gradient_accumulation_steps == 0:
-            grad = average_gradients(grad)
-            optimizer.update(model, grad)
+        if prev_grad is not None:
+            grad = tree_map(lambda x, y: x + y, grad, prev_grad)
 
-        return (lvalue / args.gradient_accumulation_steps), reward, toks, metrics
+        if do_update:
+            grad = average_gradients(grad)
+            if grad_accum_steps > 1:
+                grad = tree_map(lambda x: x / grad_accum_steps, grad)
+            optimizer.update(model, grad)
+            grad = None
+
+        return lvalue, reward, toks, metrics, grad
 
     def loss_wrapper(policy_chosen_score, policy_rejected_score, reference_chosen_score, reference_rejected_score, chosen_masks, rejected_masks, alpha):
         return loss_fn(
@@ -423,6 +435,7 @@ def train_xpo(
 
     loss_value_and_grad = nn.value_and_grad(model, loss_wrapper)
 
+    model.train()
     losses = 0
     rewards = mx.zeros((2,))
     n_tokens = 0
@@ -439,6 +452,7 @@ def train_xpo(
         "chosen_kl": 0,
         "rejected_kl": 0,
     }
+    grad_accum = None
 
     start = time.perf_counter()
 
@@ -498,7 +512,12 @@ def train_xpo(
 
             start = time.perf_counter()
 
-        lvalue, reward, toks, metrics = step(batch, current_alpha)
+        lvalue, reward, toks, metrics, grad_accum = step(
+            batch,
+            current_alpha,
+            grad_accum,
+            it % grad_accum_steps == 0
+        )
         losses += lvalue
         rewards += reward
         n_tokens += toks
@@ -507,7 +526,7 @@ def train_xpo(
         for k, v in metrics.items():
             accumulated_metrics[k] += v
 
-        mx.eval(state, losses, n_tokens)
+        mx.eval(state, losses, rewards, n_tokens, grad_accum)
 
         if it % args.steps_per_report == 0 or it == args.iters:
             stop = time.perf_counter()
