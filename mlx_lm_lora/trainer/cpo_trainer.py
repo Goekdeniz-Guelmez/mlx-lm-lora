@@ -345,7 +345,7 @@ def train_cpo(
         for k, v in metrics.items():
             accumulated_metrics[k] += v
 
-        mx.eval(state, losses, n_tokens, grad_accum)
+        mx.eval(state, losses, rewards, n_tokens, grad_accum)
 
         if it % args.steps_per_report == 0 or it == args.iters:
             stop = time.perf_counter()

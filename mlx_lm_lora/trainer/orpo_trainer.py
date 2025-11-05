@@ -2,10 +2,9 @@ from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
 import time
-from typing import Optional, List, Tuple, Dict, Any
 
 from mlx.nn.utils import average_gradients
-from mlx.utils import tree_flatten
+from mlx.utils import tree_flatten, tree_map
 import mlx.core as mx
 import mlx.nn as nn
 import numpy as np
@@ -227,9 +226,14 @@ def train_orpo(
     if args.grad_checkpoint:
         grad_checkpoint(model.layers[0])
 
-    state = [model.state, optimizer.state]
+    grad_accum_steps = args.gradient_accumulation_steps
+    if grad_accum_steps < 1:
+        raise ValueError("gradient_accumulation_steps must be at least 1")
 
-    def step(batch):
+    state = [model.state, optimizer.state, mx.random.state]
+
+    @partial(mx.compile, inputs=state, outputs=state)
+    def step(batch, prev_grad, do_update):
         chosen, rejected, chosen_masks, rejected_masks, preference_scores = batch
 
         chosen_logps, chosen_logits_mean = get_logps(model, chosen, chosen_masks)
@@ -245,11 +249,17 @@ def train_orpo(
             preference_scores=preference_scores,
         )
 
-        if (it + 1) % args.gradient_accumulation_steps == 0:
-            grad = average_gradients(grad)
-            optimizer.update(model, grad)
+        if prev_grad is not None:
+            grad = tree_map(lambda x, y: x + y, grad, prev_grad)
 
-        return (lvalue / args.gradient_accumulation_steps), reward, toks, metrics
+        if do_update:
+            grad = average_gradients(grad)
+            if grad_accum_steps > 1:
+                grad = tree_map(lambda x: x / grad_accum_steps, grad)
+            optimizer.update(model, grad)
+            grad = None
+
+        return lvalue, reward, toks, metrics, grad
 
     def loss_wrapper(
         chosen_logps, chosen_logits_mean, rejected_logps, rejected_logits_mean, chosen_masks, rejected_masks, preference_scores
@@ -267,6 +277,7 @@ def train_orpo(
 
     loss_value_and_grad = nn.value_and_grad(model, loss_wrapper)
 
+    model.train()
     losses = 0
     rewards = mx.zeros((2,))
     n_tokens = 0
@@ -280,6 +291,7 @@ def train_orpo(
         "rejected_logits_mean": 0,
         "chosen_logits_mean": 0,
     }
+    grad_accum = None
 
     start = time.perf_counter()
     pbar = tqdm(range(1, args.iters + 1), desc="Training", disable=rank != 0)
@@ -328,7 +340,11 @@ def train_orpo(
             start = time.perf_counter()
 
         # Training step
-        lvalue, reward, toks, metrics = step(batch)
+        lvalue, reward, toks, metrics, grad_accum = step(
+            batch,
+            grad_accum,
+            it % grad_accum_steps == 0,
+        )
         losses += lvalue
         rewards += reward
         n_tokens += toks
@@ -337,7 +353,7 @@ def train_orpo(
         for k, v in metrics.items():
             accumulated_metrics[k] += v
 
-        mx.eval(state, losses, rewards, n_tokens)
+        mx.eval(state, losses, rewards, n_tokens, grad_accum)
 
         if it % args.steps_per_report == 0 or it == args.iters:
             stop = time.perf_counter()
