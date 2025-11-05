@@ -3,7 +3,7 @@ from tqdm import tqdm
 import time
 
 from mlx.nn.utils import average_gradients
-from mlx.utils import tree_flatten
+from mlx.utils import tree_flatten, tree_map
 
 from mlx_lm.tuner.callbacks import TrainingCallback
 
@@ -220,10 +220,14 @@ def train_cpo(
 
     if args.grad_checkpoint:
         grad_checkpoint(model.layers[0])
+    
+    grad_accum_steps = args.gradient_accumulation_steps
+    if grad_accum_steps < 1:
+        raise ValueError("grad_accumulation_steps must be at least 1")
 
-    state = [model.state, optimizer.state]
+    state = [model.state, optimizer.state, mx.random.state]
 
-    def step(batch):
+    def step(batch, prev_grad, do_update):
         chosen, rejected, chosen_masks, rejected_masks = batch
 
         policy_chosen_scores = get_token_scores(model, chosen, chosen_masks)
@@ -236,11 +240,17 @@ def train_cpo(
             policy_chosen_score, policy_rejected_score, chosen_masks=chosen_masks, rejected_masks=rejected_masks
         )
         
-        if (it + 1) % args.gradient_accumulation_steps == 0:
-            grad = average_gradients(grad)
-            optimizer.update(model, grad)
+        if prev_grad is not None:
+            grad = tree_map(lambda x, y: x + y, grad, prev_grad)
 
-        return (lvalue / args.gradient_accumulation_steps), reward, toks, metrics
+        if do_update:
+            grad = average_gradients(grad)
+            if grad_accum_steps > 1:
+                grad = tree_map(lambda x: x / grad_accum_steps, grad)
+            optimizer.update(model, grad)
+            grad = None
+
+        return lvalue, reward, toks, metrics, grad
 
     def loss_wrapper(policy_chosen_score, policy_rejected_score, chosen_masks, rejected_masks):
         return loss_fn(
@@ -268,6 +278,7 @@ def train_cpo(
         "rejected_logits_mean": 0,
         "chosen_logits_mean": 0,
     }
+    grad_accum = None
 
     start = time.perf_counter()
     pbar = tqdm(range(1, args.iters + 1), desc="Training", disable=rank != 0)
@@ -318,7 +329,11 @@ def train_cpo(
 
             start = time.perf_counter()
 
-        lvalue, reward, toks, metrics = step(batch)
+        lvalue, reward, toks, metrics, grad_accum = step(
+            batch,
+            grad_accum,
+            it % grad_accum_steps == 0,
+        )
         losses += lvalue
         rewards += reward
         n_tokens += toks
@@ -327,7 +342,7 @@ def train_cpo(
         for k, v in metrics.items():
             accumulated_metrics[k] += v
 
-        mx.eval(state, losses, rewards, n_tokens)
+        mx.eval(state, losses, n_tokens, grad_accum)
 
         if it % args.steps_per_report == 0 or it == args.iters:
             stop = time.perf_counter()
