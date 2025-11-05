@@ -1,5 +1,3 @@
-# © 2025 Gökdeniz Gülmez — Preference Dataset Builder (mlx-lm version, DPO format)
-
 import argparse
 import json
 import os
