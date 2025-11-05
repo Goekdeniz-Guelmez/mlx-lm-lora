@@ -107,7 +107,7 @@ if args.system_prompt and os.path.isfile(args.system_prompt):
         args.system_prompt = DEFAULT_SYSTEM_PROMPT
 
 print(f"Loading odel: {args.model}")
-model, tokenizer = load(path_or_hf_repo=args.base_model)
+model, tokenizer = load(path_or_hf_repo=args.model)
 
 prompts = []
 for item in dataset:
