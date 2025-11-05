@@ -1,10 +1,11 @@
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from tqdm import tqdm
 import time
 
 from mlx.nn.utils import average_gradients
-from mlx.utils import tree_flatten
+from mlx.utils import tree_flatten, tree_map
 
 from mlx_lm.tuner.callbacks import TrainingCallback
 
@@ -224,10 +225,15 @@ def train_rlhf(
 
     if args.grad_checkpoint:
         grad_checkpoint(model.layers[0])
+    
+    grad_accum_steps = args.gradient_accumulation_steps
+    if grad_accum_steps < 1:
+        raise ValueError("gradient_accumulation_steps must be at least 1")
 
-    state = [model.state, optimizer.state]
+    state = [model.state, optimizer.state, mx.random.state]
 
-    def step(batch):
+    @partial(mx.compile, inputs=state, outputs=state)
+    def step(batch, prev_grad, do_update):
         prompts, prompt_texts = batch
         
         # Generate completions for each prompt
@@ -283,11 +289,17 @@ def train_rlhf(
             policy_logits, ref_logits, batch_rewards, target_masks
         )
         
-        if (it + 1) % args.gradient_accumulation_steps == 0:
-            grad = average_gradients(grad)
-            optimizer.update(model, grad)
+        if prev_grad is not None:
+            grad = tree_map(lambda x, y: x + y, grad, prev_grad)
 
-        return (lvalue / args.gradient_accumulation_steps), [], toks, metrics
+        if do_update:
+            grad = average_gradients(grad)
+            if grad_accum_steps > 1:
+                grad = tree_map(lambda x: x / grad_accum_steps, grad)
+            optimizer.update(model, grad)
+            grad = None
+
+        return lvalue, batch_rewards, toks, metrics
 
     def loss_wrapper(policy_logits, ref_logits, rewards, masks):
         return loss_fn(
@@ -300,6 +312,7 @@ def train_rlhf(
 
     loss_value_and_grad = nn.value_and_grad(model, loss_wrapper)
 
+    model.train()
     losses = 0
     n_tokens = 0
     steps = 0
@@ -311,6 +324,7 @@ def train_rlhf(
         "policy_logps": 0,
         "ref_logps": 0,
     }
+    grad_accum = None
 
     start = time.perf_counter()
 
@@ -363,7 +377,11 @@ def train_rlhf(
 
             start = time.perf_counter()
 
-        lvalue, reward, toks, metrics = step(batch)
+        lvalue, rewards, toks, metrics, grad_accum = step(
+            batch,
+            grad_accum,
+            it % grad_accum_steps == 0,
+        )
         losses += lvalue
         n_tokens += toks
         steps += 1
@@ -371,7 +389,7 @@ def train_rlhf(
         for k, v in metrics.items():
             accumulated_metrics[k] += v
 
-        mx.eval(state, losses, n_tokens)
+        mx.eval(state, losses, rewards, n_tokens, grad_accum)
 
         if it % args.steps_per_report == 0 or it == args.iters:
             stop = time.perf_counter()
