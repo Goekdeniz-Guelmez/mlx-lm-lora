@@ -190,11 +190,10 @@ def train_sft(
     if args.grad_checkpoint:
         grad_checkpoint(model.layers[0])
     
-    loss_value_and_grad = nn.value_and_grad(model, loss)
 
     grad_accum_steps = args.gradient_accumulation_steps
     if grad_accum_steps < 1:
-        raise ValueError("grad_accumulation_steps must be at least 1")
+        raise ValueError("gradient_accumulation_steps must be at least 1")
 
     state = [model.state, optimizer.state, mx.random.state]
 
@@ -214,6 +213,8 @@ def train_sft(
 
         return lvalue, toks, grad
 
+    loss_value_and_grad = nn.value_and_grad(model, loss)
+    
     model.train()
     losses = 0
     n_tokens = 0

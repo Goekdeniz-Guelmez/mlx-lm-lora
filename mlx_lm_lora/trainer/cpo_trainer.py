@@ -1,4 +1,5 @@
 from pathlib import Path
+from functools import partial
 from tqdm import tqdm
 import time
 
@@ -223,10 +224,11 @@ def train_cpo(
     
     grad_accum_steps = args.gradient_accumulation_steps
     if grad_accum_steps < 1:
-        raise ValueError("grad_accumulation_steps must be at least 1")
+        raise ValueError("gradient_accumulation_steps must be at least 1")
 
     state = [model.state, optimizer.state, mx.random.state]
 
+    @partial(mx.compile, inputs=state, outputs=state)
     def step(batch, prev_grad, do_update):
         chosen, rejected, chosen_masks, rejected_masks = batch
 
@@ -264,7 +266,8 @@ def train_cpo(
         )
 
     loss_value_and_grad = nn.value_and_grad(model, loss_wrapper)
-
+    
+    model.train()
     losses = 0
     rewards = mx.zeros((2,))
     n_tokens = 0
