@@ -1,5 +1,6 @@
 from typing import Any, Dict, List, Union, Tuple
 from pathlib import Path
+import random
 import types
 import json
 
@@ -76,6 +77,7 @@ class JudgeDataset:
         prompt_key: str = "prompt",
         chosen_key: str = "chosen",
         rejected_key: str = "regected",
+        mask_prompt: bool = False,
     ):
         from .judge import DEFAULT_PAIRWISE_SYSTEM_PROMPT, RAW_TRAINING_SYSTEM_PROMPT
         self.system = RAW_TRAINING_SYSTEM_PROMPT
@@ -85,27 +87,44 @@ class JudgeDataset:
         self.prompt_key = prompt_key
         self.chosen_key = chosen_key
         self.rejected_key = rejected_key
+        self.mask_prompt = mask_prompt
 
     def process(self, d):
         prompt = d[self.prompt_key]
         chosen_answer = d[self.chosen_key]
-        regected_answer = d[self.rejected_key]
-        final_prompt = self.prompt.format(prompt=prompt, response0=chosen_answer, response1=regected_answer)
+        rejected_answer = d[self.rejected_key]
+
+        # Shuffle responses
+        responses = [chosen_answer, rejected_answer]
+        if random.random() < 0.5:
+            responses = [rejected_answer, chosen_answer]
+            label = 1
+        else:
+            label = 0
+
+        final_prompt = self.prompt.format(prompt=prompt, response0=responses[0], response1=responses[1])
         messages = [
             {"role": "system", "content": self.system},
             {"role": "user", "content": final_prompt},
+            {"role": "assistant", "content": str(label)}
         ]
-        d = self.tokenizer.apply_chat_template(messages, add_generation_prompt=True)
+        d = self.tokenizer.apply_chat_template(messages)
         if d[-1] != self.tokenizer.eos_token_id:
             d.append(self.tokenizer.eos_token_id)
-        return d
+
+        if self.mask_prompt:
+            messages = messages[:-1]
+            offset = len(self.tokenizer.apply_chat_template(messages))
+            return (d, offset)
+        else:
+            return d
 
     def __getitem__(self, idx: int):
         return self._data[idx]
 
     def __len__(self):
         return len(self._data)
-    
+
 
 class PromptDataset:
     def __init__(
@@ -448,19 +467,14 @@ def create_dataset(
 ):
     mask_prompt = getattr(config, "mask_prompt", False)
     train_mode = getattr(config, "train_mode", "sft")
-
     text_feature = getattr(config, "text_feature", "text")
     chat_feature = getattr(config, "chat_feature", "messages")
     prompt_feature = getattr(config, "prompt_feature", "prompt")
     completion_feature = getattr(config, "completion_feature", "completion")
-
-    # For ORPO and DPO
     system_feature = getattr(config, "system_feature", "system")
     chosen_feature = getattr(config, "chosen_feature", "chosen")
     rejected_feature = getattr(config, "rejected_feature", "rejected")
     preference_score_feature = getattr(config, "preference_score_feature", "preference_score")
-
-    # For GRPO
     type_feature = getattr(config, "type_feature", "type")
     answer_feature = getattr(config, "answer_feature", "answer")
 
@@ -487,6 +501,7 @@ def create_dataset(
                 prompt_key=prompt_feature,
                 chosen_key=chosen_feature,
                 rejected_key=rejected_feature,
+                mask_prompt=mask_prompt,
             )
         else:
             raise ValueError("Unsupported data format for judge training.")
@@ -640,7 +655,6 @@ def load_custom_hf_dataset(args, tokenizer: PreTrainedTokenizer):
     if len(collection) == 1:
         return collection[0]
 
-    # Otherwise concatenate them
     return tuple(map(ConcatenatedDataset, zip(*collection)))
 
 

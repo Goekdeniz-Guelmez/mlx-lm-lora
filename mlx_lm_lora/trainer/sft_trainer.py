@@ -222,6 +222,7 @@ def train_sft(
     trained_tokens = 0
     train_time = 0
     grad_accum = None
+    
     # Main training loop
     pbar = tqdm(range(1, args.iters + 1), desc="Training", disable=rank != 0)
     for it in pbar:
