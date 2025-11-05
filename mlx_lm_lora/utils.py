@@ -1,25 +1,26 @@
-from typing import Optional, Tuple, Any
+import math
 from pathlib import Path
-
-from mlx.utils import tree_flatten, tree_unflatten
-
-from mlx_lm.gguf import convert_to_gguf
-from mlx_lm.tuner.utils import dequantize, load_adapters, linear_to_lora_layers
-from mlx_lm.utils import (
-    save_model,
-    save_config,
-    load,
-)
-from mlx_lm.tokenizer_utils import TokenizerWrapper
+from typing import Any, Optional, Tuple
 
 import mlx.nn as nn
-import math
+from mlx.utils import tree_flatten, tree_unflatten
+from mlx_lm.gguf import convert_to_gguf
+from mlx_lm.tokenizer_utils import TokenizerWrapper
+from mlx_lm.tuner.utils import dequantize, linear_to_lora_layers, load_adapters
+from mlx_lm.utils import (
+    load,
+    save_config,
+    save_model,
+)
+
 
 def calculate_iters(train_set, batch_size, epochs) -> int:
     num_samples = len(train_set)
     batches_per_epoch = math.ceil(num_samples / batch_size)
     iters = epochs * batches_per_epoch
-    print(f"[INFO] Calculated {iters} iterations from {epochs} epochs (dataset size: {num_samples}, batch size: {batch_size})")
+    print(
+        f"[INFO] Calculated {iters} iterations from {epochs} epochs (dataset size: {num_samples}, batch size: {batch_size})"
+    )
     return iters
 
 
@@ -34,7 +35,7 @@ def fuse_and_save_model(
 ) -> None:
     """
     Fuse fine-tuned adapters into the base model.
-    
+
     Args:
         model: The MLX model to fuse adapters into.
         tokenizer: The tokenizer wrapper.
@@ -111,10 +112,15 @@ def from_pretrained(
         linear_to_lora_layers(
             model=model,
             num_layers=lora_config.get("num_layers", None),
-            config={"rank": rank, "dropout": dropout, "scale": scale, "use_dora": use_dora},
+            config={
+                "rank": rank,
+                "dropout": dropout,
+                "scale": scale,
+                "use_dora": use_dora,
+            },
             use_dora=use_dora,
         )
-    
+
     if quantized_load is not None:
         print(f"Quantizing model with {quantized_load['bits']} bits")
         if "quantization" in args:
@@ -124,7 +130,7 @@ def from_pretrained(
         group_size = quantized_load.get("group_size", 128)
 
         nn.quantize(model, bits=bits, group_size=group_size)
-        
+
         if hasattr(model, "args"):
             model.args.quantization = {"group_size": group_size, "bits": bits}
             model.args.quantization_config = model.args.quantization

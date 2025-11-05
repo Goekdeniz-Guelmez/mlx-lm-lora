@@ -1,31 +1,33 @@
-from pathlib import Path
-import importlib.util
 import argparse
+import importlib.util
 import math
-import yaml
-import sys
 import re
+import sys
+from pathlib import Path
 
-import numpy as np
-
-import mlx.optimizers as optim
 import mlx.core as mx
 import mlx.nn as nn
-
+import mlx.optimizers as optim
+import numpy as np
+import yaml
 from mlx_lm.tokenizer_utils import load_tokenizer
 from mlx_lm.tuner.callbacks import WandBCallback
-from mlx_lm.utils import load, save_config
-
-from .trainer.sft_trainer import SFTTrainingArgs, TrainingCallback, evaluate_sft, train_sft
-from .trainer.datasets import CacheDataset, load_dataset
-from .utils import fuse_and_save_model, from_pretrained
-
 from mlx_lm.tuner.utils import (
     build_schedule,
     linear_to_lora_layers,
     load_adapters,
     print_trainable_parameters,
 )
+from mlx_lm.utils import load, save_config
+
+from .trainer.datasets import CacheDataset, load_dataset
+from .trainer.sft_trainer import (
+    SFTTrainingArgs,
+    TrainingCallback,
+    evaluate_sft,
+    train_sft,
+)
+from .utils import from_pretrained, fuse_and_save_model
 
 yaml_loader = yaml.SafeLoader
 yaml_loader.add_implicit_resolver(
@@ -84,7 +86,7 @@ def load_reward_functions_from_file(file_path):
     """Load reward functions from a Python file"""
     if not file_path or not Path(file_path).exists():
         return None
-    
+
     try:
         print(f"Loading custom reward functions from {file_path}")
         spec = importlib.util.spec_from_file_location("custom_rewards", file_path)
@@ -102,7 +104,9 @@ def calculate_iters(train_set, batch_size, epochs) -> int:
     num_samples = len(train_set)
     batches_per_epoch = math.ceil(num_samples / batch_size)
     iters = epochs * batches_per_epoch
-    print(f"[INFO] Calculated {iters} iterations from {epochs} epochs (dataset size: {num_samples}, batch size: {batch_size})")
+    print(
+        f"[INFO] Calculated {iters} iterations from {epochs} epochs (dataset size: {num_samples}, batch size: {batch_size})"
+    )
     return iters
 
 
@@ -167,12 +171,21 @@ def build_parser():
     )
     parser.add_argument("--batch-size", type=int, help="Minibatch size.")
     parser.add_argument("--iters", type=int, help="Iterations to train for.")
-    parser.add_argument("--epochs", type=int, help="Epochs to train for. Ignored if --iters is provided.")
-    parser.add_argument("--gradient-accumulation-steps", type=int, help="Number of gradient accumulation steps.", default=1)
+    parser.add_argument(
+        "--epochs",
+        type=int,
+        help="Epochs to train for. Ignored if --iters is provided.",
+    )
+    parser.add_argument(
+        "--gradient-accumulation-steps",
+        type=int,
+        help="Number of gradient accumulation steps.",
+        default=1,
+    )
     parser.add_argument(
         "--val-batches",
         type=int,
-        help="Number of validation batches, -1 uses the entire validation set."
+        help="Number of validation batches, -1 uses the entire validation set.",
     )
     parser.add_argument("--learning-rate", type=float, help="Adam learning rate.")
     parser.add_argument(
@@ -255,7 +268,9 @@ def train_model(
     mx.random.seed(args.seed)
 
     if args.iters is None and args.epochs is not None:
-        args.iters = calculate_iters(train_set=train_set, batch_size=args.batch_size, epochs=args.epochs)
+        args.iters = calculate_iters(
+            train_set=train_set, batch_size=args.batch_size, epochs=args.epochs
+        )
 
     model.freeze()
     if args.num_layers > len(model.layers):
@@ -373,7 +388,10 @@ def run(args, training_callback: TrainingCallback = None):
     )
 
     print("Loading datasets")
-    train_set, valid_set, test_set = load_dataset(args, tokenizer, )
+    train_set, valid_set, test_set = load_dataset(
+        args,
+        tokenizer,
+    )
 
     if args.test and not args.train:
         if args.adapter_path != "":
@@ -399,7 +417,11 @@ def run(args, training_callback: TrainingCallback = None):
 
 
 def main(args=None):
-    import os, types, yaml
+    import os
+    import types
+
+    import yaml
+
     os.environ["TOKENIZERS_PARALLELISM"] = "true"
 
     if args is None:

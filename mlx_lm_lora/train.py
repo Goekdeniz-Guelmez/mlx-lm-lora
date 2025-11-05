@@ -1,40 +1,50 @@
-from pathlib import Path
-import importlib.util
 import argparse
+import importlib.util
 import math
-import yaml
-import sys
 import re
+import sys
+from pathlib import Path
 
-import numpy as np
-
-import mlx.optimizers as optim
 import mlx.core as mx
 import mlx.nn as nn
-
+import mlx.optimizers as optim
+import numpy as np
+import yaml
 from mlx_lm.tokenizer_utils import load_tokenizer
 from mlx_lm.tuner.callbacks import WandBCallback
-from mlx_lm.utils import load, save_config
-from mlx_optimizers import QHAdam
-
-from .trainer.grpo_reward_functions import get_reward_function, get_default_reward_functions, list_available_reward_functions
-from .trainer.online_dpo_trainer import  OnlineDPOTrainingArgs, evaluate_online_dpo, train_online_dpo
-from .trainer.sft_trainer import SFTTrainingArgs, TrainingCallback, evaluate_sft, train_sft
-from .trainer.grpo_trainer import GRPOTrainingArgs, evaluate_grpo, train_grpo
-from .trainer.orpo_trainer import ORPOTrainingArgs, evaluate_orpo, train_orpo
-from .trainer.rflhf_trainer import RLHFTrainingArgs, evaluate_rlhf, train_rlhf
-from .trainer.xpo_trainer import  XPOTrainingArgs, evaluate_xpo, train_xpo
-from .trainer.dpo_trainer import DPOTrainingArgs, evaluate_dpo, train_dpo
-from .trainer.cpo_trainer import CPOTrainingArgs, evaluate_cpo, train_cpo
-from .trainer.datasets import CacheDataset, load_dataset
-from .utils import fuse_and_save_model, from_pretrained
-
 from mlx_lm.tuner.utils import (
     build_schedule,
     linear_to_lora_layers,
     load_adapters,
     print_trainable_parameters,
 )
+from mlx_lm.utils import load, save_config
+from mlx_optimizers import QHAdam
+
+from .trainer.cpo_trainer import CPOTrainingArgs, evaluate_cpo, train_cpo
+from .trainer.datasets import CacheDataset, load_dataset
+from .trainer.dpo_trainer import DPOTrainingArgs, evaluate_dpo, train_dpo
+from .trainer.grpo_reward_functions import (
+    get_default_reward_functions,
+    get_reward_function,
+    list_available_reward_functions,
+)
+from .trainer.grpo_trainer import GRPOTrainingArgs, evaluate_grpo, train_grpo
+from .trainer.online_dpo_trainer import (
+    OnlineDPOTrainingArgs,
+    evaluate_online_dpo,
+    train_online_dpo,
+)
+from .trainer.orpo_trainer import ORPOTrainingArgs, evaluate_orpo, train_orpo
+from .trainer.rflhf_trainer import RLHFTrainingArgs, evaluate_rlhf, train_rlhf
+from .trainer.sft_trainer import (
+    SFTTrainingArgs,
+    TrainingCallback,
+    evaluate_sft,
+    train_sft,
+)
+from .trainer.xpo_trainer import XPOTrainingArgs, evaluate_xpo, train_xpo
+from .utils import from_pretrained, fuse_and_save_model
 
 yaml_loader = yaml.SafeLoader
 yaml_loader.add_implicit_resolver(
@@ -90,32 +100,28 @@ CONFIG_DEFAULTS = {
     "lora_parameters": {"rank": 8, "dropout": 0.0, "scale": 10.0},
     "mask_prompt": False,
     "fuse": True,
-
     # ORPO args
     "beta": 0.1,
     "reward_scaling": 1.0,
-
     # DPO args
     "dpo_cpo_loss_type": "sigmoid",
     "delta": 50.0,
     "reference_model_path": None,
-
     # Online DPO & XPO
     "judge": None,
     "judge_config": {},
     "alpha": 1e-5,
-
     # GRPO args
     "group_size": 4,
     "epsilon": 1e-4,
-    "epsilon_high": None, # DAPO
+    "epsilon_high": None,  # DAPO
     "max_completion_length": 512,
     "temperature": 0.8,
     "reward_weights": None,
     "reward_functions": None,
     "reward_functions_file": None,
     "grpo_loss_type": "grpo",
-    "importance_sampling_level": None, # GSPO
+    "importance_sampling_level": None,  # GSPO
 }
 
 
@@ -123,7 +129,7 @@ def load_reward_functions_from_file(file_path):
     """Load reward functions from a Python file"""
     if not file_path or not Path(file_path).exists():
         return None
-    
+
     try:
         print(f"Loading custom reward functions from {file_path}")
         spec = importlib.util.spec_from_file_location("custom_rewards", file_path)
@@ -141,7 +147,9 @@ def calculate_iters(train_set, batch_size, epochs) -> int:
     num_samples = len(train_set)
     batches_per_epoch = math.ceil(num_samples / batch_size)
     iters = epochs * batches_per_epoch
-    print(f"[INFO] Calculated {iters} iterations from {epochs} epochs (dataset size: {num_samples}, batch size: {batch_size})")
+    print(
+        f"[INFO] Calculated {iters} iterations from {epochs} epochs (dataset size: {num_samples}, batch size: {batch_size})"
+    )
     return iters
 
 
@@ -219,12 +227,21 @@ def build_parser():
     )
     parser.add_argument("--batch-size", type=int, help="Minibatch size.")
     parser.add_argument("--iters", type=int, help="Iterations to train for.")
-    parser.add_argument("--epochs", type=int, help="Epochs to train for. Ignored if --iters is provided.")
-    parser.add_argument("--gradient-accumulation-steps", type=int, help="Number of gradient accumulation steps.", default=1)
+    parser.add_argument(
+        "--epochs",
+        type=int,
+        help="Epochs to train for. Ignored if --iters is provided.",
+    )
+    parser.add_argument(
+        "--gradient-accumulation-steps",
+        type=int,
+        help="Number of gradient accumulation steps.",
+        default=1,
+    )
     parser.add_argument(
         "--val-batches",
         type=int,
-        help="Number of validation batches, -1 uses the entire validation set."
+        help="Number of validation batches, -1 uses the entire validation set.",
     )
     parser.add_argument("--learning-rate", type=float, help="Adam learning rate.")
     parser.add_argument(
@@ -328,10 +345,16 @@ def build_parser():
 
     # Online DPO & XPO args
     parser.add_argument(
-        "--judge", type=str, help="Judge to use can be a model ID or 'human'.", default="mlx-community/Josiefied-Qwen2.5-7B-Instruct-abliterated-v2-4-bit"
+        "--judge",
+        type=str,
+        help="Judge to use can be a model ID or 'human'.",
+        default="mlx-community/Josiefied-Qwen2.5-7B-Instruct-abliterated-v2-4-bit",
     )
     parser.add_argument(
-        "--alpha", type=list[float], help="Judge to use can be a model ID or 'human'.", default=[1e-5]
+        "--alpha",
+        type=list[float],
+        help="Judge to use can be a model ID or 'human'.",
+        default=[1e-5],
     )
 
     # GRPO args
@@ -432,7 +455,9 @@ def train_model(
     mx.random.seed(args.seed)
 
     if args.iters is None and args.epochs is not None:
-        args.iters = calculate_iters(train_set=train_set, batch_size=args.batch_size, epochs=args.epochs)
+        args.iters = calculate_iters(
+            train_set=train_set, batch_size=args.batch_size, epochs=args.epochs
+        )
 
     model.freeze()
     if args.num_layers > len(model.layers):
@@ -544,7 +569,7 @@ def train_model(
             args=dpo_training_args,
             training_callback=training_callback,
         )
-    
+
     elif args.train_mode == "online_dpo":
         online_dpo_training_args = OnlineDPOTrainingArgs(
             batch_size=args.batch_size,
@@ -595,7 +620,7 @@ def train_model(
             args=online_dpo_training_args,
             training_callback=training_callback,
         )
-    
+
     elif args.train_mode == "rlhf":
         online_dpo_training_args = RLHFTrainingArgs(
             batch_size=args.batch_size,
@@ -694,7 +719,7 @@ def train_model(
             args=xpo_training_args,
             training_callback=training_callback,
         )
-    
+
     elif args.train_mode == "cpo":
         cpo_training_args = CPOTrainingArgs(
             batch_size=args.batch_size,
@@ -725,18 +750,20 @@ def train_model(
     elif args.train_mode == "grpo":
         if args.reward_functions_file:
             load_reward_functions_from_file(args.reward_functions_file)
-        
+
         reward_funcs = get_default_reward_functions()
         if args.reward_functions:
-            func_names = [name.strip() for name in args.reward_functions.split(',')]
+            func_names = [name.strip() for name in args.reward_functions.split(",")]
             try:
                 reward_funcs = [get_reward_function(name) for name in func_names]
                 print(f"Using custom reward functions: {', '.join(func_names)}")
             except KeyError as e:
                 print(f"Error: {str(e)}")
-                print(f"Available reward functions: {list_available_reward_functions()}")
+                print(
+                    f"Available reward functions: {list_available_reward_functions()}"
+                )
                 return
-            
+
         grpo_training_args = GRPOTrainingArgs(
             batch_size=args.batch_size,
             iters=args.iters,
@@ -808,7 +835,7 @@ def train_model(
         )
 
     else:
-        raise(f"The train mode {args.train_mode} does not exist.")
+        raise (f"The train mode {args.train_mode} does not exist.")
 
 
 def evaluate_model(args, model: nn.Module, tokenizer, test_set):
@@ -873,7 +900,7 @@ def evaluate_model(args, model: nn.Module, tokenizer, test_set):
             judge=args.judge,
             max_tokens=args.max_completion_length,
         )
-    
+
     elif args.train_mode == "online_dpo":
         if args.reference_model_path:
             reference_model, _ = load(args.reference_model_path)
@@ -893,7 +920,7 @@ def evaluate_model(args, model: nn.Module, tokenizer, test_set):
             judge=args.judge,
             max_tokens=args.max_completion_length,
         )
-    
+
     elif args.train_mode == "xpo":
         if args.reference_model_path:
             reference_model, _ = load(args.reference_model_path)
@@ -914,7 +941,7 @@ def evaluate_model(args, model: nn.Module, tokenizer, test_set):
             max_tokens=args.max_completion_length,
             alpha=args.alpha,
         )
-    
+
     elif args.train_mode == "cpo":
         test_loss, _, _, test_metrics = evaluate_cpo(
             model=model,
@@ -1035,7 +1062,11 @@ def run(args, training_callback: TrainingCallback = None):
 
 
 def main(args=None):
-    import os, types, yaml
+    import os
+    import types
+
+    import yaml
+
     os.environ["TOKENIZERS_PARALLELISM"] = "true"
 
     if args is None:

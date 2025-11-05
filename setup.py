@@ -1,6 +1,7 @@
-from pathlib import Path
-from setuptools import setup
 import sys
+from pathlib import Path
+
+from setuptools import setup
 
 package_dir = Path(__file__).parent / "mlx_lm_lora"
 with open("requirements.txt") as fid:

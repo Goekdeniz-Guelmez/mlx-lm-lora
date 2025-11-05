@@ -1,50 +1,59 @@
-from typing import Callable, List, Optional, Dict
 import re
+from typing import Callable, Dict, List, Optional
 
-RewardFunctions = Callable[[List[str], List[str], List[str], Optional[List[str]]], List[float]]
+RewardFunctions = Callable[
+    [List[str], List[str], List[str], Optional[List[str]]], List[float]
+]
 
 # Registry to store all reward functions
 REWARD_REGISTRY: Dict[str, RewardFunctions] = {}
 
+
 def register_reward_function(name: str = None):
     """
     Decorator to register a reward function in the global registry.
-    
+
     Args:
         name: Optional custom name for the reward function.
               If None, the function's name will be used.
-    
+
     Returns:
         Decorator function
-    
+
     Example:
         @register_reward_function()
         def my_custom_reward(prompts, completions, answers, types=None):
             # Your reward logic here
             return [1.0 if condition else 0.0 for _ in completions]
     """
+
     def decorator(func: RewardFunctions):
         func_name = name or func.__name__
         REWARD_REGISTRY[func_name] = func
         return func
+
     return decorator
+
 
 def get_reward_function(name: str) -> RewardFunctions:
     """
     Get a reward function by name from the registry.
-    
+
     Args:
         name: Name of the reward function
-    
+
     Returns:
         The reward function
-        
+
     Raises:
         KeyError: If the reward function is not found
     """
     if name not in REWARD_REGISTRY:
-        raise KeyError(f"Reward function '{name}' not found. Available functions: {list(REWARD_REGISTRY.keys())}")
+        raise KeyError(
+            f"Reward function '{name}' not found. Available functions: {list(REWARD_REGISTRY.keys())}"
+        )
     return REWARD_REGISTRY[name]
+
 
 def get_default_reward_functions() -> List[RewardFunctions]:
     """
@@ -52,11 +61,12 @@ def get_default_reward_functions() -> List[RewardFunctions]:
     """
     return [
         r1_accuracy_reward_func,
-        r1_int_reward_func, 
+        r1_int_reward_func,
         r1_strict_format_reward_func,
         r1_soft_format_reward_func,
-        r1_count_xml
+        r1_count_xml,
     ]
+
 
 def list_available_reward_functions() -> List[str]:
     """
@@ -74,6 +84,7 @@ def r1_extract_xml_answer(text: str) -> str:
         print("r1_extract_xml_answer returned empty string")
         return ""
 
+
 @register_reward_function()
 def r1_int_reward_func(
     prompts: list, completions: list, answer: list, types: Optional[list] = None
@@ -82,6 +93,7 @@ def r1_int_reward_func(
         return [0.0] * len(prompts)
     extracted_responses = [r1_extract_xml_answer(r) for r in completions]
     return [0.5 if r and r.isdigit() else 0.0 for r in extracted_responses]
+
 
 @register_reward_function()
 def r1_accuracy_reward_func(
@@ -93,6 +105,7 @@ def r1_accuracy_reward_func(
     return [
         2.0 if r and a and r == a else 0.0 for r, a in zip(extracted_responses, answer)
     ]
+
 
 @register_reward_function()
 def r1_soft_format_reward_func(
@@ -127,6 +140,7 @@ def r1_soft_format_reward_func(
         scores.append(0.0)
     return scores
 
+
 @register_reward_function()
 def r1_strict_format_reward_func(
     prompts: list, completions: list, answer: list, types: Optional[list] = None
@@ -136,6 +150,7 @@ def r1_strict_format_reward_func(
     pattern = r"<think> .*? </think><answer> .*? </answer>"
     matches = [bool(re.search(pattern, r)) if r else False for r in completions]
     return [0.5 if match else 0.0 for match in matches]
+
 
 @register_reward_function()
 def r1_count_xml(

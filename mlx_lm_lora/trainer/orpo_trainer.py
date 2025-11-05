@@ -1,16 +1,15 @@
+import time
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
-import time
 
-from mlx.nn.utils import average_gradients
-from mlx.utils import tree_flatten, tree_map
 import mlx.core as mx
 import mlx.nn as nn
 import numpy as np
-from tqdm import tqdm
-
+from mlx.nn.utils import average_gradients
+from mlx.utils import tree_flatten, tree_map
 from mlx_lm.tuner.callbacks import TrainingCallback
+from tqdm import tqdm
 
 from .sft_trainer import SFTTrainingArgs, grad_checkpoint
 
@@ -170,7 +169,9 @@ def evaluate_orpo(
         chosen, rejected, chosen_masks, rejected_masks, preference_scores = batch
 
         chosen_logps, chosen_logits_mean = get_logps(model, chosen, chosen_masks)
-        rejected_logps, rejected_logits_mean = get_logps(model, rejected, rejected_masks)
+        rejected_logps, rejected_logits_mean = get_logps(
+            model, rejected, rejected_masks
+        )
 
         lvalue, reward, toks, metrics = orpo_loss(
             chosen_logps,
@@ -237,7 +238,9 @@ def train_orpo(
         chosen, rejected, chosen_masks, rejected_masks, preference_scores = batch
 
         chosen_logps, chosen_logits_mean = get_logps(model, chosen, chosen_masks)
-        rejected_logps, rejected_logits_mean = get_logps(model, rejected, rejected_masks)
+        rejected_logps, rejected_logits_mean = get_logps(
+            model, rejected, rejected_masks
+        )
 
         (lvalue, reward, toks, metrics), grad = loss_value_and_grad(
             chosen_logps,
@@ -262,7 +265,13 @@ def train_orpo(
         return lvalue, reward, toks, metrics, grad
 
     def loss_wrapper(
-        chosen_logps, chosen_logits_mean, rejected_logps, rejected_logits_mean, chosen_masks, rejected_masks, preference_scores
+        chosen_logps,
+        chosen_logits_mean,
+        rejected_logps,
+        rejected_logits_mean,
+        chosen_masks,
+        rejected_masks,
+        preference_scores,
     ):
         return loss(
             chosen_logps=chosen_logps,
@@ -296,12 +305,14 @@ def train_orpo(
     start = time.perf_counter()
     pbar = tqdm(range(1, args.iters + 1), desc="Training", disable=rank != 0)
     for it in pbar:
-        batch = next(iterate_orpo_batches(
-            dataset=train_dataset,
-            batch_size=args.batch_size,
-            max_seq_length=args.max_seq_length,
-            train=True,
-        ))
+        batch = next(
+            iterate_orpo_batches(
+                dataset=train_dataset,
+                batch_size=args.batch_size,
+                max_seq_length=args.max_seq_length,
+                train=True,
+            )
+        )
 
         if it == 1 or it % args.steps_per_eval == 0 or it == args.iters:
             stop = time.perf_counter()
@@ -374,10 +385,12 @@ def train_orpo(
             peak_mem = mx.get_peak_memory() / 1e9
 
             if rank == 0:
-                pbar.set_postfix({
-                    'loss': f"{train_loss:.3f}",
-                    'it/s': f"{it_sec:.3f}",
-                })
+                pbar.set_postfix(
+                    {
+                        "loss": f"{train_loss:.3f}",
+                        "it/s": f"{it_sec:.3f}",
+                    }
+                )
                 tqdm.write(
                     f"\nIter {it}: "
                     f"loss {train_loss:.3f}, "

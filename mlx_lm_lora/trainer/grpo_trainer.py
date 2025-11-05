@@ -1,21 +1,18 @@
+import time
 from dataclasses import dataclass, field
 from functools import partial
-from typing import List, Optional
 from pathlib import Path
-from tqdm import tqdm
-import time
+from typing import List, Optional
 
-from mlx.utils import tree_flatten, tree_map
 import mlx.core as mx
 import mlx.nn as nn
 import numpy as np
-
-from mlx_lm.tuner.callbacks import TrainingCallback
-
-from .sft_trainer import SFTTrainingArgs, average_gradients, grad_checkpoint
-
-from mlx_lm.models import cache
+from mlx.utils import tree_flatten, tree_map
 from mlx_lm.generate import generate, make_sampler
+from mlx_lm.models import cache
+from mlx_lm.tuner.callbacks import TrainingCallback
+from tqdm import tqdm
+
 from .grpo_reward_functions import (
     RewardFunctions,
     r1_accuracy_reward_func,
@@ -24,6 +21,7 @@ from .grpo_reward_functions import (
     r1_soft_format_reward_func,
     r1_strict_format_reward_func,
 )
+from .sft_trainer import SFTTrainingArgs, average_gradients, grad_checkpoint
 
 
 @dataclass
@@ -37,7 +35,10 @@ class GRPOTrainingArgs(SFTTrainingArgs):
         default=1e-4, metadata={"help": "The Epsilon for numerical stability."}
     )
     epsilon_high: float = field(
-        default=None, metadata={"help": "For DAPO Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the lower-bound specified in argument epsilon."}
+        default=None,
+        metadata={
+            "help": "For DAPO Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the lower-bound specified in argument epsilon."
+        },
     )
     max_completion_length: int = field(
         default=512, metadata={"help": "Number of Generations."}
@@ -58,7 +59,7 @@ class GRPOTrainingArgs(SFTTrainingArgs):
         default="grpo",
         metadata={
             "help": "Type of loss to use for GRPO. Supported: 'grpo', 'bnpo', 'dr_grpo'."
-        }
+        },
     )
     reward_weights: Optional[List[float]] = field(
         default=None,
@@ -70,11 +71,11 @@ class GRPOTrainingArgs(SFTTrainingArgs):
         default=None,
         metadata={
             "help": "importance_sampling_level (`str`, *optional*, defaults to None): "
-                "Controls whether importance sampling ratios are computed at the 'token' or 'sequence' level. "
-                "keeps the raw per-token log-probability ratios (one weight per token).  'sequence' averages the "
-                "log-probability ratios across valid tokens to produce a single ratio per sequence. The "
-                "GSPO paper https://huggingface.co/papers/2507.18071) shows that sequence-level sampling often yields more "
-                "stable training and better alignment with  sequence-level rewards.."
+            "Controls whether importance sampling ratios are computed at the 'token' or 'sequence' level. "
+            "keeps the raw per-token log-probability ratios (one weight per token).  'sequence' averages the "
+            "log-probability ratios across valid tokens to produce a single ratio per sequence. The "
+            "GSPO paper https://huggingface.co/papers/2507.18071) shows that sequence-level sampling often yields more "
+            "stable training and better alignment with  sequence-level rewards.."
         },
     )
 
@@ -96,6 +97,7 @@ def get_per_token_logps(model: nn.Module, inputs, lengths):
     mx.eval(logits)
     return per_token_logps
 
+
 def generate_grpo(
     model: nn.Module,
     tokenizer,
@@ -104,7 +106,7 @@ def generate_grpo(
     group_size: int,
     temperature: float,
     batch_size: int,
-    end_token: str = "</answer>"
+    end_token: str = "</answer>",
 ):
     model.eval()
     all_completions = []
@@ -128,9 +130,10 @@ def generate_grpo(
                     top_k=0,
                     xtc_probability=0.0,
                     xtc_threshold=0.0,
-                    xtc_special_tokens=tokenizer.encode("\n") + list(tokenizer.eos_token_ids),
+                    xtc_special_tokens=tokenizer.encode("\n")
+                    + list(tokenizer.eos_token_ids),
                 )
-                
+
                 prompt_cache = cache.make_prompt_cache(model)
                 completion: str | List[int] = generate(
                     model=model,
@@ -142,7 +145,6 @@ def generate_grpo(
                     prompt_cache=prompt_cache,
                 )
 
-
                 if isinstance(completion, str):
                     completion_ids = tokenizer.encode(completion)
                 else:
@@ -150,8 +152,11 @@ def generate_grpo(
 
                 if end_token:
                     end_sequence = tokenizer.encode(end_token)
-                    if len(completion_ids) >= len(end_sequence) and completion_ids[-len(end_sequence):] == end_sequence:
-                        completion_ids = completion_ids[:-len(end_sequence)]
+                    if (
+                        len(completion_ids) >= len(end_sequence)
+                        and completion_ids[-len(end_sequence) :] == end_sequence
+                    ):
+                        completion_ids = completion_ids[: -len(end_sequence)]
 
                 completion_ids = mx.array(completion_ids)
                 all_completions.append(mx.stop_gradient(completion_ids))
@@ -229,7 +234,9 @@ def grpo_loss(
             ordered_batch_indices.append(prompt_idx)
             expanded_answers.append(answer_text[prompt_idx])
             expanded_prompts.append(prompt_text[prompt_idx])
-            expanded_types.append(type_info[prompt_idx] if type_info is not None else None)
+            expanded_types.append(
+                type_info[prompt_idx] if type_info is not None else None
+            )
 
     all_completions = ordered_completions
     all_completion_texts = ordered_completion_texts
@@ -286,12 +293,14 @@ def grpo_loss(
             prompts=expanded_prompts,
             completions=all_completion_texts,
             answer=expanded_answers,
-            types=expanded_types
+            types=expanded_types,
         )
         if raw_rewards is None:
-            processed_rewards = [float('nan')] * len(all_completion_texts)
+            processed_rewards = [float("nan")] * len(all_completion_texts)
         else:
-            processed_rewards = [float(r) if r is not None else float('nan') for r in raw_rewards]
+            processed_rewards = [
+                float(r) if r is not None else float("nan") for r in raw_rewards
+            ]
         func_rewards = mx.array(processed_rewards)
         all_func_rewards.append(func_rewards)
 
@@ -350,7 +359,9 @@ def grpo_loss(
 
     # Compute KL divergence using Schulman's approximator
     kl_div = (
-        mx.exp(ref_token_log_probs - token_log_probs) - (ref_token_log_probs - token_log_probs) - 1
+        mx.exp(ref_token_log_probs - token_log_probs)
+        - (ref_token_log_probs - token_log_probs)
+        - 1
     )
 
     # Create mask for valid tokens
@@ -364,7 +375,9 @@ def grpo_loss(
         log_importance_weights = log_ratio
     elif importance_sampling_level == "sequence":
         # Average log ratio over sequence length for each sequence
-        sequence_log_ratio = (log_ratio * length_mask).sum(axis=1) / mx.maximum(length_mask.sum(axis=1), 1.0)
+        sequence_log_ratio = (log_ratio * length_mask).sum(axis=1) / mx.maximum(
+            length_mask.sum(axis=1), 1.0
+        )
         log_importance_weights = mx.expand_dims(sequence_log_ratio, axis=1)
     elif importance_sampling_level is None or importance_sampling_level == "none":
         log_importance_weights = mx.zeros_like(log_ratio)
@@ -383,11 +396,8 @@ def grpo_loss(
 
     # Track clipping metrics
     is_low_clipped = (coef_1 < 1 - epsilon) & (advantages.reshape(-1, 1) < 0)
-    is_high_clipped = (coef_1 > 1 + epsilon_high) & (
-        advantages.reshape(-1, 1) > 0
-    )
+    is_high_clipped = (coef_1 > 1 + epsilon_high) & (advantages.reshape(-1, 1) > 0)
     is_region_clipped = is_low_clipped | is_high_clipped
-
 
     # Calculate both unclipped and clipped objectives
     unclipped_obj = coef_1 * advantages.reshape(-1, 1)
@@ -400,13 +410,14 @@ def grpo_loss(
     if beta != 0.0:
         per_token_loss = per_token_loss + beta * kl_div
 
-    
     if grpo_loss_type == "grpo":
         loss = (per_token_loss * length_mask).sum() / length_mask.sum()
     elif grpo_loss_type == "bnpo":
         loss = (per_token_loss * length_mask).sum() / mx.maximum(length_mask.sum(), 1.0)
     elif grpo_loss_type == "dr_grpo":
-        loss = (per_token_loss * length_mask).sum() / (per_token_loss.shape[0] * max_tokens)
+        loss = (per_token_loss * length_mask).sum() / (
+            per_token_loss.shape[0] * max_tokens
+        )
     else:
         raise ValueError(f"Unknown loss type: {grpo_loss_type}")
 
@@ -421,15 +432,32 @@ def grpo_loss(
             completions=all_completion_texts,
             answer=expanded_answers,
         )
-        valid_mask = ~mx.isnan(mx.array([reward if reward is not None else float('nan') for reward in raw_rewards]))
-        valid_rewards = mx.array([reward for reward in raw_rewards if reward is not None and not mx.isnan(reward)])
+        valid_mask = ~mx.isnan(
+            mx.array(
+                [
+                    reward if reward is not None else float("nan")
+                    for reward in raw_rewards
+                ]
+            )
+        )
+        valid_rewards = mx.array(
+            [
+                reward
+                for reward in raw_rewards
+                if reward is not None and not mx.isnan(reward)
+            ]
+        )
         if len(valid_rewards) > 0:
             reward_metrics[f"{func_name}_mean"] = mx.mean(valid_rewards)
-            reward_metrics[f"{func_name}_std"] = mx.std(valid_rewards) if len(valid_rewards) > 1 else mx.zeros(1)
-            reward_metrics[f"{func_name}_coverage"] = valid_mask.sum() / len(raw_rewards)
+            reward_metrics[f"{func_name}_std"] = (
+                mx.std(valid_rewards) if len(valid_rewards) > 1 else mx.zeros(1)
+            )
+            reward_metrics[f"{func_name}_coverage"] = valid_mask.sum() / len(
+                raw_rewards
+            )
         else:
-            reward_metrics[f"{func_name}_mean"] = float('nan')
-            reward_metrics[f"{func_name}_std"] = float('nan')
+            reward_metrics[f"{func_name}_mean"] = float("nan")
+            reward_metrics[f"{func_name}_std"] = float("nan")
             reward_metrics[f"{func_name}_coverage"] = 0.0
 
     grouped_rewards_mean = mx.array(
@@ -475,7 +503,11 @@ def grpo_loss(
 def iterate_grpo_batches(dataset, batch_size, max_seq_length, train=False):
     has_types = isinstance(dataset[0], tuple) and len(dataset[0]) == 5
 
-    if not dataset or not isinstance(dataset[0], tuple) or (not has_types and len(dataset[0]) != 4):
+    if (
+        not dataset
+        or not isinstance(dataset[0], tuple)
+        or (not has_types and len(dataset[0]) != 4)
+    ):
         raise ValueError(
             "Dataset must be list of (prompt_tokens, answer_tokens, prompt_str, answer_str[, type]) tuples"
         )
@@ -627,7 +659,7 @@ def train_grpo(
 
     if args.grad_checkpoint:
         grad_checkpoint(model.layers[0])
-    
+
     grad_accum_steps = args.gradient_accumulation_steps
     if grad_accum_steps < 1:
         raise ValueError("gradient_accumulation_steps must be at least 1")
@@ -693,7 +725,7 @@ def train_grpo(
         "grouped_rewards_mean": 0,
         "grouped_rewards_std": 0,
         "kl": 0,
-        'average_generated_tokens': 0,
+        "average_generated_tokens": 0,
         "clip_ratio_low": 0,
         "clip_ratio_high": 0,
         "clip_ratio_total": 0,
@@ -708,12 +740,14 @@ def train_grpo(
     start = time.perf_counter()
     pbar = tqdm(range(1, args.iters + 1), desc="Training", disable=rank != 0)
     for it in pbar:
-        batch = next(iterate_batches(
-            dataset=train_dataset,
-            batch_size=args.batch_size,
-            max_seq_length=args.max_seq_length,
-            train=True,
-        ))
+        batch = next(
+            iterate_batches(
+                dataset=train_dataset,
+                batch_size=args.batch_size,
+                max_seq_length=args.max_seq_length,
+                train=True,
+            )
+        )
 
         if it == 1 or it % args.steps_per_eval == 0 or it == args.iters:
             stop = time.perf_counter()
@@ -783,10 +817,12 @@ def train_grpo(
             peak_mem = mx.get_peak_memory() / 1e9
 
             if rank == 0:
-                pbar.set_postfix({
-                    'loss': f"{train_loss:.3f}",
-                    'it/s': f"{it_sec:.3f}",
-                })
+                pbar.set_postfix(
+                    {
+                        "loss": f"{train_loss:.3f}",
+                        "it/s": f"{it_sec:.3f}",
+                    }
+                )
                 tqdm.write(
                     f"\nIter {it}: "
                     f"loss {train_loss:.3f}, "

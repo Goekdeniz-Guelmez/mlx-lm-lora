@@ -6,7 +6,7 @@ args = {
     "train": True,
     "train_mode": "sft",
     "train_type": "lora",  # dora or "full"
-    "optimizer": "muon",   # or "adamw", etc.
+    "optimizer": "muon",  # or "adamw", etc.
     "iters": 100,
     "batch_size": 1,
     "steps_per_report": 10,
@@ -14,7 +14,7 @@ args = {
     "wandb": "mlx-lm-lora-sft-example",
     "mask_prompt": False,
     "adapter_path": "path/to/save/adaper",
-    "save_every": 10
+    "save_every": 10,
 }
 
 main(args)
