@@ -40,6 +40,16 @@ With MLX-LM-LoRA you can, train Large Language Models locally on Apple Silicon u
 - **XPO**: Extended Preference Optimization
 - **RLHF**: Reinforcement Learning from Human Feedback
 
+## Other Features
+
+**Synthetic Dataset Creation:**
+
+- **SFT**: Create a synthetic sft dataset using a teacher model
+- **Preference**: Create a synthetic preference dataset using a base and a teacher model
+
+**Training Your Custom Preference Model:**
+- You can now train a custom prefenrce model for online preference training
+
 ## 📓 Example Notebooks
 
 - [🧪 LoRA Fine-Tuning (SFT)](examples/custom_sft_lora.ipynb) – Shows how to fine-tune a model using LoRA on a standard SFT dataset.
@@ -66,6 +76,11 @@ With MLX-LM-LoRA you can, train Large Language Models locally on Apple Silicon u
   - [Online DPO](#online-dpo)
   - [eXtended Preference Optimization (XPO)](#extended-preference-optimization-xpo)
   - [Reinforcement Learning from Human Feedback (RLHF)](#reinforcement-learning-from-human-feedback-rlhf)
+- [Other Features](#other-features)
+  - [Synthetic Dataset Creation](#synthetic-dataset-creation)
+    - [SFT](#synthetic-sft-dataset-creation)
+    - [Preference](#synthetic-preference-dataset-creation)
+  - [Training Your Custom Preference Model](#training-your-custom-preference-model)
 - [Configuration](#configuration)
 - [Dataset Formats](#dataset-formats)
 - [Memory Optimization](#memory-optimization)
@@ -430,6 +445,39 @@ mlx_lm_lora.train \
 **Dataset Format:** Same as Online DPO
 
 ---
+
+## Other Features
+
+### Synthetic Dataset Creation
+
+#### SFT
+
+#### Preference
+
+### Training Your Custom Preference Model
+
+This mode adds a second training stage on top of the judge (preference) stage. A reward model thats scores the policy’s generations and the policy is updated with a KL‑penalised PPO‑style loss.
+
+1. Collect preference data  →  judge‑mode (online DPO) →  reward model
+2. Run RLHF (policy optimisation) using the reward model → final policy
+
+```shell
+python -m mlx_lm_lora.train_judge \
+--model Goekdeniz-Guelmez/Josiefied-Qwen3-0.6B-abliterated-v1 \
+--train-type full \
+--optimizer adamw \
+--steps-per-report 1 \
+--iters 50 \
+--max-seq-length 1024 \
+--adapter-path /Users/Goekdeniz.Guelmez@computacenter.com/Library/CloudStorage/OneDrive-COMPUTACENTER/Desktop/test \
+--data mlx-community/Human-Like-DPO \
+--gradient-accumulation-steps 1
+```
+
+**Dataset Format:** Same as DPO (with `prompt`, `chosen`, and `rejected` pairs).
+
+---
+
 
 ## Configuration
 
