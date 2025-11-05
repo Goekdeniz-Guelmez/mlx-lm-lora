@@ -4,7 +4,6 @@ import os
 import random
 
 import mlx.core as mx
-
 from datasets import Dataset, load_dataset
 from mlx_lm.generate import batch_generate, load
 from mlx_lm.sample_utils import make_sampler
@@ -108,7 +107,9 @@ if args.system_prompt and os.path.isfile(args.system_prompt):
         args.system_prompt = DEFAULT_SYSTEM_PROMPT
 
 if args.base_model == args.teacher_model:
-    print(f"Base and teacher models are identical, loading model once: {args.base_model}")
+    print(
+        f"Base and teacher models are identical, loading model once: {args.base_model}"
+    )
     model, tokenizer = load(path_or_hf_repo=args.base_model)
     base_model = teacher_model = model
     base_tokenizer = teacher_tokenizer = tokenizer
@@ -132,9 +133,7 @@ if args.num_samples is not None and args.num_samples < len(prompts):
 
 records = []
 
-pbar = tqdm(
-    range(0, len(prompts), args.batch_size), desc="Generating preference pairs"
-)
+pbar = tqdm(range(0, len(prompts), args.batch_size), desc="Generating preference pairs")
 
 for i in pbar:
     batch_prompts = prompts[i : i + args.batch_size]
@@ -195,7 +194,7 @@ for i in pbar:
                 "chosen": teacher_resp.strip(),
             }
         )
-    
+
     peak_mem = mx.get_peak_memory() / 1e9
     pbar.set_postfix({"Peak memory": f"{peak_mem:.2f}"})
 
