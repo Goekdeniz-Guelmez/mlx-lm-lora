@@ -602,36 +602,51 @@ def load_hf_dataset(
     data_id: str,
     tokenizer: PreTrainedTokenizer,
     config,
+    stream=False
 ):
     from datasets import exceptions, load_dataset
-
+    
     try:
-        dataset = load_dataset(data_id)
-
         names = ("train", "valid", "test")
-
-        train, valid, test = [
-            (
-                create_dataset(dataset[n], tokenizer, config)
-                if n in dataset.keys()
-                else []
-            )
-            for n in names
-        ]
-
-    except exceptions.DatasetNotFoundError:
-        raise ValueError(f"Not found Hugging Face dataset: {data_id} .")
-
+        results = []
+        
+        for n in names:
+            try:
+                split_dataset = load_dataset(data_id, split=n, streaming=stream)
+                
+                if stream:
+                    limited_dataset = list(split_dataset.take(10))
+                    from datasets import Dataset
+                    dataset_to_process = Dataset.from_list(limited_dataset)
+                    processed = create_dataset(dataset_to_process, tokenizer, config)
+                else:
+                    processed = create_dataset(split_dataset, tokenizer, config)
+                
+                results.append(processed)
+            except exceptions.DatasetNotFoundError:
+                results.append([])
+            except Exception as e:
+                print(f"Error processing '{n}' split: {str(e)}")
+                results.append([])
+        
+        train, valid, test = results
+        
+    except Exception as e:
+        print(f"Unexpected error loading dataset: {str(e)}")
+        raise
+    
+    print(f"Dataset {data_id} fully processed and ready to return")
     return train, valid, test
 
 
-def load_custom_hf_dataset(args, tokenizer: PreTrainedTokenizer):
+def load_custom_hf_dataset(args, tokenizer: PreTrainedTokenizer, stream=False):
     import datasets
 
     def create_hf_dataset(dataset_name, config, split, hf_config):
         ds = datasets.load_dataset(
             dataset_name,
             split=split,
+            streaming=stream,
             **hf_config,
         )
         return create_dataset(ds, tokenizer, config)
@@ -684,7 +699,7 @@ def load_custom_hf_dataset(args, tokenizer: PreTrainedTokenizer):
     return tuple(map(ConcatenatedDataset, zip(*collection)))
 
 
-def load_dataset(args, tokenizer: PreTrainedTokenizer):
+def load_dataset(args, tokenizer: PreTrainedTokenizer, stream=False):
     if getattr(args, "hf_dataset", False):
         train, valid, test = load_custom_hf_dataset(args, tokenizer)
     else:
@@ -693,7 +708,7 @@ def load_dataset(args, tokenizer: PreTrainedTokenizer):
             train, valid, test = load_local_dataset(data_path, tokenizer, args)
         else:
             print(f"Loading Hugging Face dataset {args.data}.")
-            train, valid, test = load_hf_dataset(args.data, tokenizer, args)
+            train, valid, test = load_hf_dataset(args.data, tokenizer, args, stream=stream)
 
     if args.train and len(train) == 0:
         raise ValueError(
