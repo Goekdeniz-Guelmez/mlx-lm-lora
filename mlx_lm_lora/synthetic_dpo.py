@@ -101,7 +101,7 @@ if args.system_prompt and os.path.isfile(args.system_prompt):
     try:
         with open(args.system_prompt, "r", encoding="utf-8") as f:
             args.system_prompt = f.read().strip()
-        print(f"Loaded system prompt from file: {args.system_prompt}")
+        print(f"Loaded system prompt from file: '''{args.system_prompt}'''")
     except Exception as e:
         print(f"Error loading system prompt file: {e}")
         print(f"Falling back to default system prompt")
