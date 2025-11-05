@@ -159,16 +159,13 @@ for i in pbar:
         sampler=sampler,
     ).texts
 
-    for prompt, resp in zip(
-        batch_prompts, outputs
-    ):
-        records.append(
-            {
-                {"role": "system", "content": args.system_prompt} if args.include_system_prompt else None,
-                {"role": "user", "content": prompt},
-                {"role": "assistant", "content": resp.strip()},
-            }
-        )
+    for prompt, resp in zip(batch_prompts, outputs):
+        messages = []
+        if args.include_system_prompt:
+            messages.append({"role": "system", "content": args.system_prompt})
+        messages.append({"role": "user", "content": prompt})
+        messages.append({"role": "assistant", "content": resp.strip()})
+        records.append({"messages": messages})
 
     peak_mem = mx.get_peak_memory() / 1e9
     pbar.set_postfix({"Peak memory": f"{peak_mem:.2f}"})

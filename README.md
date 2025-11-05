@@ -40,7 +40,7 @@ With MLX-LM-LoRA you can, train Large Language Models locally on Apple Silicon u
 - **XPO**: Extended Preference Optimization
 - **RLHF**: Reinforcement Learning from Human Feedback
 
-## Other Features
+## New Features
 
 **Synthetic Dataset Creation:**
 
@@ -48,6 +48,7 @@ With MLX-LM-LoRA you can, train Large Language Models locally on Apple Silicon u
 - **Preference**: Create a synthetic preference dataset using a base and a teacher model
 
 **Training Your Custom Preference Model:**
+
 - You can now train a custom preference model for online preference training
 
 ## 📓 Example Notebooks
