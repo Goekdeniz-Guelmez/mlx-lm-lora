@@ -120,7 +120,7 @@ print(f"Loaded {len(prompts)} prompts.")
 
 if args.num_samples is not None and args.num_samples < len(prompts):
     prompts = prompts[: args.num_samples]
-    print(f"⚠️  Truncated prompts to {args.num_samples}.")
+    print(f"Truncated prompts to {args.num_samples}.")
 
 records = []
 
