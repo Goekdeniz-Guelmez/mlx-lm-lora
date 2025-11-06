@@ -198,66 +198,44 @@ for i in pbar:
     peak_mem = mx.get_peak_memory() / 1e9
     pbar.set_postfix({"Peak memory": f"{peak_mem:.2f}"})
 
-print(f"Saving full DPO dataset to {jsonl_path} ...")
+print("Saving full DPO dataset to JSONL...")
 with open(jsonl_path, "w", encoding="utf-8") as f:
     for rec in records:
         f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
-print("Splitting data and saving to Parquet files...")
+print("Reloading dataset from JSONL for splitting...")
+dataset = Dataset.from_json(jsonl_path)
+records = list(dataset)
+
 random.shuffle(records)
 
 if args.test_split is None and args.valid_split is None:
-    train_records = records
-    train_dataset = Dataset.from_list(train_records)
-    train_dataset.to_parquet(train_parquet_path)
-    print(f"Saved all {len(train_records)} examples to {train_parquet_path}")
+    dataset.to_parquet(train_parquet_path)
+    print(f"Saved all {len(dataset)} examples to {train_parquet_path}")
 
 elif args.test_split is None:
-    valid_split_idx = int(len(records) * (1 - args.valid_split))
-    train_records = records[:valid_split_idx]
-    valid_records = records[valid_split_idx:]
-
-    train_dataset = Dataset.from_list(train_records)
-    valid_dataset = Dataset.from_list(valid_records)
-
+    split_idx = int(len(records) * (1 - args.valid_split))
+    train_dataset = Dataset.from_list(records[:split_idx])
+    valid_dataset = Dataset.from_list(records[split_idx:])
     train_dataset.to_parquet(train_parquet_path)
     valid_dataset.to_parquet(valid_parquet_path)
-
-    print(f"Saved {len(train_records)} training examples to {train_parquet_path}")
-    print(f"Saved {len(valid_records)} validation examples to {valid_parquet_path}")
+    print(f"Saved {len(train_dataset)} training and {len(valid_dataset)} validation examples")
 
 elif args.valid_split is None:
-    test_split_idx = int(len(records) * (1 - args.test_split))
-    train_records = records[:test_split_idx]
-    test_records = records[test_split_idx:]
-
-    train_dataset = Dataset.from_list(train_records)
-    test_dataset = Dataset.from_list(test_records)
-
+    split_idx = int(len(records) * (1 - args.test_split))
+    train_dataset = Dataset.from_list(records[:split_idx])
+    test_dataset = Dataset.from_list(records[split_idx:])
     train_dataset.to_parquet(train_parquet_path)
     test_dataset.to_parquet(test_parquet_path)
-
-    print(f"Saved {len(train_records)} training examples to {train_parquet_path}")
-    print(f"Saved {len(test_records)} test examples to {test_parquet_path}")
+    print(f"Saved {len(train_dataset)} training and {len(test_dataset)} test examples")
 
 else:
     test_split_idx = int(len(records) * (1 - args.test_split))
     valid_split_idx = int(test_split_idx * (1 - args.valid_split))
-
-    train_records = records[:valid_split_idx]
-    valid_records = records[valid_split_idx:test_split_idx]
-    test_records = records[test_split_idx:]
-
-    train_dataset = Dataset.from_list(train_records)
-    valid_dataset = Dataset.from_list(valid_records)
-    test_dataset = Dataset.from_list(test_records)
-
+    train_dataset = Dataset.from_list(records[:valid_split_idx])
+    valid_dataset = Dataset.from_list(records[valid_split_idx:test_split_idx])
+    test_dataset = Dataset.from_list(records[test_split_idx:])
     train_dataset.to_parquet(train_parquet_path)
     valid_dataset.to_parquet(valid_parquet_path)
     test_dataset.to_parquet(test_parquet_path)
-
-    print(f"Saved {len(train_records)} training examples to {train_parquet_path}")
-    print(f"Saved {len(valid_records)} validation examples to {valid_parquet_path}")
-    print(f"Saved {len(test_records)} test examples to {test_parquet_path}")
-
-print("Preference dataset (DPO flat-format) created successfully!")
+    print(f"Saved {len(train_dataset)} training, {len(valid_dataset)} validation, and {len(test_dataset)} test examples.")
