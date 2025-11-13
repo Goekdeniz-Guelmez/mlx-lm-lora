@@ -4,6 +4,8 @@
   <img src="https://github.com/Goekdeniz-Guelmez/mlx-lm-lora/blob/main/logo.png" alt="logo" width="300"/>
 </p>
 
+[![image](https://img.shields.io/pypi/v/mlx-lm-lora.svg)](https://pypi.python.org/pypi/mlx-lm-lora)
+
 With MLX-LM-LoRA you can, train Large Language Models locally on Apple Silicon using MLX. Training works with all models supported by MLX-LM, including:
 
 - Llama 3, 4
