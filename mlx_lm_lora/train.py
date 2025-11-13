@@ -243,7 +243,7 @@ def build_parser():
         type=int,
         help="Number of validation batches, -1 uses the entire validation set.",
     )
-    parser.add_argument("--learning-rate", type=float, help="Adam learning rate.")
+    parser.add_argument("--learning-rate", type=float, help="Optimizer learning rate.")
     parser.add_argument(
         "--steps-per-report",
         type=int,
@@ -990,7 +990,7 @@ def evaluate_model(args, model: nn.Module, tokenizer, test_set):
             f"Test loss {test_loss:.3f}, Test ppl {test_ppl:.3f}, Rewards: {rewards_str}"
         )
 
-    elif args.train_mode == "normal":
+    elif args.train_mode == "sft":
         test_loss = evaluate_sft(
             model=model,
             dataset=CacheDataset(test_set),
@@ -1014,9 +1014,6 @@ def run(args, training_callback: TrainingCallback = None):
             config=vars(args),
             wrapped_callback=training_callback,
         )
-
-    # print("Loading pretrained model")
-    # model, tokenizer = load(args.model)
 
     if args.load_in_4bits:
         quanziation_config = {"bits": 4, "group_size": 64}
