@@ -78,9 +78,12 @@ CONFIG_DEFAULTS = {
         "qhadam": {},
     },
     "data": "data/",
+    "stream_data": False,
+    "data_samples_per_stream": 100,
+    "valid_data_samples_per_stream": 10,
     "seed": 0,
     "num_layers": 16,
-    "batch_size": 4,
+    "batch_size": 2,
     "iters": None,
     "epochs": None,
     "gradient_accumulation_steps": 1,
@@ -192,6 +195,30 @@ def build_parser():
         help=(
             "Directory with {train, valid, test}.jsonl files or the name "
             "of a Hugging Face dataset (e.g., 'mlx-community/wikisql')"
+        ),
+    )
+    parser.add_argument(
+        "--stream-data",
+        action="store_true",
+        default=None,
+        help=(
+            "Dataset streaming lets you work with a dataset without downloading it."
+        ),
+    )
+    parser.add_argument(
+        "--data-samples-per-stream",
+        type=int,
+        default=100,
+        help=(
+            "Number of samples to pull ßer stream step."
+        ),
+    )
+    parser.add_argument(
+        "--valid-data-samples-per-stream",
+        type=int,
+        default=10,
+        help=(
+            "Number of validation samples to pull per stream step."
         ),
     )
     parser.add_argument(
@@ -832,6 +859,7 @@ def train_model(
             train_dataset=CacheDataset(train_set),
             val_dataset=CacheDataset(valid_set),
             training_callback=training_callback,
+            stream_data=args.stream_data
         )
 
     else:
@@ -1030,7 +1058,7 @@ def run(args, training_callback: TrainingCallback = None):
     )
 
     print("Loading datasets")
-    train_set, valid_set, test_set = load_dataset(args, tokenizer)
+    train_set, valid_set, test_set = load_dataset(args, tokenizer, stream=args.stream_data)
 
     if args.test and not args.train:
         if args.adapter_path != "":

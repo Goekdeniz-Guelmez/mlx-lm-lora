@@ -86,52 +86,125 @@ def iterate_batches(
     batch_size,
     max_seq_length,
     train=False,
+    stream_data=False,
+    stream_window_size=100,
+    current_iter=0
 ):
-    if isinstance(dataset, CacheDataset):
-        len_fn = lambda idx: dataset.itemlen(idx)
+    if stream_data:
+        # Handle streaming/iterable datasets using a rolling window approach
+        step = mx.distributed.init().size()
+        if batch_size % step != 0:
+            raise ValueError("The batch size must be divisible by the number of workers")
+        
+        # Create an infinite loop for streaming data
+        while True:
+            # Skip to the appropriate position in the dataset and take the next window
+            windowed_dataset = dataset.skip(current_iter).take(stream_window_size)
+            dataset_iter = iter(windowed_dataset)
+            
+            # Process batches from the current window
+            for _ in range((stream_window_size + batch_size - 1) // batch_size):
+                # Collect batch_size samples from the current window
+                batch = []
+                offsets = []
+                
+                for _ in range(batch_size // step):
+                    try:
+                        example = next(dataset_iter)
+                        if isinstance(example, tuple) and len(example) == 2:
+                            sample, offset = example
+                        else:
+                            sample = example
+                            offset = 0
+                        batch.append(sample)
+                        offsets.append(offset)
+                    except StopIteration:
+                        break
+                
+                if len(batch) == 0:
+                    # No samples were collected, move to next window
+                    break
+                
+                if len(batch) < batch_size // step and train:
+                    # If we couldn't collect a full batch and we're training,
+                    # we'll pad the batch with the last sample
+                    last_sample = batch[-1]
+                    last_offset = offsets[-1]
+                    while len(batch) < batch_size // step:
+                        batch.append(last_sample)
+                        offsets.append(last_offset)
+                
+                lengths = [len(x) for x in batch]
+                pad_to = 32
+                max_length_in_batch = 1 + pad_to * ((max(lengths) + pad_to - 1) // pad_to)
+                max_length_in_batch = min(max_length_in_batch, max_seq_length)
+                
+                batch_arr = np.zeros((len(batch), max_length_in_batch), np.int32)
+                
+                for j in range(len(batch)):
+                    truncated_length = min(lengths[j], max_seq_length)
+                    batch_arr[j, :truncated_length] = batch[j][:truncated_length]
+                    lengths[j] = truncated_length
+                
+                batch = mx.array(batch_arr)
+                print(batch)
+                yield batch, mx.array(list(zip(offsets, lengths)))
+                
+                if not train:
+                    return
+            
+            # After processing the current window, increment current_iter by stream_window_size
+            current_iter += stream_window_size
+            
+            if not train:
+                break
     else:
-        len_fn = lambda idx: len(dataset[idx])
-    idx = sorted(range(len(dataset)), key=len_fn)
-    if len(dataset) < batch_size:
-        raise ValueError(
-            f"Dataset must have at least batch_size={batch_size}"
-            f" examples but only has {len(dataset)}."
-        )
+        # Original code for non-streaming datasets (unchanged)
+        if isinstance(dataset, CacheDataset):
+            len_fn = lambda idx: dataset.itemlen(idx)
+        else:
+            len_fn = lambda idx: len(dataset[idx])
+        idx = sorted(range(len(dataset)), key=len_fn)
+        if len(dataset) < batch_size:
+            raise ValueError(
+                f"Dataset must have at least batch_size={batch_size}"
+                f" examples but only has {len(dataset)}."
+            )
 
-    step = mx.distributed.init().size()
-    if batch_size % step != 0:
-        raise ValueError("The batch size must be divisible by the number of workers")
+        step = mx.distributed.init().size()
+        if batch_size % step != 0:
+            raise ValueError("The batch size must be divisible by the number of workers")
 
-    batch_idx = [
-        idx[i : i + batch_size : step]
-        for i in range(0, len(idx) - batch_size + 1, batch_size)
-    ]
+        batch_idx = [
+            idx[i : i + batch_size : step]
+            for i in range(0, len(idx) - batch_size + 1, batch_size)
+        ]
 
-    while True:
-        indices = np.random.permutation(len(batch_idx))
-        for i in indices:
-            batch = [dataset[j] for j in batch_idx[i]]
-            if len(batch[0]) == 2:
-                batch, offsets = zip(*batch)
-            else:
-                offsets = [0] * len(batch)
-            lengths = [len(x) for x in batch]
+        while True:
+            indices = np.random.permutation(len(batch_idx))
+            for i in indices:
+                batch = [dataset[j] for j in batch_idx[i]]
+                if len(batch[0]) == 2:
+                    batch, offsets = zip(*batch)
+                else:
+                    offsets = [0] * len(batch)
+                lengths = [len(x) for x in batch]
 
-            pad_to = 32
-            max_length_in_batch = 1 + pad_to * ((max(lengths) + pad_to - 1) // pad_to)
-            max_length_in_batch = min(max_length_in_batch, max_seq_length)
+                pad_to = 32
+                max_length_in_batch = 1 + pad_to * ((max(lengths) + pad_to - 1) // pad_to)
+                max_length_in_batch = min(max_length_in_batch, max_seq_length)
 
-            batch_arr = np.zeros((batch_size // step, max_length_in_batch), np.int32)
+                batch_arr = np.zeros((batch_size // step, max_length_in_batch), np.int32)
 
-            for j in range(batch_size // step):
-                truncated_length = min(lengths[j], max_seq_length)
-                batch_arr[j, :truncated_length] = batch[j][:truncated_length]
-                lengths[j] = truncated_length
-            batch = mx.array(batch_arr)
-            yield batch, mx.array(list(zip(offsets, lengths)))
+                for j in range(batch_size // step):
+                    truncated_length = min(lengths[j], max_seq_length)
+                    batch_arr[j, :truncated_length] = batch[j][:truncated_length]
+                    lengths[j] = truncated_length
+                batch = mx.array(batch_arr)
+                yield batch, mx.array(list(zip(offsets, lengths)))
 
-        if not train:
-            break
+            if not train:
+                break
 
 
 def evaluate_sft(
@@ -142,6 +215,7 @@ def evaluate_sft(
     max_seq_length=2048,
     loss: callable = default_loss,
     iterate_batches: callable = iterate_batches,
+    stream_data: bool = False
 ):
     model.eval()
     all_losses = mx.array(0.0)
@@ -155,6 +229,7 @@ def evaluate_sft(
             dataset=dataset,
             batch_size=batch_size,
             max_seq_length=max_seq_length,
+            stream_data=stream_data
         ),
     ):
         losses, toks = loss(model, *batch)
@@ -177,6 +252,7 @@ def train_sft(
     loss: callable = default_loss,
     iterate_batches: callable = iterate_batches,
     training_callback: TrainingCallback = None,
+    stream_data: bool = False
 ):
     mx.set_wired_limit(mx.metal.device_info()["max_recommended_working_set_size"])
     tqdm.write(f"Starting training..., iters: {args.iters}")
@@ -220,16 +296,22 @@ def train_sft(
     trained_tokens = 0
     train_time = 0
     grad_accum = None
+    window_counter = 0
 
     # Main training loop
     pbar = tqdm(range(1, args.iters + 1), desc="Training", disable=rank != 0)
     for it in pbar:
+        if stream_data and it % args.batch_size == 1:
+            window_counter += 1
         batch = next(
             iterate_batches(
                 dataset=train_dataset,
                 batch_size=args.batch_size,
                 max_seq_length=args.max_seq_length,
                 train=True,
+                stream_data=stream_data,
+                stream_window_size=len(train_dataset),
+                current_iter=window_counter if stream_data else 0
             )
         )
         tic = time.perf_counter()
@@ -245,6 +327,7 @@ def train_sft(
                 num_batches=args.val_batches,
                 max_seq_length=args.max_seq_length,
                 iterate_batches=iterate_batches,
+                stream_data=stream_data
             )
             model.train()
             val_time = time.perf_counter() - tic
