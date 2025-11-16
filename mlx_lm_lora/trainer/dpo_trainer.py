@@ -1,13 +1,12 @@
 import time
 from dataclasses import dataclass, field
-from functools import partial
 from pathlib import Path
 
 import mlx.core as mx
 import mlx.nn as nn
 import numpy as np
 from mlx.nn.utils import average_gradients
-from mlx.utils import tree_flatten, tree_map
+from mlx.utils import tree_flatten
 from mlx_lm.tuner.callbacks import TrainingCallback
 from tqdm import tqdm
 
@@ -258,7 +257,6 @@ def train_dpo(
     args: DPOTrainingArgs = DPOTrainingArgs(),
     loss_fn: callable = dpo_loss,
     training_callback: TrainingCallback = None,
-    loss_type="sigmoid",
 ):
     mx.set_wired_limit(mx.metal.device_info()["max_recommended_working_set_size"])
     tqdm.write(f"Starting training..., iters: {args.iters}")
@@ -271,16 +269,13 @@ def train_dpo(
     if args.grad_checkpoint:
         grad_checkpoint(model.layers[0])
 
-    grad_accum_steps = args.gradient_accumulation_steps
-    if grad_accum_steps < 1:
-        raise ValueError("gradient_accumulation_steps must be at least 1")
-
     state = [model.state, optimizer.state]
 
-    @partial(mx.compile, inputs=state, outputs=state)
-    def step(batch, prev_grad, do_update):
-        chosen, rejected, chosen_masks, rejected_masks = batch
+    # Get loss_type from args
+    loss_type = args.loss_type
 
+    def loss_wrapper(chosen, rejected, chosen_masks, rejected_masks):
+        # Compute policy scores inside the wrapper so gradients can flow through the model
         policy_chosen_scores = get_token_scores(model, chosen, chosen_masks)
         policy_rejected_scores = get_token_scores(model, rejected, rejected_masks)
 
@@ -291,6 +286,7 @@ def train_dpo(
             policy_rejected_scores, rejected_masks, loss_type
         )
 
+        # Compute reference scores (with stop_gradient to prevent gradients flowing to ref_model)
         if ref_model is None:
             reference_chosen_score = mx.zeros_like(policy_chosen_score)
             reference_rejected_score = mx.zeros_like(policy_rejected_score)
@@ -308,35 +304,6 @@ def train_dpo(
                 ref_rejected_scores, rejected_masks, loss_type
             )
 
-        (lvalue, reward, toks, metrics), grad = loss_value_and_grad(
-            policy_chosen_score,
-            policy_rejected_score,
-            reference_chosen_score,
-            reference_rejected_score,
-            chosen_masks=chosen_masks,
-            rejected_masks=rejected_masks,
-        )
-
-        if prev_grad is not None:
-            grad = tree_map(lambda x, y: x + y, grad, prev_grad)
-
-        if do_update:
-            grad = average_gradients(grad)
-            if grad_accum_steps > 1:
-                grad = tree_map(lambda x: x / grad_accum_steps, grad)
-            optimizer.update(model, grad)
-            grad = None
-
-        return lvalue, reward, toks, metrics, grad
-
-    def loss_wrapper(
-        policy_chosen_score,
-        policy_rejected_score,
-        reference_chosen_score,
-        reference_rejected_score,
-        chosen_masks,
-        rejected_masks,
-    ):
         return loss_fn(
             policy_chosen_score=policy_chosen_score,
             policy_rejected_score=policy_rejected_score,
@@ -351,7 +318,20 @@ def train_dpo(
 
     loss_value_and_grad = nn.value_and_grad(model, loss_wrapper)
 
-    model.train()
+    def step(batch, iteration):
+        chosen, rejected, chosen_masks, rejected_masks = batch
+
+        (lvalue, reward, toks, metrics), grad = loss_value_and_grad(
+            chosen, rejected, chosen_masks, rejected_masks
+        )
+
+        if iteration % args.gradient_accumulation_steps == 0:
+            grad = average_gradients(grad)
+            optimizer.update(model, grad)
+            mx.eval(state)  # Explicitly evaluate the optimizer update
+
+        return (lvalue / args.gradient_accumulation_steps), reward, toks, metrics
+
     losses = 0
     rewards = mx.zeros((2,))
     n_tokens = 0
@@ -365,7 +345,6 @@ def train_dpo(
         "rejected_logits_mean": 0,
         "chosen_logits_mean": 0,
     }
-    grad_accum = None
 
     start = time.perf_counter()
     pbar = tqdm(range(1, args.iters + 1), desc="Training", disable=rank != 0)
@@ -419,11 +398,7 @@ def train_dpo(
 
             start = time.perf_counter()
 
-        lvalue, reward, toks, metrics, grad_accum = step(
-            batch,
-            grad_accum,
-            it % grad_accum_steps == 0,
-        )
+        lvalue, reward, toks, metrics = step(batch, it)
         losses += lvalue
         rewards += reward
         n_tokens += toks
@@ -432,7 +407,7 @@ def train_dpo(
         for k, v in metrics.items():
             accumulated_metrics[k] += v
 
-        mx.eval(state, losses, rewards, n_tokens, grad_accum)
+        mx.eval(state, losses, rewards, n_tokens)
 
         if it % args.steps_per_report == 0 or it == args.iters:
             stop = time.perf_counter()
