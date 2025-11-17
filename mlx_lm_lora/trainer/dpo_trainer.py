@@ -318,19 +318,38 @@ def train_dpo(
 
     loss_value_and_grad = nn.value_and_grad(model, loss_wrapper)
 
+    # Initialize gradient accumulator
+    accumulated_grads = None
+
     def step(batch, iteration):
+        nonlocal accumulated_grads
+
         chosen, rejected, chosen_masks, rejected_masks = batch
 
         (lvalue, reward, toks, metrics), grad = loss_value_and_grad(
             chosen, rejected, chosen_masks, rejected_masks
         )
 
+        # Accumulate gradients
+        if accumulated_grads is None:
+            accumulated_grads = grad
+        else:
+            accumulated_grads = mx.tree_map(lambda a, b: a + b, accumulated_grads, grad)
+
+        # Update model when we've accumulated enough steps
         if iteration % args.gradient_accumulation_steps == 0:
-            grad = average_gradients(grad)
-            optimizer.update(model, grad)
+            # Average the accumulated gradients
+            final_grads = mx.tree_map(
+                lambda g: g / args.gradient_accumulation_steps, accumulated_grads
+            )
+            final_grads = average_gradients(final_grads)
+            optimizer.update(model, final_grads)
             mx.eval(state)  # Explicitly evaluate the optimizer update
 
-        return (lvalue / args.gradient_accumulation_steps), reward, toks, metrics
+            # Reset accumulated gradients
+            accumulated_grads = None
+
+        return lvalue, reward, toks, metrics
 
     losses = 0
     rewards = mx.zeros((2,))
