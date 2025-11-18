@@ -1,7 +1,7 @@
 # MLX-LM-LORA
 
 <p align="center">
-  <img src="https://github.com/Goekdeniz-Guelmez/mlx-lm-lora/blob/main/logos/logo.png" alt="logo" width="300"/>
+  <img src="https://github.com/Goekdeniz-Guelmez/mlx-lm-lora/blob/main/logos/mlx_lm_lora.png" alt="logo" width="300"/>
 </p>
 
 [![image](https://img.shields.io/pypi/v/mlx-lm-lora.svg)](https://pypi.python.org/pypi/mlx-lm-lora)
@@ -41,7 +41,7 @@ With MLX-LM-LoRA you can, train Large Language Models locally on Apple Silicon u
 - **DAPO**: Decoupled Clip and Dynamic Sampling Policy Optimization
 - **Online DPO**: Online Direct Preference Optimization
 - **XPO**: Extended Preference Optimization
-- **RLHF**: Reinforcement Learning from Human Feedback
+- **RLHF Reinforce**: Reinforcement Learning from Human Feedback
 
 ## New Features
 
@@ -79,7 +79,7 @@ With MLX-LM-LoRA you can, train Large Language Models locally on Apple Silicon u
   - [Decoupled Clip and Dynamic Sampling Policy Optimization (DAPO)](#decoupled-clip-and-dynamic-sampling-policy-optimization-dapo)
   - [Online DPO](#online-dpo)
   - [eXtended Preference Optimization (XPO)](#extended-preference-optimization-xpo)
-  - [Reinforcement Learning from Human Feedback (RLHF)](#reinforcement-learning-from-human-feedback-rlhf)
+  - [Reinforcement Learning from Human Feedback Reinforce (RLHF Reinforce)](#reinforcement-learning-from-human-feedback-rlhf-reinforce)
 - [Other Features](#other-features)
   - [Synthetic Dataset Creation](#synthetic-dataset-creation)
     - [SFT](#synthetic-sft-dataset-creation)
@@ -423,15 +423,15 @@ mlx_lm_lora.train \
 
 ---
 
-### Reinforcement Learning from Human Feedback (RLHF)
+### Reinforcement Learning from Human Feedback REINFORCE (RLHF REINFORCE)
 
-Full RLHF pipeline with reward model and policy optimization.
+Full RLHF REINFORCE pipeline with reward model and policy optimization Ziegler style.
 
 ```shell
 mlx_lm_lora.train \
 --model Goekdeniz-Guelmez/Josiefied-Qwen2.5-0.5B-Instruct-abliterated-v1 \
 --train \
---train-mode rlhf \
+--train-mode rlhf-reinforce \
 --data ./rlhf_data \
 --judge mlx-community/reward-model \
 --alpha 1e-5 \
@@ -649,7 +649,7 @@ python -m mlx_lm_lora.train_judge \
 # Plus additional XPO-specific parameters
 ```
 
-**RLHF (Full Pipeline):**
+**RLHF Reinforce (Full Pipeline):**
 
 ```shell
 --judge <reward_model_id>        # Reward model
@@ -736,10 +736,16 @@ Configure custom field names:
 {"prompt": "Solve: 2+2=?", "answer": "4", "system": "You are a math tutor"}
 ```
 
-**Online DPO/XPO/RLHF Format:**
+**RLHF Format:**
 
 ```jsonl
 {"prompt": [{"role": "user", "content": "Question"}]}
+```
+
+or:
+
+```jsonl
+{"prompt": "Question"}
 ```
 
 ---
@@ -887,9 +893,9 @@ Use multiple reward functions:
 | GSPO | Policy | ❌ | ❌ | ✅ | Importance sampling |
 | Dr. GRPO | Policy | ❌ | ❌ | ✅ | Decoupled rewards |
 | DAPO | Policy | ❌ | ❌ | ✅ | Dynamic clipping |
-| Online DPO | Online | ❌ | ✅ | ❌ | Real-time feedback |
-| XPO | Online | ❌ | ✅ | ❌ | Extended preferences |
-| RLHF | RL | ❌ | ✅ | ✅ | Full RL pipeline |
+| Online DPO | Online RL | ❌ | ✅ | ❌ | Real-time feedback |
+| XPO | Online RL | ❌ | ✅ | ❌ | Extended preferences |
+| RLHF Reinforce | Online RL | ❌ | ✅ | ✅ | Full RL pipeline |
 
 ---
 
@@ -941,8 +947,8 @@ mlx_lm_lora.train --model <model> --train-mode online_dpo --data <data> \
 mlx_lm_lora.train --model <model> --train-mode xpo --data <data> \
 --judge <judge_model> --alpha 1e-5
 
-# RLHF
-mlx_lm_lora.train --model <model> --train-mode rlhf --data <data> \
+# RLHF Reinforce
+mlx_lm_lora.train --model <model> --train-mode rlhf-reinforce --data <data> \
 --judge <reward_model> --alpha 1e-5 --group-size 4
 ```
 
@@ -1016,7 +1022,7 @@ max_completion_length: 512
 
 ---
 
-## This package is beeing used by:
+## MLX-LM-LoRA is trusted by teams and industry leaders such as:
 
 <p align="center">
   <img src="https://github.com/Goekdeniz-Guelmez/mlx-lm-lora/blob/main/logos/macpaw.png" alt="logo" width="300"/>
