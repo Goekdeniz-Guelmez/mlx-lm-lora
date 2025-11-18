@@ -666,7 +666,6 @@ def train_grpo(
 
     state = [model.state, optimizer.state, mx.random.state]
 
-    @partial(mx.compile, inputs=state, outputs=state)
     def step(batch, prev_grad, do_update):
         prompt_tokens, targets, prompt_lens, target_lens, type_info = batch
 
