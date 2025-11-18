@@ -275,12 +275,9 @@ def train_dpo(
     if grad_accum_steps < 1:
         raise ValueError("gradient_accumulation_steps must be at least 1")
 
-    state = [model.state, optimizer.state]
+    state = [model.state, optimizer.state, mx.random.state]
 
-    @partial(mx.compile, inputs=state, outputs=state)
-    def step(batch, prev_grad, do_update):
-        chosen, rejected, chosen_masks, rejected_masks = batch
-
+    def loss_wrapper(chosen, rejected, chosen_masks, rejected_masks):
         policy_chosen_scores = get_token_scores(model, chosen, chosen_masks)
         policy_rejected_scores = get_token_scores(model, rejected, rejected_masks)
 
@@ -308,35 +305,6 @@ def train_dpo(
                 ref_rejected_scores, rejected_masks, loss_type
             )
 
-        (lvalue, reward, toks, metrics), grad = loss_value_and_grad(
-            policy_chosen_score,
-            policy_rejected_score,
-            reference_chosen_score,
-            reference_rejected_score,
-            chosen_masks=chosen_masks,
-            rejected_masks=rejected_masks,
-        )
-
-        if prev_grad is not None:
-            grad = tree_map(lambda x, y: x + y, grad, prev_grad)
-
-        if do_update:
-            grad = average_gradients(grad)
-            if grad_accum_steps > 1:
-                grad = tree_map(lambda x: x / grad_accum_steps, grad)
-            optimizer.update(model, grad)
-            grad = None
-
-        return lvalue, reward, toks, metrics, grad
-
-    def loss_wrapper(
-        policy_chosen_score,
-        policy_rejected_score,
-        reference_chosen_score,
-        reference_rejected_score,
-        chosen_masks,
-        rejected_masks,
-    ):
         return loss_fn(
             policy_chosen_score=policy_chosen_score,
             policy_rejected_score=policy_rejected_score,
@@ -351,7 +319,26 @@ def train_dpo(
 
     loss_value_and_grad = nn.value_and_grad(model, loss_wrapper)
 
-    model.train()
+    @partial(mx.compile, inputs=state, outputs=state)
+    def step(batch, prev_grad, do_update):
+        chosen, rejected, chosen_masks, rejected_masks = batch
+
+        (lvalue, reward, toks, metrics), grad = loss_value_and_grad(
+            chosen, rejected, chosen_masks, rejected_masks
+        )
+
+        if prev_grad is not None:
+            grad = tree_map(lambda x, y: x + y, grad, prev_grad)
+
+        if do_update:
+            grad = average_gradients(grad)
+            if args.gradient_accumulation_steps > 1:
+                grad = tree_map(lambda x: x / args.gradient_accumulation_steps, grad)
+            optimizer.update(model, grad)
+            grad = None
+
+        return lvalue, reward, toks, metrics, grad
+
     losses = 0
     rewards = mx.zeros((2,))
     n_tokens = 0
