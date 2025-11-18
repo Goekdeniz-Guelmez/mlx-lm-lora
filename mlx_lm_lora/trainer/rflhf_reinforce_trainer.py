@@ -12,7 +12,6 @@ from tqdm import tqdm
 
 from .judge import LLMPPOJudge
 from .online_dpo_trainer import (
-    compute_score,
     generate_for_online_dpo,
     iterate_online_dpo_batches,
 )
@@ -20,7 +19,7 @@ from .sft_trainer import SFTTrainingArgs, grad_checkpoint
 
 
 @dataclass
-class RLHFTrainingArgs(SFTTrainingArgs):
+class RLHFReinforceTrainingArgs(SFTTrainingArgs):
     beta: float = field(
         default=0.1, metadata={"help": "KL penalty coefficient for RLHF training."}
     )
@@ -42,7 +41,7 @@ def compute_kl_penalty(logits_policy, logits_ref, masks):
     return mx.sum(kl_div * masks, axis=-1)
 
 
-def rlhf_loss(
+def rlhf_reinforce_loss(
     policy_logits: mx.array,
     ref_logits: mx.array,
     rewards: mx.array,
@@ -88,7 +87,7 @@ def get_model_logits(model, tokens, masks):
     return model(inputs), targets, target_masks
 
 
-def evaluate_rlhf(
+def evaluate_rlhf_reinforce(
     model,
     ref_model,
     dataset,
@@ -97,7 +96,7 @@ def evaluate_rlhf(
     beta: float,
     max_seq_length,
     judge_config,
-    loss_fn: callable = rlhf_loss,
+    loss_fn: callable = rlhf_reinforce_loss,
     judge_model: mx.array = None,
     judge_tokenizer: mx.array = None,
     tokenizer=None,
@@ -210,7 +209,7 @@ def evaluate_rlhf(
     return avg_loss, [], ntokens, avg_metrics
 
 
-def train_rlhf(
+def train_rlhf_reinforce(
     model,
     ref_model,
     tokenizer,
@@ -218,10 +217,10 @@ def train_rlhf(
     train_dataset,
     val_dataset,
     judge_config,
-    args: RLHFTrainingArgs = RLHFTrainingArgs(),
+    args: RLHFReinforceTrainingArgs = RLHFReinforceTrainingArgs(),
     judge_model: mx.array = None,
     judge_tokenizer: mx.array = None,
-    loss_fn: callable = rlhf_loss,
+    loss_fn: callable = rlhf_reinforce_loss,
     training_callback: TrainingCallback = None,
 ):
     tqdm.write(f"Starting RLHF training..., iters: {args.iters}")
@@ -361,7 +360,7 @@ def train_rlhf(
 
         if it == 1 or it % args.steps_per_eval == 0 or it == args.iters:
             stop = time.perf_counter()
-            val_loss, val_rewards, val_ntokens, val_metrics = evaluate_rlhf(
+            val_loss, val_rewards, val_ntokens, val_metrics = evaluate_rlhf_reinforce(
                 model=model,
                 ref_model=ref_model,
                 tokenizer=tokenizer,
