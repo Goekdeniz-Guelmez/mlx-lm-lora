@@ -1,7 +1,7 @@
 # MLX-LM-LORA
 
 <p align="center">
-  <img src="https://github.com/Goekdeniz-Guelmez/mlx-lm-lora/blob/main/logo.png" alt="logo" width="300"/>
+  <img src="https://github.com/Goekdeniz-Guelmez/mlx-lm-lora/blob/main/logos/logo.png" alt="logo" width="300"/>
 </p>
 
 [![image](https://img.shields.io/pypi/v/mlx-lm-lora.svg)](https://pypi.python.org/pypi/mlx-lm-lora)
@@ -14,6 +14,7 @@ With MLX-LM-LoRA you can, train Large Language Models locally on Apple Silicon u
 - Mixtral
 - Qwen 2, 2.5, 3
 - Qwen3 MoE
+- Qwen3 Next
 - Gemma 1, 2, 3
 - OLMo, OLMoE
 - MiniCPM, MiniCPM3
@@ -1012,6 +1013,14 @@ reward_functions: "accuracy_reward,format_reward"
 reward_weights: [0.7, 0.3]
 max_completion_length: 512
 ```
+
+---
+
+## This package is beeing used by:
+
+<p align="center">
+  <img src="https://github.com/Goekdeniz-Guelmez/mlx-lm-lora/blob/main/logos/macpaw.png" alt="logo" width="300"/>
+</p>
 
 ---
 
