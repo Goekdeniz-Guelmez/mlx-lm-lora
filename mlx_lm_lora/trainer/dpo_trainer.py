@@ -414,7 +414,7 @@ def train_dpo(
         lvalue, reward, toks, metrics, grad_accum = step(
             batch,
             grad_accum,
-            it % args.gradient_accumulation_steps == 0,
+            it % grad_accum_steps == 0,
         )
         losses += lvalue
         rewards += reward
