@@ -392,7 +392,7 @@ def train_online_dpo(
     if grad_accum_steps < 1:
         raise ValueError("gradient_accumulation_steps must be at least 1")
 
-    state = [model.state, optimizer.state]
+    state = [model.state, optimizer.state, mx.random.state]
 
     @partial(mx.compile, inputs=state, outputs=state)
     def step(batch, prev_grad, do_update):
