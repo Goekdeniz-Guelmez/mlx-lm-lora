@@ -278,7 +278,6 @@ def train_dpo(
     state = [model.state, optimizer.state, mx.random.state]
 
     def loss_wrapper(chosen, rejected, chosen_masks, rejected_masks):
-        # Compute policy scores inside the wrapper so gradients can flow through the model
         policy_chosen_scores = get_token_scores(model, chosen, chosen_masks)
         policy_rejected_scores = get_token_scores(model, rejected, rejected_masks)
 
@@ -289,7 +288,6 @@ def train_dpo(
             policy_rejected_scores, rejected_masks, loss_type
         )
 
-        # Compute reference scores (with stop_gradient to prevent gradients flowing to ref_model)
         if ref_model is None:
             reference_chosen_score = mx.zeros_like(policy_chosen_score)
             reference_rejected_score = mx.zeros_like(policy_rejected_score)
@@ -329,17 +327,14 @@ def train_dpo(
             chosen, rejected, chosen_masks, rejected_masks
         )
 
-        # Accumulate gradients
         if prev_grad is not None:
             grad = tree_map(lambda x, y: x + y, grad, prev_grad)
 
-        # Update model when we've accumulated enough steps
         if do_update:
             grad = average_gradients(grad)
             if args.gradient_accumulation_steps > 1:
                 grad = tree_map(lambda x: x / args.gradient_accumulation_steps, grad)
             optimizer.update(model, grad)
-            mx.eval(state)  # Explicitly evaluate the optimizer update
             grad = None
 
         return lvalue, reward, toks, metrics, grad
