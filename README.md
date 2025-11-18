@@ -1,8 +1,8 @@
-# MLX-LM-LORA
-
 <p align="center">
-  <img src="https://github.com/Goekdeniz-Guelmez/mlx-lm-lora/blob/main/logos/mlx_lm_lora.png" alt="logo" width="1vw"/>
+  <img src="https://github.com/Goekdeniz-Guelmez/mlx-lm-lora/blob/main/logos/mlx_lm_lora.png" alt="logo" width="100%"/>
 </p>
+
+# MLX-LM-LORA
 
 [![image](https://img.shields.io/pypi/v/mlx-lm-lora.svg)](https://pypi.python.org/pypi/mlx-lm-lora)
 
