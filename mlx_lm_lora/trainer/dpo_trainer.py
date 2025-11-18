@@ -275,7 +275,7 @@ def train_dpo(
     if grad_accum_steps < 1:
         raise ValueError("gradient_accumulation_steps must be at least 1")
 
-    state = [model.state, optimizer.state]
+    state = [model.state, optimizer.state, mx.random.state]
 
     def loss_wrapper(chosen, rejected, chosen_masks, rejected_masks):
         # Compute policy scores inside the wrapper so gradients can flow through the model
