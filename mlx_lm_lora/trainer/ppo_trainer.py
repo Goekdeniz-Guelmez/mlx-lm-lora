@@ -35,7 +35,6 @@ def ppo_loss(
     reference_rejected_score: mx.array,
     chosen_masks: mx.array,
     rejected_masks: mx.array,
-    loss_type: str,
     beta: float = 0.1,
     epsilon: float = 0.2,
 ):
@@ -248,7 +247,6 @@ def evaluate_ppo(
             reference_rejected_score=reference_rejected_logprobs,
             chosen_masks=chosen_mask_counts,
             rejected_masks=rejected_mask_counts,
-            loss_type=loss_type,
             beta=beta,
             epsilon=epsilon,
         )
@@ -457,7 +455,6 @@ def train_ppo(
             reference_rejected_score=reference_rejected_score,
             chosen_masks=chosen_masks,
             rejected_masks=rejected_masks,
-            loss_type=args.loss_type,
             beta=args.beta,
             epsilon=args.epsilon,
         )
@@ -471,7 +468,6 @@ def train_ppo(
     steps = 0
     trained_tokens = 0
     
-    # Initialize accumulated_metrics with all the keys that ppo_loss returns
     accumulated_metrics = {
         "policy_loss": 0,
         "kl_penalty": 0,

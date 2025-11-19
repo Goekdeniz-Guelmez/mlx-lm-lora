@@ -42,6 +42,7 @@ With MLX-LM-LoRA you can, train Large Language Models locally on Apple Silicon u
 - **Online DPO**: Online Direct Preference Optimization
 - **XPO**: Extended Preference Optimization
 - **RLHF Reinforce KL**: Reinforced Reinforcement Learning from Human Feedback (with KL regularization)
+- **PPO**: Proximal policy Optimization
 
 ## New Features
 
@@ -79,7 +80,8 @@ With MLX-LM-LoRA you can, train Large Language Models locally on Apple Silicon u
   - [Decoupled Clip and Dynamic Sampling Policy Optimization (DAPO)](#decoupled-clip-and-dynamic-sampling-policy-optimization-dapo)
   - [Online DPO](#online-dpo)
   - [eXtended Preference Optimization (XPO)](#extended-preference-optimization-xpo)
-  - [Reinforcement Learning from Human Feedback Reinforce (RLHF Reinforce)](#reinforcement-learning-from-human-feedback-rlhf-reinforce)
+  - [Reinforcement Learning from Human Feedback Reinforce (RLHF Reinforce)](#reinforced-reinforcement-learning-from-human-feedback-with-kl)
+  - [Proximal Policy Optimization](#proximal-policy-optimization)
 - [Other Features](#other-features)
   - [Synthetic Dataset Creation](#synthetic-dataset-creation)
     - [SFT](#synthetic-sft-dataset-creation)
@@ -423,7 +425,7 @@ mlx_lm_lora.train \
 
 ---
 
-### Reinforced Reinforcement Learning from Human Feedback (RLHF REINFORCE KL)
+### Reinforced Reinforcement Learning from Human Feedback with KL
 
 Full RLHF REINFORCE pipeline with reward model and policy optimization Ziegler style.
 
@@ -432,11 +434,10 @@ mlx_lm_lora.train \
 --model Goekdeniz-Guelmez/Josiefied-Qwen2.5-0.5B-Instruct-abliterated-v1 \
 --train \
 --train-mode rlhf-reinforce \
---data ./rlhf_data \
+--data Goekdeniz-Guelmez/ultrafeedback-prompt-flat \
 --judge mlx-community/reward-model \
 --alpha 1e-5 \
---beta 0.1 \
---group-size 4
+--beta 0.1
 ```
 
 **Key Parameters:**
@@ -444,7 +445,29 @@ mlx_lm_lora.train \
 - `--judge`: Reward model ID
 - `--alpha`: Policy learning rate (default: 1e-5)
 - `--beta`: KL penalty strength (default: 0.1)
-- `--group-size`: Number of samples for policy optimization (default: 4)
+
+**Dataset Format:** Same as Online DPO
+
+---
+
+### Proximal Policy Optimization
+
+Full PPO pipeline with reward model and policy optimization.
+
+```shell
+mlx_lm_lora.train \
+--model Goekdeniz-Guelmez/Josiefied-Qwen2.5-0.5B-Instruct-abliterated-v1 \
+--train \
+--train-mode ppo \
+--data Goekdeniz-Guelmez/ultrafeedback-prompt-flat \
+--judge mlx-community/reward-model \
+--epsilon 0.2
+```
+
+**Key Parameters:**
+
+- `--judge`: Reward model ID
+- `--epsilon`: The Epsilon for numerical stability (default: 0.2)
 
 **Dataset Format:** Same as Online DPO
 
@@ -649,12 +672,22 @@ python -m mlx_lm_lora.train_judge \
 # Plus additional XPO-specific parameters
 ```
 
-**RLHF Reinforce (Full Pipeline):**
+**RLHF Reinforce:**
 
 ```shell
 --judge <reward_model_id>        # Reward model
 --alpha 1e-5                     # Policy learning rate
 --beta 0.1                       # KL penalty strength
+--group-size 4                   # Samples for policy optimization
+--judge-config '{}'              # Reward model configuration
+```
+
+**PPO:**
+
+```shell
+--judge <reward_model_id>        # Reward model
+--alpha 1e-5                     # Policy learning rate
+--epsilon 0.2                    # Numerical stability value
 --group-size 4                   # Samples for policy optimization
 --judge-config '{}'              # Reward model configuration
 ```
@@ -736,7 +769,7 @@ Configure custom field names:
 {"prompt": "Solve: 2+2=?", "answer": "4", "system": "You are a math tutor"}
 ```
 
-**RLHF Format:**
+**RLHF (Online DPO, XPO, RLHF Reinforced, PPO) Format:**
 
 ```jsonl
 {"prompt": [{"role": "user", "content": "Question"}]}
@@ -893,9 +926,10 @@ Use multiple reward functions:
 | GSPO | Policy | ❌ | ❌ | ✅ | Importance sampling |
 | Dr. GRPO | Policy | ❌ | ❌ | ✅ | Decoupled rewards |
 | DAPO | Policy | ❌ | ❌ | ✅ | Dynamic clipping |
-| Online DPO | Online RL | ❌ | ✅ | ❌ | Real-time feedback |
-| XPO | Online RL | ❌ | ✅ | ❌ | Extended preferences |
-| RLHF Reinforce | Online RL | ❌ | ✅ | ✅ | Full RL pipeline |
+| Online DPO | Online RL | ✅ | ✅ | ✅ | Real-time feedback |
+| XPO | Online RL | ✅ | ✅ | ✅ | Extended preferences |
+| RLHF Reinforce | Online RL | ✅ | ✅ | ✅ | Full RL pipeline |
+| PPO | Online RL | ✅ | ✅ | ✅ | Full RL pipeline |
 
 ---
 
@@ -950,6 +984,10 @@ mlx_lm_lora.train --model <model> --train-mode xpo --data <data> \
 # RLHF Reinforce
 mlx_lm_lora.train --model <model> --train-mode rlhf-reinforce --data <data> \
 --judge <reward_model> --alpha 1e-5 --group-size 4
+
+# PPO
+mlx_lm_lora.train --model <model> --train-mode ppo --data <data> \
+--judge <reward_model> --epsilon 0.2 --group-size 4
 ```
 
 ---
