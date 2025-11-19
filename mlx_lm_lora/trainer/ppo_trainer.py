@@ -259,7 +259,7 @@ def train_ppo(
     loss_fn: callable = ppo_loss,
     training_callback: TrainingCallback = None,
 ):
-    tqdm.write(f"Starting Online DPO training..., iters: {args.iters}")
+    tqdm.write(f"Starting PPO training..., iters: {args.iters}")
     world = mx.distributed.init()
     world_size = world.size()
     rank = world.rank()
@@ -275,7 +275,6 @@ def train_ppo(
 
     state = [model.state, optimizer.state, mx.random.state]
 
-    @partial(mx.compile, inputs=state, outputs=state)
     def step(batch, prev_grad, do_update):
         prompts, prompt_texts = batch
 
