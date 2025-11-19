@@ -240,7 +240,6 @@ def train_rlhf(
 
     state = [model.state, optimizer.state, mx.random.state]
 
-    @partial(mx.compile, inputs=state, outputs=state)
     def step(batch, prev_grad, do_update):
         prompts, prompt_texts = batch
 
@@ -319,7 +318,7 @@ def train_rlhf(
             optimizer.update(model, grad)
             grad = None
 
-        return lvalue, batch_rewards, toks, metrics
+        return lvalue, batch_rewards, toks, metrics, grad
 
     def loss_wrapper(policy_logits, ref_logits, rewards, masks):
         return loss_fn(

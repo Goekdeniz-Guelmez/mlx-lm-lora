@@ -19,7 +19,6 @@ from mlx_lm.tuner.utils import (
     print_trainable_parameters,
 )
 from mlx_lm.utils import load, save_config
-from mlx_optimizers import QHAdam
 
 from .trainer.cpo_trainer import CPOTrainingArgs, evaluate_cpo, train_cpo
 from .trainer.datasets import CacheDataset, load_dataset
@@ -75,7 +74,6 @@ CONFIG_DEFAULTS = {
         "adam": {},
         "adamw": {},
         "muon": {},
-        "qhadam": {},
     },
     "data": "data/",
     "seed": 0,
@@ -210,7 +208,7 @@ def build_parser():
     parser.add_argument(
         "--optimizer",
         type=str,
-        choices=["adam", "adamw", "qhadam", "muon"],
+        choices=["adam", "adamw", "muon"],
         default=None,
         help="Optimizer to use for training: adam or adamw",
     )
@@ -503,8 +501,6 @@ def train_model(
         opt_class = optim.Adam
     elif optimizer_name == "adamw":
         opt_class = optim.AdamW
-    elif optimizer_name == "qhadam":
-        opt_class = QHAdam
     elif optimizer_name == "muon":
         opt_class = optim.Muon
     else:

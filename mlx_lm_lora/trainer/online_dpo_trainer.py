@@ -394,7 +394,6 @@ def train_online_dpo(
 
     state = [model.state, optimizer.state, mx.random.state]
 
-    @partial(mx.compile, inputs=state, outputs=state)
     def step(batch, prev_grad, do_update):
         prompts, prompt_texts = batch
 
