@@ -951,7 +951,7 @@ def evaluate_model(args, model: nn.Module, tokenizer, test_set):
             num_batches=args.test_batches,
             max_seq_length=args.max_seq_length,
             beta=args.beta,
-            clip_epsilon=args.epsilon,
+            epsilon=args.epsilon,
             loss_type=args.dpo_cpo_loss_type,
             judge=args.judge,
             max_tokens=args.max_completion_length,

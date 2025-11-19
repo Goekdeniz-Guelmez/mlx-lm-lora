@@ -29,40 +29,74 @@ class PPOTrainingArgs(OnlineDPOTrainingArgs):
 
 
 def ppo_loss(
-    policy_score: mx.array,
-    reference_score: mx.array,
-    advantages: mx.array,
-    masks: mx.array,
+    policy_chosen_score: mx.array,
+    policy_rejected_score: mx.array,
+    reference_chosen_score: mx.array,
+    reference_rejected_score: mx.array,
+    chosen_masks: mx.array,
+    rejected_masks: mx.array,
+    loss_type: str,
     beta: float = 0.1,
-    clip_epsilon: float = 0.2,
+    epsilon: float = 0.2,
 ):
-    log_ratios = policy_score - reference_score
-    ratios = mx.exp(log_ratios)
+    # Compute log ratios for chosen and rejected sequences
+    chosen_log_ratios = policy_chosen_score - reference_chosen_score
+    rejected_log_ratios = policy_rejected_score - reference_rejected_score
     
+    chosen_ratios = mx.exp(chosen_log_ratios)
+    rejected_ratios = mx.exp(rejected_log_ratios)
+    
+    # Compute advantages (difference between chosen and rejected rewards)
+    advantages = policy_chosen_score - policy_rejected_score
+    
+    # Normalize advantages
     advantage_mean = mx.mean(advantages)
     advantage_std = mx.sqrt(mx.var(advantages) + 1e-8)
     normalized_advantages = (advantages - advantage_mean) / advantage_std
     
-    surr1 = ratios * normalized_advantages
-    surr2 = mx.clip(ratios, 1.0 - clip_epsilon, 1.0 + clip_epsilon) * normalized_advantages
-    policy_losses = -mx.minimum(surr1, surr2)
+    # PPO clipped objective for chosen sequences
+    chosen_surr1 = chosen_ratios * normalized_advantages
+    chosen_surr2 = mx.clip(chosen_ratios, 1.0 - epsilon, 1.0 + epsilon) * normalized_advantages
+    chosen_policy_losses = -mx.minimum(chosen_surr1, chosen_surr2)
     
-    kl_penalty = beta * mx.mean(log_ratios)
+    # PPO clipped objective for rejected sequences (negative advantages)
+    rejected_surr1 = rejected_ratios * (-normalized_advantages)
+    rejected_surr2 = mx.clip(rejected_ratios, 1.0 - epsilon, 1.0 + epsilon) * (-normalized_advantages)
+    rejected_policy_losses = -mx.minimum(rejected_surr1, rejected_surr2)
     
-    total_loss = mx.mean(policy_losses) + kl_penalty
+    # Combine losses
+    policy_loss = mx.mean(chosen_policy_losses) + mx.mean(rejected_policy_losses)
     
-    num_tokens = masks.sum()
+    # KL penalty
+    kl_penalty = beta * (mx.mean(chosen_log_ratios) + mx.mean(rejected_log_ratios))
     
-    reward = beta * (policy_score - reference_score)
+    total_loss = policy_loss + kl_penalty
     
+    # Calculate total tokens
+    num_tokens = chosen_masks.sum() + rejected_masks.sum()
+    
+    # Rewards
+    chosen_reward = beta * (policy_chosen_score - reference_chosen_score)
+    rejected_reward = beta * (policy_rejected_score - reference_rejected_score)
+    reward = mx.stack([mx.mean(chosen_reward), mx.mean(rejected_reward)])
+    
+    # Metrics
     metrics = {
-        "policy_loss": mx.mean(policy_losses),
+        "policy_loss": policy_loss,
         "kl_penalty": kl_penalty,
         "advantages_mean": mx.mean(normalized_advantages),
-        "ratios_mean": mx.mean(ratios),
-        "clip_fraction": mx.mean((mx.abs(ratios - 1.0) > clip_epsilon).astype(mx.float32)),
-        "policy_logps": mx.mean(policy_score),
-        "reference_logps": mx.mean(reference_score),
+        "ratios_mean": mx.mean(mx.concatenate([chosen_ratios, rejected_ratios])),
+        "clip_fraction": mx.mean(
+            (mx.abs(mx.concatenate([chosen_ratios, rejected_ratios]) - 1.0) > epsilon).astype(mx.float32)
+        ),
+        "policy_chosen_logps": mx.mean(policy_chosen_score),
+        "policy_rejected_logps": mx.mean(policy_rejected_score),
+        "reference_chosen_logps": mx.mean(reference_chosen_score),
+        "reference_rejected_logps": mx.mean(reference_rejected_score),
+        "accuracies": mx.mean((policy_chosen_score > policy_rejected_score).astype(mx.float32)),
+        "margins": mx.mean(policy_chosen_score - policy_rejected_score),
+        "chosen_logits_mean": mx.mean(policy_chosen_score),
+        "rejected_logits_mean": mx.mean(policy_rejected_score),
     }
     
     mx.clear_cache()
@@ -76,7 +110,7 @@ def evaluate_ppo(
     batch_size,
     num_batches,
     beta: float,
-    clip_epsilon: float,
+    epsilon: float,
     max_seq_length,
     loss_type,
     judge_config,
@@ -216,7 +250,7 @@ def evaluate_ppo(
             rejected_masks=rejected_mask_counts,
             loss_type=loss_type,
             beta=beta,
-            clip_epsilon=clip_epsilon,
+            epsilon=epsilon,
         )
 
         all_losses += loss_value * toks
@@ -308,7 +342,7 @@ def train_ppo(
             if judgment == 0:  # First completion is preferred
                 chosen.append(prompt_text + completion_pair[0])
                 rejected.append(prompt_text + completion_pair[1])
-            else:  #  Second completion is preferred
+            else:  # Second completion is preferred
                 chosen.append(prompt_text + completion_pair[1])
                 rejected.append(prompt_text + completion_pair[0])
 
@@ -423,9 +457,9 @@ def train_ppo(
             reference_rejected_score=reference_rejected_score,
             chosen_masks=chosen_masks,
             rejected_masks=rejected_masks,
-            beta=args.beta,
-            clip_epsilon=args.clip_epsilon,
             loss_type=args.loss_type,
+            beta=args.beta,
+            epsilon=args.epsilon,
         )
 
     loss_value_and_grad = nn.value_and_grad(model, loss_wrapper)
@@ -436,13 +470,22 @@ def train_ppo(
     n_tokens = 0
     steps = 0
     trained_tokens = 0
+    
+    # Initialize accumulated_metrics with all the keys that ppo_loss returns
     accumulated_metrics = {
+        "policy_loss": 0,
+        "kl_penalty": 0,
+        "advantages_mean": 0,
+        "ratios_mean": 0,
+        "clip_fraction": 0,
+        "policy_chosen_logps": 0,
+        "policy_rejected_logps": 0,
+        "reference_chosen_logps": 0,
+        "reference_rejected_logps": 0,
         "accuracies": 0,
         "margins": 0,
-        "policy_rejected_logps": 0,
-        "policy_chosen_logps": 0,
-        "rejected_logits_mean": 0,
         "chosen_logits_mean": 0,
+        "rejected_logits_mean": 0,
     }
     grad_accum = None
 
@@ -470,7 +513,7 @@ def train_ppo(
                 max_seq_length=args.max_seq_length,
                 loss_fn=loss_fn,
                 beta=args.beta,
-                clip_epsilon=args.clip_epsilon,
+                epsilon=args.epsilon,
                 loss_type=args.loss_type,
                 judge_config=judge_config,
                 judge_model=judge_model,
@@ -513,8 +556,13 @@ def train_ppo(
         n_tokens += toks
         steps += 1
 
+        # Safely accumulate metrics - only add if the key exists in accumulated_metrics
         for k, v in metrics.items():
-            accumulated_metrics[k] += v
+            if k in accumulated_metrics:
+                accumulated_metrics[k] += v
+            else:
+                # Log warning for missing keys
+                print(f"Warning: Metric key '{k}' not found in accumulated_metrics")
 
         mx.eval(state, losses, rewards, n_tokens, grad_accum)
 
@@ -560,6 +608,8 @@ def train_ppo(
             losses = 0
             n_tokens = 0
             steps = 0
+            # Reset accumulated metrics
+            accumulated_metrics = {k: 0 for k in accumulated_metrics.keys()}
             start = time.perf_counter()
 
         # Save adapter weights
