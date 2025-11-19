@@ -361,7 +361,6 @@ def train_xpo(
 
     state = [model.state, optimizer.state, mx.random.state]
 
-    @partial(mx.compile, inputs=state, outputs=state)
     def step(batch, current_alpha, prev_grad, do_update):
         prompts, prompt_texts = batch
 

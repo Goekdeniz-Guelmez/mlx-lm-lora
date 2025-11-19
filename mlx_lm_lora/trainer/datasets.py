@@ -141,21 +141,30 @@ class PromptDataset:
         self._data = data
         self.chat_key = prompt_key
         self.tokenizer = tokenizer
-
+    
     def process(self, d):
         messages = d[self.chat_key]
+        
+        if isinstance(messages, list) and all(
+            isinstance(msg, dict) and "role" in msg and "content" in msg 
+            for msg in messages
+        ):
+            chat_messages = messages
+        else:
+            chat_messages = [{"role": "user", "content": str(messages)}]
+        
         return {
             "prompt": self.tokenizer.apply_chat_template(
-                messages, add_generation_prompt=True
+                chat_messages, add_generation_prompt=True
             ),
             "prompt_text": self.tokenizer.apply_chat_template(
-                messages, add_generation_prompt=True, tokenize=False
+                chat_messages, add_generation_prompt=True, tokenize=False
             ),
         }
-
+    
     def __getitem__(self, idx: int):
         return self._data[idx]
-
+    
     def __len__(self):
         return len(self._data)
 
@@ -551,7 +560,7 @@ def create_dataset(
                 prompt_key=prompt_feature,
             )
         else:
-            raise ValueError("Unsupported data format for Online DPO or XPO training.")
+            raise ValueError("Unsupported data format for RLHF training.")
     elif train_mode in ["grpo"]:
         if prompt_feature in sample:
             return GRPODataset(
@@ -564,7 +573,7 @@ def create_dataset(
             )
         else:
             raise ValueError("Unsupported data format for Online GRPO training.")
-    elif train_mode in ["sft", "phi_ppo"]:
+    elif train_mode in ["sft"]:
         if prompt_feature in sample and completion_feature in sample:
             return CompletionsDataset(
                 data, tokenizer, prompt_feature, completion_feature, mask_prompt

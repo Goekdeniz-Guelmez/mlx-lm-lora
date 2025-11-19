@@ -40,7 +40,7 @@ from .trainer.ppo_trainer import (
     train_ppo,
 )
 from .trainer.orpo_trainer import ORPOTrainingArgs, evaluate_orpo, train_orpo
-from .trainer.rflhf_reinforce_trainer import RLHFReinforceTrainingArgs, evaluate_rlhf_reinforce, train_rlhf_reinforce
+from .trainer.rlhf_reinforce_trainer import RLHFReinforceTrainingArgs, evaluate_rlhf_reinforce, train_rlhf_reinforce
 from .trainer.sft_trainer import (
     SFTTrainingArgs,
     TrainingCallback,
@@ -675,23 +675,6 @@ def train_model(
         )
 
     elif args.train_mode == "rlhf_reinforce":
-        online_dpo_training_args = RLHFReinforceTrainingArgs(
-            batch_size=args.batch_size,
-            iters=args.iters,
-            val_batches=args.val_batches,
-            steps_per_report=args.steps_per_report,
-            steps_per_eval=args.steps_per_eval,
-            steps_per_save=args.save_every,
-            adapter_file=adapter_file,
-            max_seq_length=args.max_seq_length,
-            grad_checkpoint=args.grad_checkpoint,
-            beta=args.beta,
-            reference_model_path=args.reference_model_path,
-            gradient_accumulation_steps=args.gradient_accumulation_steps,
-            judge=args.judge,
-            max_completion_length=args.max_completion_length,
-        )
-
         print("Loading pretrained reference model")
         if args.reference_model_path:
             reference_model, _ = load(args.reference_model_path)
