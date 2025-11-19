@@ -35,7 +35,7 @@ from .trainer.online_dpo_trainer import (
     train_online_dpo,
 )
 from .trainer.orpo_trainer import ORPOTrainingArgs, evaluate_orpo, train_orpo
-from .trainer.rflhf_trainer import RLHFTrainingArgs, evaluate_rlhf, train_rlhf
+from .trainer.rlhf_reinforce_trainer import RLHFReinforceTrainingArgs, evaluate_rlhf_reinforce, train_rlhf_reinforce
 from .trainer.sft_trainer import (
     SFTTrainingArgs,
     TrainingCallback,
@@ -202,8 +202,8 @@ def build_parser():
         "--train-mode",
         type=str,
         default="sft",
-        choices=["sft", "dpo", "cpo", "orpo", "grpo", "online_dpo", "xpo", "rlhf"],
-        help="Training mode: sft, dpo, rlhf, online_dpo, xpo, cpo, orpo, or grpo, default is sft",
+        choices=["sft", "dpo", "cpo", "orpo", "grpo", "online_dpo", "xpo", "rlhf_reinforce"],
+        help="Training mode: sft, dpo, rlhf_reinforce, online_dpo, xpo, cpo, orpo, or grpo, default is sft",
     )
     parser.add_argument(
         "--optimizer",
@@ -617,8 +617,8 @@ def train_model(
             training_callback=training_callback,
         )
 
-    elif args.train_mode == "rlhf":
-        online_dpo_training_args = RLHFTrainingArgs(
+    elif args.train_mode == "rlhf_reinforce":
+        online_dpo_training_args = RLHFReinforceTrainingArgs(
             batch_size=args.batch_size,
             iters=args.iters,
             val_batches=args.val_batches,
@@ -651,7 +651,7 @@ def train_model(
         else:
             judge_model, judge_tokenizer = load(args.judge)
 
-        train_rlhf(
+        train_rlhf_reinforce(
             model=model,
             tokenizer=tokenizer,
             ref_model=reference_model.freeze(),
@@ -878,13 +878,13 @@ def evaluate_model(args, model: nn.Module, tokenizer, test_set):
         for metric_name, metric_value in test_metrics.items():
             print(f"  {metric_name}: {float(metric_value):.3f}")
 
-    elif args.train_mode == "rlhf":
+    elif args.train_mode == "rlhf_reinforce":
         if args.reference_model_path:
             reference_model, _ = load(args.reference_model_path)
         else:
             reference_model, _ = load(args.model)
 
-        test_loss, _, _, test_metrics = evaluate_rlhf(
+        test_loss, _, _, test_metrics = evaluate_rlhf_reinforce(
             model=model,
             ref_model=reference_model.freeze(),
             dataset=test_set,
