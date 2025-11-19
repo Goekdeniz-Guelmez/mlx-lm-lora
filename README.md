@@ -41,7 +41,7 @@ With MLX-LM-LoRA you can, train Large Language Models locally on Apple Silicon u
 - **DAPO**: Decoupled Clip and Dynamic Sampling Policy Optimization
 - **Online DPO**: Online Direct Preference Optimization
 - **XPO**: Extended Preference Optimization
-- **RLHF Reinforce**: Reinforcement Learning from Human Feedback
+- **RLHF Reinforce KL**: Reinforced Reinforcement Learning from Human Feedback (with KL regularization)
 
 ## New Features
 
@@ -423,7 +423,7 @@ mlx_lm_lora.train \
 
 ---
 
-### Reinforcement Learning from Human Feedback REINFORCE (RLHF REINFORCE)
+### Reinforced Reinforcement Learning from Human Feedback (RLHF REINFORCE KL)
 
 Full RLHF REINFORCE pipeline with reward model and policy optimization Ziegler style.
 

@@ -675,6 +675,23 @@ def train_model(
         )
 
     elif args.train_mode == "rlhf_reinforce":
+        online_dpo_training_args = RLHFReinforceTrainingArgs(
+            batch_size=args.batch_size,
+            iters=args.iters,
+            val_batches=args.val_batches,
+            steps_per_report=args.steps_per_report,
+            steps_per_eval=args.steps_per_eval,
+            steps_per_save=args.save_every,
+            adapter_file=adapter_file,
+            max_seq_length=args.max_seq_length,
+            grad_checkpoint=args.grad_checkpoint,
+            beta=args.beta,
+            reference_model_path=args.reference_model_path,
+            gradient_accumulation_steps=args.gradient_accumulation_steps,
+            judge=args.judge,
+            max_completion_length=args.max_completion_length,
+        )
+
         print("Loading pretrained reference model")
         if args.reference_model_path:
             reference_model, _ = load(args.reference_model_path)

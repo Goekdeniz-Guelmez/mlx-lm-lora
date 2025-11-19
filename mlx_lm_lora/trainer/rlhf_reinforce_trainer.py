@@ -12,7 +12,6 @@ from tqdm import tqdm
 
 from .judge import LLMPPOJudge
 from .online_dpo_trainer import (
-    compute_score,
     generate_for_online_dpo,
     iterate_online_dpo_batches,
 )
@@ -22,7 +21,7 @@ from .sft_trainer import SFTTrainingArgs, grad_checkpoint
 @dataclass
 class RLHFReinforceTrainingArgs(SFTTrainingArgs):
     beta: float = field(
-        default=0.1, metadata={"help": "KL penalty coefficient for RLHF Reinforce training."}
+        default=0.1, metadata={"help": "KL penalty coefficient for RLHF training."}
     )
     judge: str = field(default=None, metadata={"help": "Path to reward model weights."})
     reference_model_path: str = field(
