@@ -217,7 +217,7 @@ def build_parser():
     return parser
 
 
-def train_model(args, model: nn.Module, tokenizer, train_set, valid_set, training_callback: TrainingCallback = None):
+def train_model(args, model: nn.Module, tokenizer, reference_model: nn.Module = None, judge_model: nn.Module = None, judge_tokenizer = None, train_set: CacheDataset = None, valid_set: CacheDataset = None, training_callback: TrainingCallback = None):
     mx.random.seed(args.seed)
     
     if args.iters is None and args.epochs is not None:
@@ -255,8 +255,8 @@ def train_model(args, model: nn.Module, tokenizer, train_set, valid_set, trainin
         train_orpo(
             model=model,
             optimizer=opt,
-            train_dataset=CacheDataset(train_set),
-            val_dataset=CacheDataset(valid_set),
+            train_dataset=train_set,
+            val_dataset=valid_set,
             args=ORPOTrainingArgs(
                 batch_size=args.batch_size, iters=args.iters, val_batches=args.val_batches,
                 steps_per_report=args.steps_per_report, steps_per_eval=args.steps_per_eval,
@@ -269,13 +269,12 @@ def train_model(args, model: nn.Module, tokenizer, train_set, valid_set, trainin
         )
     
     elif args.train_mode == "dpo":
-        reference_model = load_reference_model(args)
         train_dpo(
             model=model,
             ref_model=reference_model,
             optimizer=opt,
-            train_dataset=CacheDataset(train_set),
-            val_dataset=CacheDataset(valid_set),
+            train_dataset=train_set,
+            val_dataset=valid_set,
             args=DPOTrainingArgs(
                 batch_size=args.batch_size, iters=args.iters, val_batches=args.val_batches,
                 steps_per_report=args.steps_per_report, steps_per_eval=args.steps_per_eval,
@@ -289,9 +288,6 @@ def train_model(args, model: nn.Module, tokenizer, train_set, valid_set, trainin
         )
     
     elif args.train_mode in ["online_dpo", "ppo", "rlhf_reinforce", "xpo"]:
-        reference_model = load_reference_model(args)
-        judge_model, judge_tokenizer = load_judge_model(args, reference_model)
-        
         train_func = {
             "online_dpo": (train_online_dpo, OnlineDPOTrainingArgs),
             "ppo": (train_ppo, PPOTrainingArgs),
@@ -326,18 +322,18 @@ def train_model(args, model: nn.Module, tokenizer, train_set, valid_set, trainin
             judge_tokenizer=judge_tokenizer,
             judge_config=args.judge_config,
             optimizer=opt,
-            train_dataset=CacheDataset(train_set),
-            val_dataset=CacheDataset(valid_set),
+            train_dataset=train_set,
+            val_dataset=valid_set,
             args=train_func[1](**train_args_kwargs),
             training_callback=training_callback,
         )
-    
+
     elif args.train_mode == "cpo":
         train_cpo(
             model=model,
             optimizer=opt,
-            train_dataset=CacheDataset(train_set),
-            val_dataset=CacheDataset(valid_set),
+            train_dataset=train_set,
+            val_dataset=valid_set,
             args=CPOTrainingArgs(
                 batch_size=args.batch_size, iters=args.iters, val_batches=args.val_batches,
                 steps_per_report=args.steps_per_report, steps_per_eval=args.steps_per_eval,
@@ -364,8 +360,6 @@ def train_model(args, model: nn.Module, tokenizer, train_set, valid_set, trainin
                 print(f"Error: {str(e)}")
                 print(f"Available reward functions: {list_available_reward_functions()}")
                 return
-        
-        reference_model = load_reference_model(args) if args.reference_model_path or args.beta != 0 else None
         
         train_grpo(
             model=model,
@@ -402,21 +396,21 @@ def train_model(args, model: nn.Module, tokenizer, train_set, valid_set, trainin
                 gradient_accumulation_steps=args.gradient_accumulation_steps,
             ),
             optimizer=opt,
-            train_dataset=CacheDataset(train_set),
-            val_dataset=CacheDataset(valid_set),
+            train_dataset=train_set,
+            val_dataset=valid_set,
             training_callback=training_callback,
         )
     else:
         raise ValueError(f"The train mode {args.train_mode} does not exist.")
 
 
-def evaluate_model(args, model: nn.Module, tokenizer, test_set):
+def evaluate_model(args, model: nn.Module, tokenizer, reference_model: nn.Module = None, judge_model: nn.Module = None, judge_tokenizer = None, test_set: CacheDataset = None):
     """Evaluate model on test set based on training mode"""
     
     if args.train_mode == "orpo":
         test_loss, test_rewards, _, test_metrics = evaluate_orpo(
             model=model,
-            dataset=CacheDataset(test_set),
+            dataset=test_set,
             batch_size=args.batch_size,
             num_batches=args.test_batches,
             max_seq_length=args.max_seq_length,
@@ -429,11 +423,10 @@ def evaluate_model(args, model: nn.Module, tokenizer, test_set):
             print(f"  {metric_name}: {float(metric_value):.3f}")
     
     elif args.train_mode == "dpo":
-        reference_model = load_reference_model(args)
         test_loss, _, _, test_metrics = evaluate_dpo(
             model=model,
             ref_model=reference_model,
-            dataset=CacheDataset(test_set),
+            dataset=test_set,
             batch_size=args.batch_size,
             num_batches=args.test_batches,
             max_seq_length=args.max_seq_length,
@@ -450,7 +443,7 @@ def evaluate_model(args, model: nn.Module, tokenizer, test_set):
     elif args.train_mode == "cpo":
         test_loss, _, _, test_metrics = evaluate_cpo(
             model=model,
-            dataset=CacheDataset(test_set),
+            dataset=test_set,
             batch_size=args.batch_size,
             num_batches=args.test_batches,
             max_seq_length=args.max_seq_length,
@@ -465,16 +458,14 @@ def evaluate_model(args, model: nn.Module, tokenizer, test_set):
             print(f"  {metric_name}: {float(metric_value):.3f}")
     
     elif args.train_mode == "online_dpo":
-        reference_model = load_reference_model(args)
-        judge_model, judge_tokenizer = load_judge_model(args, reference_model)
-        
         test_loss, _, _, test_metrics = evaluate_online_dpo(
             model=model,
             tokenizer=tokenizer,
             ref_model=reference_model,
             judge_model=judge_model,
             judge_tokenizer=judge_tokenizer,
-            dataset=CacheDataset(test_set),
+            judge_config=args.judge_config,
+            dataset=test_set,
             batch_size=args.batch_size,
             num_batches=args.test_batches,
             max_seq_length=args.max_seq_length,
@@ -490,7 +481,6 @@ def evaluate_model(args, model: nn.Module, tokenizer, test_set):
             print(f"  {metric_name}: {float(metric_value):.3f}")
     
     elif args.train_mode == "ppo":
-        reference_model = load_reference_model(args)
         judge_model, judge_tokenizer = load_judge_model(args, reference_model)
         
         test_loss, _, _, test_metrics = evaluate_ppo(
@@ -498,8 +488,9 @@ def evaluate_model(args, model: nn.Module, tokenizer, test_set):
             tokenizer=tokenizer,
             ref_model=reference_model,
             judge_model=judge_model,
+            judge_config=args.judge_config,
             judge_tokenizer=judge_tokenizer,
-            dataset=CacheDataset(test_set),
+            dataset=test_set,
             batch_size=args.batch_size,
             num_batches=args.test_batches,
             max_seq_length=args.max_seq_length,
@@ -515,17 +506,14 @@ def evaluate_model(args, model: nn.Module, tokenizer, test_set):
             print(f"  {metric_name}: {float(metric_value):.3f}")
     
     elif args.train_mode == "rlhf_reinforce":
-        reference_model = load_reference_model(args)
-        judge_model, judge_tokenizer = load_judge_model(args, reference_model)
-        
         test_loss, _, _, test_metrics = evaluate_rlhf_reinforce(
             model=model,
             tokenizer=tokenizer,
             ref_model=reference_model,
             judge_model=judge_model,
             judge_tokenizer=judge_tokenizer,
-            dataset=CacheDataset(test_set),
             judge_config=args.judge_config,
+            dataset=test_set,
             batch_size=args.batch_size,
             num_batches=args.test_batches,
             max_seq_length=args.max_seq_length,
@@ -539,15 +527,14 @@ def evaluate_model(args, model: nn.Module, tokenizer, test_set):
             print(f"  {metric_name}: {float(metric_value):.3f}")
     
     elif args.train_mode == "xpo":
-        reference_model = load_reference_model(args)
-        judge_model, judge_tokenizer = load_judge_model(args, reference_model)
-        
         test_loss, _, _, test_metrics = evaluate_xpo(
             model=model,
+            tokenizer=tokenizer,
             ref_model=reference_model,
             judge_model=judge_model,
             judge_tokenizer=judge_tokenizer,
-            dataset=CacheDataset(test_set),
+            judge_config=args.judge_config,
+            dataset=test_set,
             batch_size=args.batch_size,
             num_batches=args.test_batches,
             max_seq_length=args.max_seq_length,
@@ -564,12 +551,10 @@ def evaluate_model(args, model: nn.Module, tokenizer, test_set):
             print(f"  {metric_name}: {float(metric_value):.3f}")
     
     elif args.train_mode == "grpo":
-        reference_model = load_reference_model(args) if args.reference_model_path or args.beta != 0 else model
-        
         test_loss, _, test_rewards = evaluate_grpo(
             model=model,
-            ref_model=reference_model.freeze() if reference_model != model else reference_model,
-            dataset=CacheDataset(test_set),
+            ref_model=reference_model,
+            dataset=test_set,
             tokenizer=tokenizer,
             batch_size=args.batch_size,
             num_batches=args.test_batches,
@@ -588,7 +573,7 @@ def evaluate_model(args, model: nn.Module, tokenizer, test_set):
     elif args.train_mode == "sft":
         test_loss = evaluate_sft(
             model=model,
-            dataset=CacheDataset(test_set),
+            dataset=test_set,
             batch_size=args.batch_size,
             num_batches=args.test_batches,
             max_seq_length=args.max_seq_length,
@@ -620,6 +605,9 @@ def run(args, training_callback: TrainingCallback = None):
         quanziation_config = {"bits": 8, "group_size": 64}
     
     model, tokenizer = from_pretrained(model=args.model, quantized_load=quanziation_config)
+    reference_model = load_reference_model(args) if args.train_mode in ["grpo", "online_dpo", "ppo", "rlhf_reinforce", "xpo"] else None
+    judge_model, judge_tokenizer = load_judge_model(args, reference_model) if args.train_mode in ["online_dpo", "ppo", "rlhf_reinforce", "xpo"] else (None, None)
+
     print("Loading datasets")
     train_set, valid_set, test_set = load_dataset(args, tokenizer)
     
@@ -628,13 +616,16 @@ def run(args, training_callback: TrainingCallback = None):
             load_adapters(model, args.adapter_path)
     elif args.train:
         print("Training")
-        train_model(args, model, tokenizer, train_set, valid_set, training_callback)
+        train_model(args, model, tokenizer, reference_model, judge_model, judge_tokenizer, CacheDataset(train_set), valid_set, training_callback)
     else:
         raise ValueError("Must provide at least one of --train or --test")
     
     if args.test:
         print("Testing")
-        evaluate_model(args, model, tokenizer, test_set)
+        evaluate_model(args, model, tokenizer, reference_model, judge_model, judge_tokenizer, CacheDataset(test_set))
+    
+    mx.clear_cache()
+    del reference_model, judge_model, judge_tokenizer
     
     if args.fuse and args.train:
         print("Fusing model")
@@ -642,9 +633,6 @@ def run(args, training_callback: TrainingCallback = None):
             model=model,
             tokenizer=tokenizer,
             save_path=args.adapter_path,
-            adapter_path=None,
-            de_quantize=True,
-            export_gguf=False,
         )
 
 

@@ -404,15 +404,12 @@ def run(args, training_callback: TrainingCallback = None):
         print("Testing")
         evaluate_model(args, model, tokenizer, test_set)
 
-    if args.fuse:
+    if args.fuse and args.train:
         print("Fusing model")
         fuse_and_save_model(
             model=model,
             tokenizer=tokenizer,
             save_path=args.adapter_path,
-            adapter_path=None,
-            de_quantize=True,
-            export_gguf=False,
         )
 
 
