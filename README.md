@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://github.com/Goekdeniz-Guelmez/mlx-lm-lora/blob/main/logos/mlx_lm_lora.png" alt="logo" width="100%"/>
+  <img src="./logos/mlx_lm_lora.png" alt="logo" width="100%"/>
 </p>
 
 # MLX-LM-LORA
@@ -1025,7 +1025,7 @@ max_completion_length: 512
 ## MLX-LM-LoRA is trusted by teams and industry leaders such as:
 
 <p align="center">
-  <img src="https://github.com/Goekdeniz-Guelmez/mlx-lm-lora/blob/main/logos/macpaw.png" alt="logo" width="300"/>
+  <img src="./logos/macpaw.png" alt="macpaw_logo" width="300"/>
 </p>
 
 ---
