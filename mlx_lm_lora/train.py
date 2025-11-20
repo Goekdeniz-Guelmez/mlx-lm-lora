@@ -34,6 +34,11 @@ from .trainer.online_dpo_trainer import (
     evaluate_online_dpo,
     train_online_dpo,
 )
+from .trainer.ppo_trainer import (
+    PPOTrainingArgs,
+    evaluate_ppo,
+    train_ppo,
+)
 from .trainer.orpo_trainer import ORPOTrainingArgs, evaluate_orpo, train_orpo
 from .trainer.rlhf_reinforce_trainer import RLHFReinforceTrainingArgs, evaluate_rlhf_reinforce, train_rlhf_reinforce
 from .trainer.sft_trainer import (
@@ -202,8 +207,8 @@ def build_parser():
         "--train-mode",
         type=str,
         default="sft",
-        choices=["sft", "dpo", "cpo", "orpo", "grpo", "online_dpo", "xpo", "rlhf_reinforce"],
-        help="Training mode: sft, dpo, rlhf_reinforce, online_dpo, xpo, cpo, orpo, or grpo, default is sft",
+        choices=["sft", "dpo", "cpo", "orpo", "grpo", "online_dpo", "xpo", "rlhf_reinforce", "ppo"],
+        help="Training mode: sft, dpo, ppo, rlhf_reinforce, online_dpo, xpo, cpo, orpo, or grpo, default is sft",
     )
     parser.add_argument(
         "--optimizer",
@@ -341,7 +346,7 @@ def build_parser():
         default=None,
     )
 
-    # Online DPO & XPO args
+    # Online DPO & PPO & XPO args
     parser.add_argument(
         "--judge",
         type=str,
@@ -604,6 +609,58 @@ def train_model(
             judge_model, judge_tokenizer = load(args.judge)
 
         train_online_dpo(
+            model=model,
+            tokenizer=tokenizer,
+            ref_model=reference_model.freeze(),
+            judge_model=judge_model.freeze(),
+            judge_tokenizer=judge_tokenizer,
+            judge_config=args.judge_config,
+            optimizer=opt,
+            train_dataset=CacheDataset(train_set),
+            val_dataset=CacheDataset(valid_set),
+            args=online_dpo_training_args,
+            training_callback=training_callback,
+        )
+
+    elif args.train_mode == "ppo":
+        online_dpo_training_args = PPOTrainingArgs(
+            batch_size=args.batch_size,
+            iters=args.iters,
+            val_batches=args.val_batches,
+            steps_per_report=args.steps_per_report,
+            steps_per_eval=args.steps_per_eval,
+            steps_per_save=args.save_every,
+            adapter_file=adapter_file,
+            max_seq_length=args.max_seq_length,
+            grad_checkpoint=args.grad_checkpoint,
+            beta=args.beta,
+            loss_type=args.dpo_cpo_loss_type,
+            delta=args.delta,
+            reference_model_path=args.reference_model_path,
+            gradient_accumulation_steps=args.gradient_accumulation_steps,
+            judge=args.judge,
+            max_completion_length=args.max_completion_length,
+            temperature=args.temperature,
+            epsilon=args.epsilon
+        )
+
+        print("Loading pretrained reference model")
+        if args.reference_model_path:
+            reference_model, _ = load(args.reference_model_path)
+        else:
+            reference_model, _ = load(args.model)
+
+        print("Loading pretrained judge model")
+        if args.judge:
+            if args.judge == args.reference_model_path:
+                judge_model = reference_model
+                judge_tokenizer = load_tokenizer(args.judge)
+            else:
+                judge_model, judge_tokenizer = load(args.judge)
+        else:
+            judge_model, judge_tokenizer = load(args.judge)
+
+        train_ppo(
             model=model,
             tokenizer=tokenizer,
             ref_model=reference_model.freeze(),
@@ -892,6 +949,26 @@ def evaluate_model(args, model: nn.Module, tokenizer, test_set):
             num_batches=args.test_batches,
             max_seq_length=args.max_seq_length,
             beta=args.beta,
+            loss_type=args.dpo_cpo_loss_type,
+            judge=args.judge,
+            max_tokens=args.max_completion_length,
+        )
+    
+    elif args.train_mode == "ppo":
+        if args.reference_model_path:
+            reference_model, _ = load(args.reference_model_path)
+        else:
+            reference_model, _ = load(args.model)
+
+        test_loss, _, _, test_metrics = evaluate_ppo(
+            model=model,
+            ref_model=reference_model.freeze(),
+            dataset=test_set,
+            batch_size=args.batch_size,
+            num_batches=args.test_batches,
+            max_seq_length=args.max_seq_length,
+            beta=args.beta,
+            epsilon=args.epsilon,
             loss_type=args.dpo_cpo_loss_type,
             judge=args.judge,
             max_tokens=args.max_completion_length,

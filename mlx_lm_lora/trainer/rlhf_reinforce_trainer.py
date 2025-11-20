@@ -12,7 +12,6 @@ from tqdm import tqdm
 
 from .judge import LLMPPOJudge
 from .online_dpo_trainer import (
-    compute_score,
     generate_for_online_dpo,
     iterate_online_dpo_batches,
 )
@@ -22,7 +21,7 @@ from .sft_trainer import SFTTrainingArgs, grad_checkpoint
 @dataclass
 class RLHFReinforceTrainingArgs(SFTTrainingArgs):
     beta: float = field(
-        default=0.1, metadata={"help": "KL penalty coefficient for RLHF Reinforce training."}
+        default=0.1, metadata={"help": "KL penalty coefficient for RLHF training."}
     )
     judge: str = field(default=None, metadata={"help": "Path to reward model weights."})
     reference_model_path: str = field(
@@ -49,6 +48,13 @@ def rlhf_reinforce_loss(
     masks: mx.array,
     beta: float,
 ):
+    """
+    KL-regularized REINFORCE loss for RLHF.
+    
+    Computes per-token log-probs for the sampled trajectory,
+    applies a KL penalty against a reference model, and uses
+    (reward - beta * KL) as the advantage signal.
+    """
     # Compute log probabilities for actual tokens
     labels = mx.argmax(policy_logits, axis=-1)
     policy_log_probs = -nn.losses.cross_entropy(policy_logits, labels, reduction="none")
