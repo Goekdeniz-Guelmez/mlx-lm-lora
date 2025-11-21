@@ -50,7 +50,7 @@ def rlhf_reinforce_loss(
 ):
     """
     KL-regularized REINFORCE loss for RLHF.
-    
+
     Computes per-token log-probs for the sampled trajectory,
     applies a KL penalty against a reference model, and uses
     (reward - beta * KL) as the advantage signal.

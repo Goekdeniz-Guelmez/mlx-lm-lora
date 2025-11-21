@@ -219,7 +219,9 @@ elif args.test_split is None:
     valid_dataset = Dataset.from_list(records[split_idx:])
     train_dataset.to_parquet(train_parquet_path)
     valid_dataset.to_parquet(valid_parquet_path)
-    print(f"Saved {len(train_dataset)} training and {len(valid_dataset)} validation examples")
+    print(
+        f"Saved {len(train_dataset)} training and {len(valid_dataset)} validation examples"
+    )
 
 elif args.valid_split is None:
     split_idx = int(len(records) * (1 - args.test_split))
@@ -238,4 +240,6 @@ else:
     train_dataset.to_parquet(train_parquet_path)
     valid_dataset.to_parquet(valid_parquet_path)
     test_dataset.to_parquet(test_parquet_path)
-    print(f"Saved {len(train_dataset)} training, {len(valid_dataset)} validation, and {len(test_dataset)} test examples.")
+    print(
+        f"Saved {len(train_dataset)} training, {len(valid_dataset)} validation, and {len(test_dataset)} test examples."
+    )
