@@ -1,6 +1,5 @@
 import time
 from dataclasses import dataclass, field
-from functools import partial
 from pathlib import Path
 
 import mlx.core as mx
@@ -319,7 +318,6 @@ def train_dpo(
 
     loss_value_and_grad = nn.value_and_grad(model, loss_wrapper)
 
-    @partial(mx.compile, inputs=state, outputs=state)
     def step(batch, prev_grad, do_update):
         chosen, rejected, chosen_masks, rejected_masks = batch
 

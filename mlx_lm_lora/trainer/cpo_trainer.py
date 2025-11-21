@@ -1,5 +1,4 @@
 import time
-from functools import partial
 from pathlib import Path
 
 import mlx.core as mx
@@ -230,7 +229,6 @@ def train_cpo(
 
     state = [model.state, optimizer.state, mx.random.state]
 
-    @partial(mx.compile, inputs=state, outputs=state)
     def step(batch, prev_grad, do_update):
         chosen, rejected, chosen_masks, rejected_masks = batch
 
