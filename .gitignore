@@ -141,4 +141,11 @@ dmypy.json
 test*.txt
 .test*.txt
 
+
+test*.ipynb
+.test*.ipynb
+
+examples/test*
+.examples/test*
+
 *adapters*

@@ -1,6 +1,5 @@
 import time
 from dataclasses import dataclass, field
-from functools import partial
 from pathlib import Path
 
 import mlx.core as mx
@@ -16,7 +15,7 @@ from .online_dpo_trainer import (
     OnlineDPOTrainingArgs,
     compute_score,
     generate_for_online_dpo,
-    iterate_online_dpo_batches
+    iterate_online_dpo_batches,
 )
 from .sft_trainer import grad_checkpoint
 
@@ -41,44 +40,48 @@ def ppo_loss(
     # Compute log ratios for chosen and rejected sequences
     chosen_log_ratios = policy_chosen_score - reference_chosen_score
     rejected_log_ratios = policy_rejected_score - reference_rejected_score
-    
+
     chosen_ratios = mx.exp(chosen_log_ratios)
     rejected_ratios = mx.exp(rejected_log_ratios)
-    
+
     # Compute advantages (difference between chosen and rejected rewards)
     advantages = policy_chosen_score - policy_rejected_score
-    
+
     # Normalize advantages
     advantage_mean = mx.mean(advantages)
     advantage_std = mx.sqrt(mx.var(advantages) + 1e-8)
     normalized_advantages = (advantages - advantage_mean) / advantage_std
-    
+
     # PPO clipped objective for chosen sequences
     chosen_surr1 = chosen_ratios * normalized_advantages
-    chosen_surr2 = mx.clip(chosen_ratios, 1.0 - epsilon, 1.0 + epsilon) * normalized_advantages
+    chosen_surr2 = (
+        mx.clip(chosen_ratios, 1.0 - epsilon, 1.0 + epsilon) * normalized_advantages
+    )
     chosen_policy_losses = -mx.minimum(chosen_surr1, chosen_surr2)
-    
+
     # PPO clipped objective for rejected sequences (negative advantages)
     rejected_surr1 = rejected_ratios * (-normalized_advantages)
-    rejected_surr2 = mx.clip(rejected_ratios, 1.0 - epsilon, 1.0 + epsilon) * (-normalized_advantages)
+    rejected_surr2 = mx.clip(rejected_ratios, 1.0 - epsilon, 1.0 + epsilon) * (
+        -normalized_advantages
+    )
     rejected_policy_losses = -mx.minimum(rejected_surr1, rejected_surr2)
-    
+
     # Combine losses
     policy_loss = mx.mean(chosen_policy_losses) + mx.mean(rejected_policy_losses)
-    
+
     # KL penalty
     kl_penalty = beta * (mx.mean(chosen_log_ratios) + mx.mean(rejected_log_ratios))
-    
+
     total_loss = policy_loss + kl_penalty
-    
+
     # Calculate total tokens
     num_tokens = chosen_masks.sum() + rejected_masks.sum()
-    
+
     # Rewards
     chosen_reward = beta * (policy_chosen_score - reference_chosen_score)
     rejected_reward = beta * (policy_rejected_score - reference_rejected_score)
     reward = mx.stack([mx.mean(chosen_reward), mx.mean(rejected_reward)])
-    
+
     # Metrics
     metrics = {
         "policy_loss": policy_loss,
@@ -86,18 +89,22 @@ def ppo_loss(
         "advantages_mean": mx.mean(normalized_advantages),
         "ratios_mean": mx.mean(mx.concatenate([chosen_ratios, rejected_ratios])),
         "clip_fraction": mx.mean(
-            (mx.abs(mx.concatenate([chosen_ratios, rejected_ratios]) - 1.0) > epsilon).astype(mx.float32)
+            (
+                mx.abs(mx.concatenate([chosen_ratios, rejected_ratios]) - 1.0) > epsilon
+            ).astype(mx.float32)
         ),
         "policy_chosen_logps": mx.mean(policy_chosen_score),
         "policy_rejected_logps": mx.mean(policy_rejected_score),
         "reference_chosen_logps": mx.mean(reference_chosen_score),
         "reference_rejected_logps": mx.mean(reference_rejected_score),
-        "accuracies": mx.mean((policy_chosen_score > policy_rejected_score).astype(mx.float32)),
+        "accuracies": mx.mean(
+            (policy_chosen_score > policy_rejected_score).astype(mx.float32)
+        ),
         "margins": mx.mean(policy_chosen_score - policy_rejected_score),
         "chosen_logits_mean": mx.mean(policy_chosen_score),
         "rejected_logits_mean": mx.mean(policy_rejected_score),
     }
-    
+
     mx.clear_cache()
     return total_loss, reward, num_tokens, metrics
 
@@ -285,7 +292,7 @@ def train_ppo(
     train_dataset,
     val_dataset,
     judge_config,
-    args: OnlineDPOTrainingArgs = OnlineDPOTrainingArgs(),
+    args: PPOTrainingArgs = PPOTrainingArgs(),
     judge_model: mx.array = None,
     judge_tokenizer: mx.array = None,
     loss_fn: callable = ppo_loss,
@@ -467,7 +474,7 @@ def train_ppo(
     n_tokens = 0
     steps = 0
     trained_tokens = 0
-    
+
     accumulated_metrics = {
         "policy_loss": 0,
         "kl_penalty": 0,

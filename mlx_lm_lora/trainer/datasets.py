@@ -141,18 +141,18 @@ class PromptDataset:
         self._data = data
         self.chat_key = prompt_key
         self.tokenizer = tokenizer
-    
+
     def process(self, d):
         messages = d[self.chat_key]
-        
+
         if isinstance(messages, list) and all(
-            isinstance(msg, dict) and "role" in msg and "content" in msg 
+            isinstance(msg, dict) and "role" in msg and "content" in msg
             for msg in messages
         ):
             chat_messages = messages
         else:
             chat_messages = [{"role": "user", "content": str(messages)}]
-        
+
         return {
             "prompt": self.tokenizer.apply_chat_template(
                 chat_messages, add_generation_prompt=True
@@ -161,10 +161,10 @@ class PromptDataset:
                 chat_messages, add_generation_prompt=True, tokenize=False
             ),
         }
-    
+
     def __getitem__(self, idx: int):
         return self._data[idx]
-    
+
     def __len__(self):
         return len(self._data)
 
