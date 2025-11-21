@@ -293,7 +293,7 @@ def train_ppo(
     train_dataset,
     val_dataset,
     judge_config,
-    args: OnlineDPOTrainingArgs = OnlineDPOTrainingArgs(),
+    args: PPOTrainingArgs = PPOTrainingArgs(),
     judge_model: mx.array = None,
     judge_tokenizer: mx.array = None,
     loss_fn: callable = ppo_loss,

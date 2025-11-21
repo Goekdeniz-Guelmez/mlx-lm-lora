@@ -1,6 +1,5 @@
 import time
 from dataclasses import dataclass, field
-from functools import partial
 from pathlib import Path
 from typing import Union
 
