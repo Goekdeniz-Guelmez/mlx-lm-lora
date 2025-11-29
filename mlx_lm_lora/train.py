@@ -936,7 +936,7 @@ def run(args, training_callback: TrainingCallback = None):
             judge_model,
             judge_tokenizer,
             CacheDataset(train_set),
-            valid_set,
+            CacheDataset(valid_set),
             training_callback,
         )
     else:
