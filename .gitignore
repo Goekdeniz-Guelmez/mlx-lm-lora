@@ -148,4 +148,11 @@ test*.ipynb
 examples/test*
 .examples/test*
 
+examples/*/
+.examples/*/
+
+*azure*
+.*azure*
+
+
 *adapters*

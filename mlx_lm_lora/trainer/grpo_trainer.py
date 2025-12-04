@@ -8,7 +8,7 @@ import mlx.core as mx
 import mlx.nn as nn
 import numpy as np
 from mlx.utils import tree_flatten, tree_map
-from mlx_lm.generate import generate, make_sampler
+from mlx_lm.generate import generate, make_sampler, batch_generate
 from mlx_lm.models import cache
 from mlx_lm.tuner.callbacks import TrainingCallback
 from tqdm import tqdm
@@ -106,65 +106,85 @@ def generate_grpo(
     group_size: int,
     temperature: float,
     batch_size: int,
-    end_token: str = "</answer>",
+    end_token: str,
 ):
+    was_training = model.training
     model.eval()
-    all_completions = []
-    all_completion_texts = []
-    batch_indices = []
-
-    total_samples = len(prompt_tokens)
-
-    for i in range(0, total_samples, batch_size):
-        current_batch_size = min(batch_size, total_samples - i)
-        batch_prompts = prompt_tokens[i : i + current_batch_size]
-
-        for j, prompt in enumerate(batch_prompts):
-            for k in range(group_size):
-                prompt_text = tokenizer.decode(prompt)
-                sampler = make_sampler(
-                    temperature,
-                    top_p=1.0,
-                    min_p=0.0,
-                    min_tokens_to_keep=1,
-                    top_k=0,
-                    xtc_probability=0.0,
-                    xtc_threshold=0.0,
-                    xtc_special_tokens=tokenizer.encode("\n")
-                    + list(tokenizer.eos_token_ids),
-                )
-
-                prompt_cache = cache.make_prompt_cache(model)
-                completion: str | List[int] = generate(
-                    model=model,
-                    tokenizer=tokenizer,
-                    prompt=prompt_text,
-                    max_tokens=max_tokens,
-                    verbose=False,
-                    sampler=sampler,
-                    prompt_cache=prompt_cache,
-                )
-
-                if isinstance(completion, str):
-                    completion_ids = tokenizer.encode(completion)
-                else:
-                    completion_ids = completion
-
-                if end_token:
+    try:
+        all_completions = []
+        all_completion_texts = []
+        batch_indices = []
+        
+        total_samples = len(prompt_tokens)
+        
+        # Try to add end_token as EOS token, fall back to manual stripping if it fails
+        use_eos_token = False
+        if end_token:
+            try:
+                tokenizer.add_eos_token(end_token)
+                use_eos_token = True
+            except ValueError:
+                # Token doesn't exist in vocabulary, will strip manually instead
+                use_eos_token = False
+        
+        for i in range(0, total_samples, batch_size):
+            current_batch_size = min(batch_size, total_samples - i)
+            batch_prompts = prompt_tokens[i : i + current_batch_size]
+            
+            # Prepare batch of prompts repeated group_size times
+            batched_prompts = []
+            batched_indices = []
+            for j, prompt in enumerate(batch_prompts):
+                for k in range(group_size):
+                    batched_prompts.append(prompt)
+                    batched_indices.append(i + j)
+            
+            # Create sampler
+            sampler = make_sampler(
+                temperature,
+                top_p=0.95,
+                min_p=0.05,
+                min_tokens_to_keep=1,
+                top_k=20,
+                xtc_probability=0.0,
+                xtc_threshold=0.0,
+                xtc_special_tokens=tokenizer.encode("\n")
+                + list(tokenizer.eos_token_ids),
+            )
+            
+            # Use batch_generate
+            result = batch_generate(
+                model=model,
+                tokenizer=tokenizer,
+                prompts=batched_prompts,
+                max_tokens=max_tokens,
+                sampler=sampler,
+                verbose=False,
+            )
+            
+            # Process results
+            for idx, completion_text in enumerate(result.texts):
+                completion_ids = tokenizer.encode(completion_text)
+                
+                # If we couldn't add as EOS token, strip it manually
+                if not use_eos_token and end_token:
                     end_sequence = tokenizer.encode(end_token)
                     if (
                         len(completion_ids) >= len(end_sequence)
-                        and completion_ids[-len(end_sequence) :] == end_sequence
+                        and completion_ids[-len(end_sequence):] == end_sequence
                     ):
-                        completion_ids = completion_ids[: -len(end_sequence)]
-
+                        completion_ids = completion_ids[:-len(end_sequence)]
+                
                 completion_ids = mx.array(completion_ids)
                 all_completions.append(mx.stop_gradient(completion_ids))
-                all_completion_texts.append(completion)
-                batch_indices.append(i + j)
-
-    mx.clear_cache()
-    return all_completions, all_completion_texts, batch_indices
+                all_completion_texts.append(completion_text)
+                batch_indices.append(batched_indices[idx])
+        
+        mx.clear_cache()
+        return all_completions, all_completion_texts, batch_indices
+    finally:
+        if was_training:
+            model.train()
 
 
 def grpo_loss(
@@ -186,6 +206,7 @@ def grpo_loss(
     batch_size: int = 1,
     importance_sampling_level: str = "token",
     grpo_loss_type: str = "grpo",
+    end_answer_token: str = "</answer>"
 ):
     prompt_tokens, _, prompt_text, answer_text, type_info = batch
 
@@ -206,6 +227,7 @@ def grpo_loss(
             group_size=group_size,
             temperature=temperature,
             batch_size=batch_size,
+            end_token=end_answer_token
         )
 
     if not all_completions:
@@ -460,6 +482,16 @@ def grpo_loss(
             reward_metrics[f"{func_name}_std"] = float("nan")
             reward_metrics[f"{func_name}_coverage"] = 0.0
 
+    # Calculate token generation statistics
+    completion_lengths = [comp.shape[0] for comp in all_completions]
+    max_generated = max(completion_lengths) if completion_lengths else 0
+    min_generated = min(completion_lengths) if completion_lengths else 0
+    avg_generated = sum(completion_lengths) / len(completion_lengths) if completion_lengths else 0
+    
+    # Count how many hit the max token limit
+    hit_max_tokens = sum(1 for length in completion_lengths if length >= max_tokens)
+    hit_max_ratio = hit_max_tokens / len(completion_lengths) if completion_lengths else 0
+    
     grouped_rewards_mean = mx.array(
         [mx.mean(mx.array(rewards)) for rewards in rewards_by_prompt]
     )
@@ -476,7 +508,10 @@ def grpo_loss(
         "grouped_rewards_mean": mx.mean(grouped_rewards_mean),
         "grouped_rewards_std": mx.mean(grouped_rewards_std),
         "kl": mean_kl,
-        "average_generated_tokens": len(all_completion_texts) // len(batch_indices),
+        "average_generated_tokens": avg_generated,
+        "max_generated_tokens": max_generated,
+        "min_generated_tokens": min_generated,
+        "hit_max_tokens_ratio": hit_max_ratio,
         "clip_ratio_low": (
             (is_low_clipped * length_mask).sum() / length_mask.sum()
             if length_mask.sum() > 0
@@ -648,6 +683,7 @@ def train_grpo(
     loss_fn: callable = grpo_loss,
     iterate_batches: callable = iterate_grpo_batches,
     training_callback: TrainingCallback = None,
+    end_answer_token: str = "</answer>"
 ):
     mx.set_wired_limit(mx.metal.device_info()["max_recommended_working_set_size"])
     tqdm.write(f"Starting training..., iters: {args.iters}")
@@ -667,7 +703,7 @@ def train_grpo(
     state = [model.state, optimizer.state, mx.random.state]
 
     def step(batch, prev_grad, do_update):
-        prompt_tokens, targets, prompt_lens, target_lens, type_info = batch
+        prompt_tokens, answer_tokens, prompt_text, answer_text, type_info = batch
 
         all_completions, all_completion_texts, batch_indices = generate_grpo(
             model=model,
@@ -677,6 +713,7 @@ def train_grpo(
             group_size=args.group_size,
             temperature=args.temperature,
             batch_size=args.batch_size,
+            end_token=end_answer_token
         )
 
         mx.clear_cache()
@@ -684,7 +721,7 @@ def train_grpo(
         (lvalue, toks, metrics), grad = loss_value_and_grad(
             model,
             tokenizer=tokenizer,
-            batch=(prompt_tokens, targets, prompt_lens, target_lens, type_info),
+            batch=(prompt_tokens, answer_tokens, prompt_text, answer_text, type_info),
             completions=all_completions,
             completion_texts=all_completion_texts,
             batch_indices=batch_indices,
@@ -725,6 +762,9 @@ def train_grpo(
         "grouped_rewards_std": 0,
         "kl": 0,
         "average_generated_tokens": 0,
+        "max_generated_tokens": 0,
+        "min_generated_tokens": 0,
+        "hit_max_tokens_ratio": 0,
         "clip_ratio_low": 0,
         "clip_ratio_high": 0,
         "clip_ratio_total": 0,
@@ -816,24 +856,63 @@ def train_grpo(
             peak_mem = mx.get_peak_memory() / 1e9
 
             if rank == 0:
+                avg_metrics = {}
+                for k, v in accumulated_metrics.items():
+                    accumulated_v = v / (steps * world_size)
+                    if isinstance(accumulated_v, mx.array):
+                        avg_metrics[k] = float(accumulated_v.item())
+                    else:
+                        avg_metrics[k] = float(accumulated_v)
+
                 pbar.set_postfix(
                     {
                         "loss": f"{train_loss:.3f}",
                         "it/s": f"{it_sec:.3f}",
                     }
                 )
+                reward_metrics_str = ""
+                for reward_func in reward_funcs:
+                    func_name = reward_func.__name__
+                    mean_key = f"{func_name}_mean"
+                    std_key = f"{func_name}_std"
+                    cov_key = f"{func_name}_coverage"
+                    
+                    if mean_key in avg_metrics:
+                        display_name = func_name.replace("_reward_func", "").replace("r1_", "")
+                        reward_metrics_str += (
+                            f"  • {display_name}: "
+                            f"μ={avg_metrics[mean_key]:.3f}, "
+                            f"σ={avg_metrics[std_key]:.3f}, "
+                            f"cov={avg_metrics[cov_key]:.2%}\n"
+                        )
                 tqdm.write(
-                    f"\nIter {it}: "
-                    f"loss {train_loss:.3f}, "
-                    f"total_r_mean {avg_metrics['total_rewards_mean']:.3f}, "
-                    f"total_r_std {avg_metrics['total_rewards_std']:.3f}, "
-                    f"group_r_mean {avg_metrics['grouped_rewards_mean']:.3f}, "
-                    f"group_r_std {avg_metrics['grouped_rewards_std']:.3f}, "
-                    f"kl {avg_metrics['kl']:.3f}, "
-                    f"lr {learning_rate:.3e}, "
-                    f"it/s {it_sec:.3f}, "
-                    f"tok/s {tokens_sec:.3f}, "
-                    f"peak_mem {peak_mem:.3f}GB"
+                    f"\n{'='*80}\n"
+                    f"Iter {it}:\n"
+                    f"{'-'*80}\n"
+                    f"Loss: {train_loss:.3f}\n"
+                    f"Total Rewards:  μ={avg_metrics['total_rewards_mean']:.3f}, "
+                    f"σ={avg_metrics['total_rewards_std']:.3f}\n"
+                    f"Group Rewards:  μ={avg_metrics['grouped_rewards_mean']:.3f}, "
+                    f"σ={avg_metrics['grouped_rewards_std']:.3f}\n"
+                    f"KL Divergence: {avg_metrics['kl']:.6f}\n"
+                    f"{'-'*80}\n"
+                    f"Generation Stats:\n"
+                    f"  • Avg tokens: {avg_metrics['average_generated_tokens']:.1f}\n"
+                    f"  • Min tokens: {avg_metrics['min_generated_tokens']:.0f}\n"
+                    f"  • Max tokens: {avg_metrics['max_generated_tokens']:.0f} "
+                    f"(limit: {args.max_completion_length})\n"
+                    f"  • Hit limit: {avg_metrics['hit_max_tokens_ratio']:.1%}\n"
+                    f"{'-'*80}\n"
+                    f"Individual Reward Functions:\n"
+                    f"{reward_metrics_str}"
+                    f"{'-'*80}\n"
+                    f"Clipping:  low={avg_metrics['clip_ratio_low']:.3f}, "
+                    f"high={avg_metrics['clip_ratio_high']:.3f}, "
+                    f"total={avg_metrics['clip_ratio_total']:.3f}\n"
+                    f"Learning Rate: {learning_rate:.4e}\n"
+                    f"Speed: {it_sec:.3f} it/s, {tokens_sec:.1f} tok/s\n"
+                    f"Memory: {peak_mem:.3f}GB\n"
+                    f"{'='*80}\n"
                 )
 
             if training_callback is not None:
