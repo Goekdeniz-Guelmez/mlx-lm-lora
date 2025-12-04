@@ -30,6 +30,10 @@ class GRPOTrainingArgs(SFTTrainingArgs):
         default=4,
         metadata={"help": "Number of responses per prompt."},
     )
+    low_mem_usage: bool = field(
+        default=True,
+        metadata={"help": "Will be using normal generating, instead of batch generator."},
+    )
     beta: float = field(default=0.1, metadata={"help": "KL penalty coefficient."})
     epsilon: float = field(
         default=1e-4, metadata={"help": "The Epsilon for numerical stability."}
@@ -107,6 +111,7 @@ def generate_grpo(
     temperature: float,
     batch_size: int,
     end_token: str,
+    low_mem_usage: bool,
 ):
     was_training = model.training
     model.eval()
@@ -114,7 +119,6 @@ def generate_grpo(
         all_completions = []
         all_completion_texts = []
         batch_indices = []
-        
         total_samples = len(prompt_tokens)
         
         # Try to add end_token as EOS token, fall back to manual stripping if it fails
@@ -127,65 +131,99 @@ def generate_grpo(
                 # Token doesn't exist in vocabulary, will strip manually instead
                 use_eos_token = False
         
+        # Create sampler once
+        sampler = make_sampler(
+            temperature,
+            top_p=0.95,
+            min_p=0.05,
+            min_tokens_to_keep=1,
+            top_k=20,
+            xtc_probability=0.0,
+            xtc_threshold=0.0,
+            xtc_special_tokens=tokenizer.encode("\n")
+                + list(tokenizer.eos_token_ids),
+        )
+        
         for i in range(0, total_samples, batch_size):
             current_batch_size = min(batch_size, total_samples - i)
             batch_prompts = prompt_tokens[i : i + current_batch_size]
             
-            # Prepare batch of prompts repeated group_size times
-            batched_prompts = []
-            batched_indices = []
-            for j, prompt in enumerate(batch_prompts):
-                for k in range(group_size):
-                    batched_prompts.append(prompt)
-                    batched_indices.append(i + j)
-            
-            # Create sampler
-            sampler = make_sampler(
-                temperature,
-                top_p=0.95,
-                min_p=0.05,
-                min_tokens_to_keep=1,
-                top_k=20,
-                xtc_probability=0.0,
-                xtc_threshold=0.0,
-                xtc_special_tokens=tokenizer.encode("\n")
-                + list(tokenizer.eos_token_ids),
-            )
-            
-            # Use batch_generate
-            result = batch_generate(
-                model=model,
-                tokenizer=tokenizer,
-                prompts=batched_prompts,
-                max_tokens=max_tokens,
-                sampler=sampler,
-                verbose=False,
-            )
-            
-            # Process results
-            for idx, completion_text in enumerate(result.texts):
-                completion_ids = tokenizer.encode(completion_text)
+            if low_mem_usage:
+                # Low memory mode: generate one at a time
+                for j, prompt in enumerate(batch_prompts):
+                    for k in range(group_size):
+                        # Generate single completion
+                        completion_text = generate(
+                            model=model,
+                            tokenizer=tokenizer,
+                            prompt=prompt,
+                            max_tokens=max_tokens,
+                            sampler=sampler,
+                            verbose=False,
+                        )
+                        
+                        completion_ids = tokenizer.encode(completion_text)
+                        
+                        # If we couldn't add as EOS token, strip it manually
+                        if not use_eos_token and end_token:
+                            end_sequence = tokenizer.encode(end_token)
+                            if (
+                                len(completion_ids) >= len(end_sequence)
+                                and completion_ids[-len(end_sequence):] == end_sequence
+                            ):
+                                completion_ids = completion_ids[:-len(end_sequence)]
+                        
+                        completion_ids = mx.array(completion_ids)
+                        all_completions.append(mx.stop_gradient(completion_ids))
+                        all_completion_texts.append(completion_text)
+                        batch_indices.append(i + j)
+                        
+                        mx.clear_cache()
+            else:
+                # High memory mode: batch generate
+                batched_prompts = []
+                batched_indices = []
+                for j, prompt in enumerate(batch_prompts):
+                    for k in range(group_size):
+                        batched_prompts.append(prompt)
+                        batched_indices.append(i + j)
                 
-                # If we couldn't add as EOS token, strip it manually
-                if not use_eos_token and end_token:
-                    end_sequence = tokenizer.encode(end_token)
-                    if (
-                        len(completion_ids) >= len(end_sequence)
-                        and completion_ids[-len(end_sequence):] == end_sequence
-                    ):
-                        completion_ids = completion_ids[:-len(end_sequence)]
+                # Use batch_generate
+                result = batch_generate(
+                    model=model,
+                    tokenizer=tokenizer,
+                    prompts=batched_prompts,
+                    max_tokens=max_tokens,
+                    sampler=sampler,
+                    verbose=False,
+                )
                 
-                completion_ids = mx.array(completion_ids)
-                all_completions.append(mx.stop_gradient(completion_ids))
-                all_completion_texts.append(completion_text)
-                batch_indices.append(batched_indices[idx])
+                # Process results
+                for idx, completion_text in enumerate(result.texts):
+                    completion_ids = tokenizer.encode(completion_text)
+                    
+                    # If we couldn't add as EOS token, strip it manually
+                    if not use_eos_token and end_token:
+                        end_sequence = tokenizer.encode(end_token)
+                        if (
+                            len(completion_ids) >= len(end_sequence)
+                            and completion_ids[-len(end_sequence):] == end_sequence
+                        ):
+                            completion_ids = completion_ids[:-len(end_sequence)]
+                    
+                    completion_ids = mx.array(completion_ids)
+                    all_completions.append(mx.stop_gradient(completion_ids))
+                    all_completion_texts.append(completion_text)
+                    batch_indices.append(batched_indices[idx])
+                
+                mx.clear_cache()
         
-        mx.clear_cache()
         if not all_completions:
             raise ValueError(
                 "No valid completions generated. Check that prompts are not empty "
                 "and end_token configuration is correct."
             )
+        
         return all_completions, all_completion_texts, batch_indices
     finally:
         if was_training:
@@ -232,7 +270,8 @@ def grpo_loss(
             group_size=group_size,
             temperature=temperature,
             batch_size=batch_size,
-            end_token=end_answer_token
+            end_token=end_answer_token,
+            low_mem_usage=True
         )
 
     if not all_completions:
@@ -718,7 +757,8 @@ def train_grpo(
             group_size=args.group_size,
             temperature=args.temperature,
             batch_size=args.batch_size,
-            end_token=end_answer_token
+            end_token=end_answer_token,
+            low_mem_usage=args.low_mem_usage,
         )
 
         mx.clear_cache()

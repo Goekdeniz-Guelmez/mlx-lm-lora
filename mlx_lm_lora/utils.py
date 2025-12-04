@@ -13,7 +13,8 @@ from mlx_lm.utils import (
     load,
     save_config,
     save_model,
-    dequantize_model
+    dequantize_model,
+    quantize_model
 )
 
 
@@ -58,7 +59,7 @@ def fuse_and_save_model(
     args = vars(model.args)
   
     fused_linears = [
-        (n, m.fuse(de_quantize=de_quantize))
+        (n, m.fuse())
         for n, m in model.named_modules()
         if hasattr(m, "fuse")
     ]
@@ -153,8 +154,9 @@ def from_pretrained(
 
         bits = quantized_load.get("bits", 4)
         group_size = quantized_load.get("group_size", 128)
+        mode = quantized_load.get("mode", "affine")
 
-        nn.quantize(model, bits=bits, group_size=group_size)
+        nn.quantize(model, bits=bits, group_size=group_size, mode=mode)
 
         if hasattr(model, "args"):
             model.args.quantization = {"group_size": group_size, "bits": bits}
