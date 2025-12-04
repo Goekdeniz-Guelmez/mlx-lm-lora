@@ -30,10 +30,6 @@ class GRPOTrainingArgs(SFTTrainingArgs):
         default=4,
         metadata={"help": "Number of responses per prompt."},
     )
-    low_mem_usage: bool = field(
-        default=True,
-        metadata={"help": "Will be using normal generating, instead of batch generator."},
-    )
     beta: float = field(default=0.1, metadata={"help": "KL penalty coefficient."})
     epsilon: float = field(
         default=1e-4, metadata={"help": "The Epsilon for numerical stability."}
@@ -111,7 +107,6 @@ def generate_grpo(
     temperature: float,
     batch_size: int,
     end_token: str,
-    low_mem_usage: bool,
 ):
     was_training = model.training
     model.eval()
@@ -119,113 +114,84 @@ def generate_grpo(
         all_completions = []
         all_completion_texts = []
         batch_indices = []
+        
         total_samples = len(prompt_tokens)
         
-        # Try to add end_token as EOS token, fall back to manual stripping if it fails
         use_eos_token = False
         if end_token:
             try:
                 tokenizer.add_eos_token(end_token)
                 use_eos_token = True
             except ValueError:
-                # Token doesn't exist in vocabulary, will strip manually instead
                 use_eos_token = False
-        
-        # Create sampler once
-        sampler = make_sampler(
-            temperature,
-            top_p=0.95,
-            min_p=0.05,
-            min_tokens_to_keep=1,
-            top_k=20,
-            xtc_probability=0.0,
-            xtc_threshold=0.0,
-            xtc_special_tokens=tokenizer.encode("\n")
-                + list(tokenizer.eos_token_ids),
-        )
         
         for i in range(0, total_samples, batch_size):
             current_batch_size = min(batch_size, total_samples - i)
             batch_prompts = prompt_tokens[i : i + current_batch_size]
             
-            if low_mem_usage:
-                # Low memory mode: generate one at a time
-                for j, prompt in enumerate(batch_prompts):
-                    for k in range(group_size):
-                        # Generate single completion
-                        completion_text = generate(
-                            model=model,
-                            tokenizer=tokenizer,
-                            prompt=prompt,
-                            max_tokens=max_tokens,
-                            sampler=sampler,
-                            verbose=False,
-                        )
-                        
-                        completion_ids = tokenizer.encode(completion_text)
-                        
-                        # If we couldn't add as EOS token, strip it manually
-                        if not use_eos_token and end_token:
-                            end_sequence = tokenizer.encode(end_token)
-                            if (
-                                len(completion_ids) >= len(end_sequence)
-                                and completion_ids[-len(end_sequence):] == end_sequence
-                            ):
-                                completion_ids = completion_ids[:-len(end_sequence)]
-                        
-                        completion_ids = mx.array(completion_ids)
-                        all_completions.append(mx.stop_gradient(completion_ids))
-                        all_completion_texts.append(completion_text)
-                        batch_indices.append(i + j)
-                        
-                        mx.clear_cache()
-            else:
-                # High memory mode: batch generate
-                batched_prompts = []
-                batched_indices = []
-                for j, prompt in enumerate(batch_prompts):
-                    for k in range(group_size):
-                        batched_prompts.append(prompt)
-                        batched_indices.append(i + j)
+            batched_prompts = []
+            batched_indices = []
+            for j, prompt in enumerate(batch_prompts):
+                for k in range(group_size):
+                    batched_prompts.append(prompt)
+                    batched_indices.append(i + j)
+            
+            sampler = make_sampler(
+                temperature,
+                top_p=0.95,
+                min_p=0.05,
+                min_tokens_to_keep=1,
+                top_k=20,
+                xtc_probability=0.0,
+                xtc_threshold=0.0,
+                xtc_special_tokens=tokenizer.encode("\n")
+                + list(tokenizer.eos_token_ids),
+            )
+            
+            result = batch_generate(
+                model=model,
+                tokenizer=tokenizer,
+                prompts=batched_prompts,
+                max_tokens=max_tokens,
+                sampler=sampler,
+                verbose=False,
+            )
+            
+            for idx, completion_text in enumerate(result.texts):
+                completion_ids = tokenizer.encode(completion_text)
                 
-                # Use batch_generate
-                result = batch_generate(
-                    model=model,
-                    tokenizer=tokenizer,
-                    prompts=batched_prompts,
-                    max_tokens=max_tokens,
-                    sampler=sampler,
-                    verbose=False,
-                )
+                if not use_eos_token and end_token:
+                    end_sequence = tokenizer.encode(end_token)
+                    if (
+                        len(completion_ids) >= len(end_sequence)
+                        and completion_ids[-len(end_sequence):] == end_sequence
+                    ):
+                        completion_ids = completion_ids[:-len(end_sequence)]
                 
-                # Process results
-                for idx, completion_text in enumerate(result.texts):
-                    completion_ids = tokenizer.encode(completion_text)
-                    
-                    # If we couldn't add as EOS token, strip it manually
-                    if not use_eos_token and end_token:
-                        end_sequence = tokenizer.encode(end_token)
-                        if (
-                            len(completion_ids) >= len(end_sequence)
-                            and completion_ids[-len(end_sequence):] == end_sequence
-                        ):
-                            completion_ids = completion_ids[:-len(end_sequence)]
-                    
-                    completion_ids = mx.array(completion_ids)
-                    all_completions.append(mx.stop_gradient(completion_ids))
-                    all_completion_texts.append(completion_text)
-                    batch_indices.append(batched_indices[idx])
-                
-                mx.clear_cache()
+                completion_ids = mx.array(completion_ids)
+                all_completions.append(mx.stop_gradient(completion_ids))
+                all_completion_texts.append(completion_text)
+                batch_indices.append(batched_indices[idx])
+            
+            # PATCH: Clear memory after each batch
+            del result
+            mx.eval(all_completions[-len(batched_prompts):])
+            mx.clear_cache()
+            
+            # PATCH: Clear KV cache in model
+            if hasattr(model, 'make_cache'):
+                for layer in model.layers:
+                    if hasattr(layer, 'self_attn') and hasattr(layer.self_attn, 'cache'):
+                        layer.self_attn.cache = None
         
         if not all_completions:
             raise ValueError(
                 "No valid completions generated. Check that prompts are not empty "
                 "and end_token configuration is correct."
             )
-        
         return all_completions, all_completion_texts, batch_indices
     finally:
+        mx.clear_cache()
         if was_training:
             model.train()
 
@@ -233,46 +199,24 @@ def generate_grpo(
 def grpo_loss(
     model,
     ref_model,
-    tokenizer,
     batch,
     completions=None,
     completion_texts=None,
     batch_indices=None,
     reward_funcs: Optional[List[RewardFunctions]] = None,
     beta: float = 0.1,
-    group_size: int = 4,
     epsilon: float = 1e-4,
     epsilon_high: float = None,
     max_tokens: int = 64,
-    temperature: float = 0.8,
     reward_weights: Optional[List[float]] = None,
-    batch_size: int = 1,
     importance_sampling_level: str = "token",
     grpo_loss_type: str = "grpo",
-    end_answer_token: str = "</answer>"
 ):
-    prompt_tokens, _, prompt_text, answer_text, type_info = batch
+    _, _, prompt_text, answer_text, type_info = batch
 
-    if (
-        completions is not None
-        and completion_texts is not None
-        and batch_indices is not None
-    ):
-        all_completions = completions
-        all_completion_texts = completion_texts
-        batch_indices = batch_indices
-    else:
-        all_completions, all_completion_texts, batch_indices = generate_grpo(
-            model=model,
-            tokenizer=tokenizer,
-            prompt_tokens=prompt_tokens,
-            max_tokens=max_tokens,
-            group_size=group_size,
-            temperature=temperature,
-            batch_size=batch_size,
-            end_token=end_answer_token,
-            low_mem_usage=True
-        )
+    all_completions = completions
+    all_completion_texts = completion_texts
+    batch_indices = batch_indices
 
     if not all_completions:
         raise ValueError(
@@ -338,6 +282,10 @@ def grpo_loss(
     else:
         ref_token_log_probs = get_per_token_logps(ref_model, inputs, lengths)
         mx.eval(ref_token_log_probs)
+        mx.clear_cache()
+
+    del inputs, attention_mask
+    mx.clear_cache()
 
     max_len = max(x.shape[0] for x in token_log_probs)
     padded_log_probs = []
@@ -371,6 +319,7 @@ def grpo_loss(
         all_func_rewards.append(func_rewards)
 
     rewards = mx.stack(all_func_rewards, axis=1)
+    mx.clear_cache()
 
     all_nan_rows = mx.all(mx.isnan(rewards), axis=1)
     if mx.any(all_nan_rows):
@@ -431,7 +380,7 @@ def grpo_loss(
     )
 
     # Create mask for valid tokens
-    length_mask = mx.arange(inputs.shape[1] - 1)[None, :] < (lengths[:, None] - 1)
+    length_mask = mx.arange(token_log_probs.shape[1])[None, :] < (lengths[:, None] - 1)
 
     # Compute log ratio for importance sampling
     log_ratio = token_log_probs - mx.stop_gradient(ref_token_log_probs)
@@ -657,6 +606,7 @@ def evaluate_grpo(
     iterate_batches: callable = iterate_grpo_batches,
     grpo_loss_type: str = "grpo",
     importance_sampling_level: str = "token",
+    end_answer_token: str = "</answer>"
 ):
     all_losses = 0
     ntokens = 0
@@ -672,21 +622,36 @@ def evaluate_grpo(
             max_seq_length=max_seq_length,
         ),
     ):
-        losses, toks, metrics = loss_fn(
+        prompt_tokens, answer_tokens, prompt_text, answer_text, type_info = batch
+
+        all_completions, all_completion_texts, batch_indices = generate_grpo(
             model=model,
             tokenizer=tokenizer,
-            batch=batch,
+            prompt_tokens=prompt_tokens,
+            max_tokens=max_tokens,
+            group_size=group_size,
+            temperature=temperature,
+            batch_size=batch_size,
+            end_token=end_answer_token,
+        )
+
+        losses, toks, metrics = loss_fn(
+            model=model,
+            ref_model=ref_model,
+            batch=(prompt_tokens, answer_tokens, prompt_text, answer_text, type_info),
+            completions=all_completions,
+            completion_texts=all_completion_texts,
+            batch_indices=batch_indices,
             reward_funcs=reward_funcs,
             beta=beta,
-            group_size=group_size,
             epsilon=epsilon,
             epsilon_high=epsilon_high,
-            ref_model=ref_model,
-            temperature=temperature,
-            max_tokens=max_tokens,
             importance_sampling_level=importance_sampling_level,
             grpo_loss_type=grpo_loss_type,
         )
+
+        del all_completions, all_completion_texts, batch_indices
+        mx.clear_cache()
 
         all_losses += losses * toks
         ntokens += toks
@@ -747,6 +712,7 @@ def train_grpo(
     state = [model.state, optimizer.state, mx.random.state]
 
     def step(batch, prev_grad, do_update):
+        mx.clear_cache()
         prompt_tokens, answer_tokens, prompt_text, answer_text, type_info = batch
 
         all_completions, all_completion_texts, batch_indices = generate_grpo(
@@ -757,29 +723,26 @@ def train_grpo(
             group_size=args.group_size,
             temperature=args.temperature,
             batch_size=args.batch_size,
-            end_token=end_answer_token,
-            low_mem_usage=args.low_mem_usage,
+            end_token=end_answer_token
         )
-
-        mx.clear_cache()
 
         (lvalue, toks, metrics), grad = loss_value_and_grad(
             model,
-            tokenizer=tokenizer,
             batch=(prompt_tokens, answer_tokens, prompt_text, answer_text, type_info),
             completions=all_completions,
             completion_texts=all_completion_texts,
             batch_indices=batch_indices,
             reward_funcs=reward_funcs,
             beta=args.beta,
-            group_size=args.group_size,
             epsilon=args.epsilon,
             epsilon_high=args.epsilon_high,
             ref_model=ref_model,
             grpo_loss_type=args.grpo_loss_type,
-            max_tokens=args.max_completion_length,
             importance_sampling_level=args.importance_sampling_level,
         )
+
+        del all_completions, all_completion_texts, batch_indices
+        mx.clear_cache()
 
         if prev_grad is not None:
             grad = tree_map(lambda x, y: x + y, grad, prev_grad)
@@ -790,6 +753,7 @@ def train_grpo(
                 grad = tree_map(lambda x: x / grad_accum_steps, grad)
             optimizer.update(model, grad)
             grad = None
+            mx.clear_cache()
 
         return lvalue, toks, metrics, grad
 
@@ -853,6 +817,7 @@ def train_grpo(
                 temperature=args.temperature,
                 iterate_batches=iterate_batches,
                 grpo_loss_type=args.grpo_loss_type,
+                end_answer_token=end_answer_token,
             )
             val_time = time.perf_counter() - stop
             if rank == 0:

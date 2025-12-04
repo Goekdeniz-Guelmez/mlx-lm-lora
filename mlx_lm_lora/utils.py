@@ -13,8 +13,7 @@ from mlx_lm.utils import (
     load,
     save_config,
     save_model,
-    dequantize_model,
-    quantize_model
+    dequantize_model
 )
 
 
