@@ -181,6 +181,11 @@ def generate_grpo(
                 batch_indices.append(batched_indices[idx])
         
         mx.clear_cache()
+        if not all_completions:
+            raise ValueError(
+                "No valid completions generated. Check that prompts are not empty "
+                "and end_token configuration is correct."
+            )
         return all_completions, all_completion_texts, batch_indices
     finally:
         if was_training:
@@ -894,7 +899,7 @@ def train_grpo(
                     f"σ={avg_metrics['total_rewards_std']:.3f}\n"
                     f"Group Rewards:  μ={avg_metrics['grouped_rewards_mean']:.3f}, "
                     f"σ={avg_metrics['grouped_rewards_std']:.3f}\n"
-                    f"KL Divergence: {avg_metrics['kl']:.6f}\n"
+                    f"KL Divergence: {avg_metrics['kl']:.12f}\n"
                     f"{'-'*80}\n"
                     f"Generation Stats:\n"
                     f"  • Avg tokens: {avg_metrics['average_generated_tokens']:.1f}\n"

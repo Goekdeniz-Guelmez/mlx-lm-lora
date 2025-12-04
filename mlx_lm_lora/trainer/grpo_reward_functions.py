@@ -147,7 +147,7 @@ def r1_strict_format_reward_func(
 ) -> list[float]:
     if not completions:
         return [0.0] * len(prompts)
-    pattern = r"<think> .*? </think> <answer> .*? </answer>"
+    pattern = r"<think>\n.*?\n</think>\n<answer> .*? </answer>"
     matches = [bool(re.search(pattern, r)) if r else False for r in completions]
     return [0.5 if match else 0.0 for match in matches]
 
