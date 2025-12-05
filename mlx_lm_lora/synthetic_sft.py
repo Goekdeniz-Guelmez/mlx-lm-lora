@@ -79,6 +79,12 @@ parser.add_argument("--xtc-threshold", type=float, default=0.0, help="XTC thresh
 parser.add_argument(
     "--seed", type=int, default=42, help="Random seed for reproducibility"
 )
+parser.add_argument(
+    "--use-ground-truth",
+    action="store_true",
+    help="Use ground truth from dataset to generate responses",
+    default=True
+)
 
 args = parser.parse_args()
 random.seed(args.seed)
@@ -90,9 +96,28 @@ train_parquet_path = os.path.join(
 valid_parquet_path = os.path.join(
     args.output_dir, "data", "valid-00000-of-00001.parquet"
 )
-test_parquet_path = os.path.join(args.output_dir, "data", "test-00000-of-00001.parquet")
+test_parquet_path = os.path.join(
+    args.output_dir, "data", "test-00000-of-00001.parquet"
+)
 
-dataset = load_dataset(args.dataset_path, split="train")
+# Modified dataset loading with fallback
+try:
+    # First try loading it normally
+    dataset = load_dataset(args.dataset_path, split="train")
+except Exception as e:
+    print(f"Standard loading failed: {e}")
+    print("Trying to load with custom format...")
+    
+    # Custom loading for your specific format
+    import pandas as pd
+    if os.path.isdir(args.dataset_path):
+        df = pd.read_parquet(os.path.join(args.dataset_path, "train.parquet"))
+    else:
+        df = pd.read_parquet(args.dataset_path)
+    dataset = Dataset.from_pandas(df)
+    
+    # Print info about loaded data
+    print(f"Successfully loaded dataset with columns: {list(dataset.features.keys())}")
 
 if args.system_prompt and os.path.isfile(args.system_prompt):
     try:
@@ -104,37 +129,60 @@ if args.system_prompt and os.path.isfile(args.system_prompt):
         print(f"Falling back to default system prompt")
         args.system_prompt = DEFAULT_SYSTEM_PROMPT
 
-print(f"Loading odel: {args.model}")
+print(f"Loading model: {args.model}")
 model, tokenizer = load(path_or_hf_repo=args.model)
 
-prompts = []
+# Check for section or section in dataset features
+has_section = "section" in dataset.features or "section" in dataset.features
+
+# Prepare the dataset items
+dataset_items = []
 for item in dataset:
-    content = item.get("prompt")
-    if content:
-        prompts.append(content)
+    prompt = item.get("prompt")
+    if prompt:
+        # Check for ground truth data
+        section = None
+        if has_section and args.use_ground_truth:
+            if "section" in item:
+                section = item["section"]
+            elif "section" in item:
+                section = item["section"]
+        dataset_items.append({
+            "prompt": prompt,
+            "section": section
+        })
 
-print(f"Loaded {len(prompts)} prompts.")
+print(f"Loaded {len(dataset_items)} items.")
 
-if args.num_samples is not None and args.num_samples < len(prompts):
-    prompts = prompts[: args.num_samples]
-    print(f"Truncated prompts to {args.num_samples}.")
+if args.num_samples is not None and args.num_samples < len(dataset_items):
+    dataset_items = dataset_items[:args.num_samples]
+    print(f"Truncated dataset to {args.num_samples} items.")
 
 records = []
 
-pbar = tqdm(range(0, len(prompts), args.batch_size), desc="Generating SFT pairs")
+pbar = tqdm(range(0, len(dataset_items), args.batch_size), desc="Generating SFT pairs")
 
 for i in pbar:
-    batch_prompts = prompts[i : i + args.batch_size]
-    inputs = [
-        tokenizer.apply_chat_template(
-            [
-                {"role": "system", "content": args.system_prompt},
-                {"role": "user", "content": p},
-            ],
-            add_generation_prompt=True,
-        )
-        for p in batch_prompts
-    ]
+    batch_items = dataset_items[i:i+args.batch_size]
+    # Prepare batch inputs with optional ground truth
+    batch_inputs = []
+    batch_prompts = []
+    for item in batch_items:
+        prompt = item["prompt"]
+        section = item.get("section")
+        batch_prompts.append(prompt)
+        # Create chat messages depending on ground truth availability
+        messages = [{"role": "system", "content": args.system_prompt}]
+        if section:
+            # Use a special prompt that includes the ground truth
+            user_content = f"Here is some relevant information to help yu answer my question, but never mention that i gave you that answer:\n\n{section}\n\nNow based on this information, please respond to my following question as if you've know the asnwer since beginning:\n\n{prompt}"
+            messages.append({"role": "user", "content": user_content})
+        else:
+            # Standard prompt without ground truth
+            messages.append({"role": "user", "content": prompt})
+        # Apply chat template
+        formatted_prompt = tokenizer.apply_chat_template(messages, add_generation_prompt=True)
+        batch_inputs.append(formatted_prompt)
 
     sampler = make_sampler(
         temp=args.temperature,
@@ -150,23 +198,28 @@ for i in pbar:
     outputs = batch_generate(
         model,
         tokenizer,
-        inputs,
+        batch_inputs,
         verbose=False,
         max_tokens=args.max_tokens,
         sampler=sampler,
     ).texts
 
-    for prompt, resp in zip(batch_prompts, outputs):
+    for item, prompt, resp in zip(batch_items, batch_prompts, outputs):
         messages = []
         if args.include_system_prompt:
             messages.append({"role": "system", "content": args.system_prompt})
+        # Only include the original prompt in the final dataset (not the one with ground truth)
         messages.append({"role": "user", "content": prompt})
         messages.append({"role": "assistant", "content": resp.strip()})
-        records.append({"messages": messages})
+        record = {"messages": messages}
+        # Optionally include section as metadata if it exists
+        section = item.get("section")
+        if section:
+            record["metadata"] = {"section": section}
+        records.append(record)
 
     peak_mem = mx.get_peak_memory() / 1e9
     pbar.set_postfix({"Peak memory": f"{peak_mem:.2f}"})
-
 
 print("Saving full SFT dataset to JSONL...")
 with open(jsonl_path, "w", encoding="utf-8") as f:
