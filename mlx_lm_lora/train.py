@@ -10,7 +10,7 @@ import mlx.nn as nn
 import mlx.optimizers as optim
 import numpy as np
 import yaml
-from mlx_lm.tokenizer_utils import load_tokenizer
+from mlx_lm.utils import load_tokenizer
 from mlx_lm.tuner.callbacks import WandBCallback
 from mlx_lm.tuner.utils import (
     build_schedule,

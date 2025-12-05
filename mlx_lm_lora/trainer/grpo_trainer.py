@@ -1,6 +1,5 @@
 import time
 from dataclasses import dataclass, field
-from functools import partial
 from pathlib import Path
 from typing import List, Optional
 
@@ -8,8 +7,7 @@ import mlx.core as mx
 import mlx.nn as nn
 import numpy as np
 from mlx.utils import tree_flatten, tree_map
-from mlx_lm.generate import generate, make_sampler, batch_generate
-from mlx_lm.models import cache
+from mlx_lm.generate import make_sampler, batch_generate
 from mlx_lm.tuner.callbacks import TrainingCallback
 from tqdm import tqdm
 
