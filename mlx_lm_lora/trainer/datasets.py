@@ -2,7 +2,7 @@ import json
 import random
 import types
 from pathlib import Path
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any, Dict, List, Tuple, Union, Optional
 
 from transformers import PreTrainedTokenizer
 
@@ -16,36 +16,32 @@ class GRPODataset:
         answer_key: str = "answer",
         system_key: str = "system",
         type_key: str = "type",
-        default_system_str: str = (
-            "You are given a problem. Think about the problem and provide your working out. "
-            "Place it between <think> and </think>. Then, provide your solution between <answer> </answer>."
-        ),
+        text_completion_key: Optional[str] = None,
     ):
         self._data = []
-        self.default_system_str = default_system_str
-
         for item in data:
             prompt_str = str(item[prompt_key])
             answer_str = str(item[answer_key])
             type_info = item.get(type_key, None)
-
-            system_str = item.get(system_key, self.default_system_str)
-
-            prompt_tokens = tokenizer.apply_chat_template(
-                [
-                    {"role": "system", "content": system_str},
-                    {"role": "user", "content": prompt_str},
-                ],
-                add_generation_prompt=True,
-            )
-
+            if text_completion_key is None:
+                default_system_str = "You are given a problem. Think about the problem and provide your working out. Place it between <think> and </think>. Then, provide your solution between <answer> </answer>."
+                system_str = item.get(system_key, default_system_str)
+                prompt_tokens = tokenizer.apply_chat_template(
+                    [
+                        {"role": "system", "content": system_str},
+                        {"role": "user", "content": prompt_str},
+                    ],
+                    add_generation_prompt=True,
+                    tokenize=False,
+                )
+            else:
+                prompt_tokens = tokenizer.encode(str(item[text_completion_key]))
             answer_tokens = tokenizer.encode(answer_str)
-
             self._data.append(
                 (prompt_tokens, answer_tokens, prompt_str, answer_str, type_info)
             )
 
-    def __getitem__(self, idx: int):
+    def __getitem__(self, idx: int) -> Tuple[List[int], List[int], str, str]:
         return self._data[idx]
 
     def __len__(self) -> int:
