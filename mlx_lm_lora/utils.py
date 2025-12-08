@@ -70,6 +70,7 @@ def fuse_and_save_model(
         print("De-quantizing model")
         model = dequantize_model(model)
         args.pop("quantization", None)
+        args.pop("quantization_config", None)
   
     save_path_obj = Path(save_path)
     save_model(save_path_obj, model, donate_model=True)
@@ -158,7 +159,7 @@ def from_pretrained(
         nn.quantize(model, bits=bits, group_size=group_size, mode=mode)
 
         if hasattr(model, "args"):
-            model.args.quantization = {"group_size": group_size, "bits": bits}
+            model.args.quantization = {"group_size": group_size, "bits": bits, "quant_method": mode}
             model.args.quantization_config = model.args.quantization
 
     return model, tokenizer
