@@ -344,7 +344,7 @@ def train_xpo(
     loss_fn: callable = xpo_loss,
     training_callback: TrainingCallback = None,
 ):
-    tqdm.write(f"Starting XPO training..., iters: {args.iters}")
+    mx.set_wired_limit(mx.metal.device_info()["max_recommended_working_set_size"])
     world = mx.distributed.init()
     world_size = world.size()
     rank = world.rank()
