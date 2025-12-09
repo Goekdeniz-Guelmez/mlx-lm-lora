@@ -32,7 +32,7 @@ class GRPODataset:
                         {"role": "user", "content": prompt_str},
                     ],
                     add_generation_prompt=True,
-                    tokenize=False,
+                    tokenize=True,
                 )
             else:
                 prompt_tokens = tokenizer.encode(str(item[text_completion_key]))
