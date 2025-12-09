@@ -377,7 +377,7 @@ def train_online_dpo(
     loss_fn: callable = online_dpo_loss,
     training_callback: TrainingCallback = None,
 ):
-    tqdm.write(f"Starting Online DPO training..., iters: {args.iters}")
+    mx.set_wired_limit(mx.metal.device_info()["max_recommended_working_set_size"])
     world = mx.distributed.init()
     world_size = world.size()
     rank = world.rank()

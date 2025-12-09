@@ -49,6 +49,7 @@ from .trainer.sft_trainer import (
 )
 from .trainer.xpo_trainer import XPOTrainingArgs, evaluate_xpo, train_xpo
 from .utils import from_pretrained, fuse_and_save_model
+from .visuals import print_banner, print_error, print_info, print_section, print_success, print_warning, Colors
 
 yaml_loader = yaml.SafeLoader
 yaml_loader.add_implicit_resolver(
@@ -468,7 +469,7 @@ def train_model(
         raise ValueError(f"Received unknown train-type {args.train_type}")
 
     if args.resume_adapter_file is not None:
-        print(f"Loading fine-tuned weights from {args.resume_adapter_file}")
+        print_info(f"Loading fine-tuned weights from {Colors.CYAN}{args.resume_adapter_file}{Colors.RESET}")
         model.load_weights(args.resume_adapter_file, strict=False)
 
     print_trainable_parameters(model)
@@ -483,6 +484,8 @@ def train_model(
         args.optimizer.lower()
     ]
     opt = opt_class(learning_rate=lr, **optimizer_config)
+
+    print_info(f"Training mode: {Colors.YELLOW}{args.train_mode.upper()}{Colors.RESET}")
 
     # Training mode dispatch
     if args.train_mode == "orpo":
@@ -625,10 +628,10 @@ def train_model(
             func_names = [name.strip() for name in args.reward_functions.split(",")]
             try:
                 reward_funcs = [get_reward_function(name) for name in func_names]
-                print(f"Using custom reward functions: {', '.join(func_names)}")
+                print_success(f"Using custom reward functions: {', '.join(func_names)}")
             except KeyError as e:
-                print(f"Error: {str(e)}")
-                print(
+                print_error(f"Error: {str(e)}")
+                print_info(
                     f"Available reward functions: {list_available_reward_functions()}"
                 )
                 return
@@ -704,6 +707,8 @@ def evaluate_model(
     test_set: CacheDataset = None,
 ):
     """Evaluate model on test set based on training mode"""
+    
+    print_section(f"Evaluating {args.train_mode.upper()} Model")
 
     if args.train_mode == "orpo":
         test_loss, test_rewards, _, test_metrics = evaluate_orpo(
@@ -716,14 +721,17 @@ def evaluate_model(
         )
         test_ppl = math.exp(test_loss)
         print(
-            f"Test loss {test_loss:.3f}, Test ppl {test_ppl:.3f}, Rewards: {test_rewards[0]:.3f}, {test_rewards[1]:.3f}"
+            f"{Colors.BOLD}Test Results:{Colors.RESET}\n"
+            f"  {Colors.YELLOW}Loss:{Colors.RESET} {test_loss:.3f}\n"
+            f"  {Colors.YELLOW}Perplexity:{Colors.RESET} {test_ppl:.3f}\n"
+            f"  {Colors.YELLOW}Rewards:{Colors.RESET} {test_rewards[0]:.3f}, {test_rewards[1]:.3f}"
         )
-        print("ORPO Test Metrics:")
+        print(f"\n{Colors.CYAN}ORPO Test Metrics:{Colors.RESET}")
         for metric_name, metric_value in test_metrics.items():
-            print(f"  {metric_name}: {float(metric_value):.3f}")
+            print(f"  {Colors.WHITE}{metric_name}:{Colors.RESET} {float(metric_value):.3f}")
 
     elif args.train_mode == "dpo":
-        test_loss, _, _, test_metrics = evaluate_dpo(
+        test_loss, _,_ , test_metrics = evaluate_dpo(
             model=model,
             ref_model=reference_model,
             dataset=test_set,
@@ -735,13 +743,17 @@ def evaluate_model(
             loss_type=args.dpo_cpo_loss_type,
         )
         test_ppl = math.exp(test_loss)
-        print(f"Test loss {test_loss:.3f}, Test ppl {test_ppl:.3f}")
-        print("DPO Test Metrics:")
+        print(
+            f"{Colors.BOLD}Test Results:{Colors.RESET}\n"
+            f"  {Colors.YELLOW}Loss:{Colors.RESET} {test_loss:.3f}\n"
+            f"  {Colors.YELLOW}Perplexity:{Colors.RESET} {test_ppl:.3f}"
+        )
+        print(f"\n{Colors.CYAN}DPO Test Metrics:{Colors.RESET}")
         for metric_name, metric_value in test_metrics.items():
-            print(f"  {metric_name}: {float(metric_value):.3f}")
+            print(f"  {Colors.WHITE}{metric_name}:{Colors.RESET} {float(metric_value):.3f}")
 
     elif args.train_mode == "cpo":
-        test_loss, _, _, test_metrics = evaluate_cpo(
+        test_loss, _,_ , test_metrics = evaluate_cpo(
             model=model,
             dataset=test_set,
             batch_size=args.batch_size,
@@ -752,138 +764,16 @@ def evaluate_model(
             loss_type=args.dpo_cpo_loss_type,
         )
         test_ppl = math.exp(test_loss)
-        print(f"Test loss {test_loss:.3f}, Test ppl {test_ppl:.3f}")
-        print("CPO Test Metrics:")
+        print(
+            f"{Colors.BOLD}Test Results:{Colors.RESET}\n"
+            f"  {Colors.YELLOW}Loss:{Colors.RESET} {test_loss:.3f}\n"
+            f"  {Colors.YELLOW}Perplexity:{Colors.RESET} {test_ppl:.3f}"
+        )
+        print(f"\n{Colors.CYAN}CPO Test Metrics:{Colors.RESET}")
         for metric_name, metric_value in test_metrics.items():
-            print(f"  {metric_name}: {float(metric_value):.3f}")
+            print(f"  {Colors.WHITE}{metric_name}:{Colors.RESET} {float(metric_value):.3f}")
 
     elif args.train_mode == "online_dpo":
-        test_loss, _, _, test_metrics = evaluate_online_dpo(
-            model=model,
-            tokenizer=tokenizer,
-            ref_model=reference_model,
-            judge_model=judge_model,
-            judge_tokenizer=judge_tokenizer,
-            judge_config=args.judge_config,
-            dataset=test_set,
-            batch_size=args.batch_size,
-            num_batches=args.test_batches,
-            max_seq_length=args.max_seq_length,
-            beta=args.beta,
-            delta=args.delta,
-            loss_type=args.dpo_cpo_loss_type,
-            max_tokens=args.max_completion_length,
-        )
-        test_ppl = math.exp(test_loss)
-        print(f"Test loss {test_loss:.3f}, Test ppl {test_ppl:.3f}")
-        print("Online DPO Test Metrics:")
-        for metric_name, metric_value in test_metrics.items():
-            print(f"  {metric_name}: {float(metric_value):.3f}")
-
-    elif args.train_mode == "ppo":
-        judge_model, judge_tokenizer = load_judge_model(args, reference_model)
-
-        test_loss, _, _, test_metrics = evaluate_ppo(
-            model=model,
-            tokenizer=tokenizer,
-            ref_model=reference_model,
-            judge_model=judge_model,
-            judge_config=args.judge_config,
-            judge_tokenizer=judge_tokenizer,
-            dataset=test_set,
-            batch_size=args.batch_size,
-            num_batches=args.test_batches,
-            max_seq_length=args.max_seq_length,
-            beta=args.beta,
-            epsilon=args.epsilon,
-            loss_type=args.dpo_cpo_loss_type,
-            max_tokens=args.max_completion_length,
-        )
-        test_ppl = math.exp(test_loss)
-        print(f"Test loss {test_loss:.3f}, Test ppl {test_ppl:.3f}")
-        print("PPO Test Metrics:")
-        for metric_name, metric_value in test_metrics.items():
-            print(f"  {metric_name}: {float(metric_value):.3f}")
-
-    elif args.train_mode == "rlhf_reinforce":
-        test_loss, _, _, test_metrics = evaluate_rlhf_reinforce(
-            model=model,
-            tokenizer=tokenizer,
-            ref_model=reference_model,
-            judge_model=judge_model,
-            judge_tokenizer=judge_tokenizer,
-            judge_config=args.judge_config,
-            dataset=test_set,
-            batch_size=args.batch_size,
-            num_batches=args.test_batches,
-            max_seq_length=args.max_seq_length,
-            beta=args.beta,
-            max_tokens=args.max_completion_length,
-        )
-        test_ppl = math.exp(test_loss)
-        print(f"Test loss {test_loss:.3f}, Test ppl {test_ppl:.3f}")
-        print("RLHF REINFORCE Test Metrics:")
-        for metric_name, metric_value in test_metrics.items():
-            print(f"  {metric_name}: {float(metric_value):.3f}")
-
-    elif args.train_mode == "xpo":
-        test_loss, _, _, test_metrics = evaluate_xpo(
-            model=model,
-            tokenizer=tokenizer,
-            ref_model=reference_model,
-            judge_model=judge_model,
-            judge_tokenizer=judge_tokenizer,
-            judge_config=args.judge_config,
-            dataset=test_set,
-            batch_size=args.batch_size,
-            num_batches=args.test_batches,
-            max_seq_length=args.max_seq_length,
-            beta=args.beta,
-            delta=args.delta,
-            loss_type=args.dpo_cpo_loss_type,
-            max_tokens=args.max_completion_length,
-            alpha=args.alpha,
-        )
-        test_ppl = math.exp(test_loss)
-        print(f"Test loss {test_loss:.3f}, Test ppl {test_ppl:.3f}")
-        print("XPO Test Metrics:")
-        for metric_name, metric_value in test_metrics.items():
-            print(f"  {metric_name}: {float(metric_value):.3f}")
-
-    elif args.train_mode == "grpo":
-        test_loss, _, test_rewards = evaluate_grpo(
-            model=model,
-            ref_model=reference_model,
-            dataset=test_set,
-            tokenizer=tokenizer,
-            batch_size=args.batch_size,
-            num_batches=args.test_batches,
-            max_seq_length=args.max_seq_length,
-            beta=args.beta,
-            group_size=args.group_size,
-            epsilon=args.epsilon,
-            epsilon_high=args.epsilon_high,
-            temperature=args.temperature,
-            max_tokens=args.max_seq_length,
-        )
-        test_ppl = math.exp(test_loss)
-        rewards_str = ", ".join([f"{k}: {v:.3f}" for k, v in test_rewards.items()])
-        print(
-            f"Test loss {test_loss:.3f}, Test ppl {test_ppl:.3f}, Rewards: {rewards_str}"
-        )
-
-    elif args.train_mode == "sft":
-        test_loss = evaluate_sft(
-            model=model,
-            dataset=test_set,
-            batch_size=args.batch_size,
-            num_batches=args.test_batches,
-            max_seq_length=args.max_seq_length,
-        )
-        test_ppl = math.exp(test_loss)
-        print(f"Test loss {test_loss:.3f}, Test ppl {test_ppl:.3f}.")
-
-    else:
         raise ValueError(f"Unknown train mode: {args.train_mode}")
 
 
@@ -906,6 +796,7 @@ def run(args, training_callback: TrainingCallback = None):
     elif args.load_in_8bits:
         quanziation_config = {"bits": 8, "group_size": 64}
 
+    print_info(f"Loading model: {Colors.CYAN}{args.model}{Colors.RESET}")
     model, tokenizer = from_pretrained(
         model=args.model, quantized_load=quanziation_config
     )
@@ -920,14 +811,14 @@ def run(args, training_callback: TrainingCallback = None):
         else (None, None)
     )
 
-    print("Loading datasets")
+    print_info("Loading datasets")
     train_set, valid_set, test_set = load_dataset(args, tokenizer)
 
     if args.test and not args.train:
         if args.adapter_path != "":
             load_adapters(model, args.adapter_path)
     elif args.train:
-        print("Training")
+        print_section("Training")
         train_model(
             args,
             model,
@@ -943,7 +834,7 @@ def run(args, training_callback: TrainingCallback = None):
         raise ValueError("Must provide at least one of --train or --test")
 
     if args.test:
-        print("Testing")
+        print_section("Testing")
         evaluate_model(
             args,
             model,
@@ -958,12 +849,13 @@ def run(args, training_callback: TrainingCallback = None):
     del reference_model, judge_model, judge_tokenizer
 
     if args.fuse and args.train:
-        print("Fusing model")
+        print_section("Fusing Model")
         fuse_and_save_model(
             model=model,
             tokenizer=tokenizer,
             save_path=args.adapter_path,
         )
+        print_success(f"Model fused and saved to {Colors.CYAN}{args.adapter_path}{Colors.RESET}")
 
 
 def main(args=None):
@@ -971,6 +863,8 @@ def main(args=None):
     import types
 
     os.environ["TOKENIZERS_PARALLELISM"] = "true"
+
+    print_banner()
 
     if args is None:
         parser = build_parser()
@@ -990,6 +884,20 @@ def main(args=None):
     for k, v in CONFIG_DEFAULTS.items():
         if getattr(args, k, None) is None:
             setattr(args, k, v)
+    
+    print_section("Configuration Summary")
+    print(f"{Colors.WHITE}Model:{Colors.RESET} {args.model}")
+    print(f"{Colors.WHITE}Training Mode:{Colors.RESET} {args.train_mode.upper()}")
+    print(f"{Colors.WHITE}Training Type:{Colors.RESET} {args.train_type}")
+    print(f"{Colors.WHITE}Batch Size:{Colors.RESET} {args.batch_size}")
+    print(f"{Colors.WHITE}Learning Rate:{Colors.RESET} {args.learning_rate}")
+    print(f"{Colors.WHITE}Optimizer:{Colors.RESET} {args.optimizer}")
+    if args.load_in_4bits:
+        print(f"{Colors.WHITE}Quantization:{Colors.RESET} 4-bit")
+    elif args.load_in_6bits:
+        print(f"{Colors.WHITE}Quantization:{Colors.RESET} 6-bit")
+    elif args.load_in_8bits:
+        print(f"{Colors.WHITE}Quantization:{Colors.RESET} 8-bit")
 
     run(args)
 

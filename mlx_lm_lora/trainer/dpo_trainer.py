@@ -261,7 +261,6 @@ def train_dpo(
     loss_type="sigmoid",
 ):
     mx.set_wired_limit(mx.metal.device_info()["max_recommended_working_set_size"])
-    tqdm.write(f"Starting training..., iters: {args.iters}")
     world = mx.distributed.init()
     world_size = world.size()
     rank = world.rank()
