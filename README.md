@@ -48,8 +48,9 @@ With MLX-LM-LoRA you can, train Large Language Models locally on Apple Silicon u
 
 **Synthetic Dataset Creation:**
 
+- **Prompts**: Create a synthetic prompt dataset using a base model
 - **SFT**: Create a synthetic sft dataset using a teacher model
-- **Preference**: Create a synthetic preference dataset using a base and a teacher model
+- **Preferences**: Create a synthetic preference dataset using a base and a teacher model
 
 **Training Your Custom Preference Model:**
 
@@ -83,6 +84,7 @@ With MLX-LM-LoRA you can, train Large Language Models locally on Apple Silicon u
   - [Proximal Policy Optimization](#proximal-policy-optimization)
 - [Other Features](#other-features)
   - [Synthetic Dataset Creation](#synthetic-dataset-creation)
+    - [Prompts](#synthetic-prompts-dataset-creation)
     - [SFT](#synthetic-sft-dataset-creation)
     - [Preference](#synthetic-preference-dataset-creation)
   - [Training Your Custom Preference Model](#training-your-custom-preference-model)
@@ -478,7 +480,33 @@ mlx_lm_lora.train \
 
 This feature makes it able to use mlx-lm's powerfull batch genebrate to create a synthetic datasets using a teacher model, this can be used for knowledge distiliation, etc., and is a powerfull tool to create custom model, fuly locally.
 
-#### SFT
+#### Synthetic Prompts Dataset Creation
+
+With this you can create a synthetic user prompts dataset using a model. this creates multible files, the first file is a JSONL file that has the generated samples in it, the next ones are parquet verison for HF compatibility. Example:
+
+```shell
+python -m mlx_lm_lora.synthetic_prompts \
+--model mlx-community/Josiefied-Qwen3-4B-Instruct-2507-abliterated-v1-8bit \
+--topics 'ML' 'politics' 'web security' \
+--docs-dir ./docs-pdfs \
+--output-dir ./sft_dataset \
+--system-prompt "You are Josie, a cool and fresh ai asstant that talks like a gangster"
+--num-samples 1000 \
+--valid-split 0.01 \
+--batch-size 4 \
+--max-tokens 4096
+```
+
+**Resulting Dataset Format:**
+
+```jsonl
+{"prompt": "Question", "section": "only happens when using files via --docs-dir", "topic": "only happens when using topics via --topics"}
+...
+```
+
+You can directly add that into the synthetic SFT dataset creation after finishing.
+
+#### Synthetic SFT Dataset Creation
 
 With this you can create a synthetic SFT dataset using a teacher model. this creates multible files, the first file is a JSONL file that has the generated samples in it, the next ones are parquet verison for HF compatibility. Example:
 
@@ -490,7 +518,9 @@ python -m mlx_lm_lora.synthetic_sft \
 --num-samples 1000 \
 --valid-split 0.01 \
 --batch-size 16 \
---max-tokens 4096
+--max-tokens 4096 \
+--use-ground-truth \
+
 ```
 
 **Dataset Format:**
@@ -501,7 +531,7 @@ python -m mlx_lm_lora.synthetic_sft \
 {"prompt": "Question"}
 ```
 
-#### Preference
+#### Synthetic Preference Dataset Creation
 
 With this you can create a synthetic DPO flatt-dataset using a teacher model. this creates multible files just like sft. Example:
 
