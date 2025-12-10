@@ -1097,6 +1097,10 @@ max_completion_length: 512
 
 ---
 
+![Alt](https://repobeats.axiom.co/api/embed/d6e941f65a8dabf58345e9ce83c23c81b5597bd2.svg "Repobeats analytics image")
+
+---
+
 ## Citing MLX-LM-LoRA
 
 ```bibtex
