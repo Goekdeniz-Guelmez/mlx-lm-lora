@@ -54,6 +54,16 @@ class GRPOTrainingArgs(SFTTrainingArgs):
             "help": "Temperature for sampling. The higher the temperature, the more random the completions."
         },
     )
+    top_p: float = field(
+        default=0.95,
+        metadata={"help": "Top-p sampling parameter."},
+    )
+    top_k: int = field(
+        default=20, metadata={"help": "Top-k sampling parameter."}
+    )
+    min_p: float = field(
+        default=0.0, metadata={"help": "Minimum probability for sampling."}
+    )
     grpo_loss_type: str = field(
         default="grpo",
         metadata={
@@ -103,9 +113,12 @@ def generate_grpo(
     prompt_tokens,
     max_tokens: int,
     group_size: int,
-    temperature: float,
     batch_size: int,
     end_token: str,
+    temperature: float,
+    top_p: float,
+    top_k: int,
+    min_p: float,
 ):
     was_training = model.training
     model.eval()
@@ -137,10 +150,9 @@ def generate_grpo(
             
             sampler = make_sampler(
                 temperature,
-                top_p=0.95,
-                min_p=0.0,
-                min_tokens_to_keep=1,
-                top_k=20,
+                top_p=top_p,
+                min_p=min_p,
+                top_k=top_k,
             )
 
             results = batch_generate(
@@ -581,6 +593,9 @@ def evaluate_grpo(
     max_seq_length: int,
     max_tokens: int,
     temperature: float,
+    top_p: float,
+    top_k: int,
+    min_p: float,
     reward_funcs: Optional[List[RewardFunctions]] = [
         r1_accuracy_reward_func,
         r1_int_reward_func,
@@ -617,9 +632,12 @@ def evaluate_grpo(
             prompt_tokens=prompt_tokens,
             max_tokens=max_tokens,
             group_size=group_size,
-            temperature=temperature,
             batch_size=batch_size,
             end_token=end_answer_token,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+            min_p=min_p,
         )
         
         # Prepare expanded data for reward calculation
@@ -750,9 +768,12 @@ def train_grpo(
             prompt_tokens=prompt_tokens,
             max_tokens=args.max_completion_length,
             group_size=args.group_size,
-            temperature=args.temperature,
             batch_size=args.batch_size,
-            end_token=end_answer_token
+            end_token=end_answer_token,
+            temperature=args.temperature,
+            top_p=args.top_p,
+            top_k=args.top_k,
+            min_p=args.min_p,
         )
         
         # Prepare expanded data for reward calculation
@@ -886,10 +907,13 @@ def train_grpo(
                 beta=args.beta,
                 epsilon=args.epsilon,
                 epsilon_high=args.epsilon_high,
-                temperature=args.temperature,
                 iterate_batches=iterate_batches,
                 grpo_loss_type=args.grpo_loss_type,
                 end_answer_token=end_answer_token,
+                temperature=args.temperature,
+                top_p=args.top_p,
+                top_k=args.top_k,
+                min_p=args.min_p,
             )
             val_time = time.perf_counter() - stop
             if rank == 0:
