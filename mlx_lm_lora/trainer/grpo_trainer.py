@@ -453,25 +453,14 @@ def grpo_loss(
     # Take the minimum (pessimistic bound)
     per_token_loss = -mx.minimum(unclipped_obj, clipped_obj)
     
+    # Compute KL divergence using Schulman's approximator: KL(π_θ || π_ref)
+    log_ratio_ref_theta = ref_token_log_probs - token_log_probs  # log(π_ref/π_θ)
+    ratio_ref_theta = mx.exp(log_ratio_ref_theta)  # π_ref/π_θ
+    kl_div = ratio_ref_theta - log_ratio_ref_theta - 1
+    
     # Add KL penalty if beta is non-zero
     if beta != 0.0:
-        # r_i,t = π_θ / π_old (already computed as coef_1)
-        # KL = r_i,t * (π_ref / π_θ) - log(π_ref / π_θ) - 1
-        log_ratio_ref_theta = ref_token_log_probs - token_log_probs
-        ratio_ref_theta = mx.exp(log_ratio_ref_theta)
-        
-        # Unbiased KL estimator
-        kl_div = coef_1 * ratio_ref_theta - log_ratio_ref_theta - 1
-        
-        # Add KL penalty
         per_token_loss = per_token_loss + beta * kl_div
-    else:
-        # Compute KL divergence using Schulman's approximator
-        kl_div = (
-            mx.exp(ref_token_log_probs - token_log_probs)
-            - (ref_token_log_probs - token_log_probs)
-            - 1
-        )
     
     if grpo_loss_type == "grpo":
         loss = (per_token_loss * length_mask).sum() / length_mask.sum()
