@@ -96,6 +96,10 @@ def get_per_token_logps(model: nn.Module, inputs, lengths):
     per_token_logps = []
     for i in range(logits.shape[0]):
         seq_len = int(lengths[i]) - 1
+        if seq_len <= 0:
+            # If sequence is too short, return empty log probs
+            per_token_logps.append(mx.array([]))
+            continue
         seq_logits = logits[i, :seq_len]
         seq_targets = targets[i, :seq_len]
         log_probs = nn.log_softmax(seq_logits, axis=-1)
