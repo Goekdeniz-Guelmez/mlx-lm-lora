@@ -773,8 +773,76 @@ def evaluate_model(
         for metric_name, metric_value in test_metrics.items():
             print(f"  {Colors.WHITE}{metric_name}:{Colors.RESET} {float(metric_value):.3f}")
 
-    elif args.train_mode == "online_dpo":
-        raise ValueError(f"Unknown train mode: {args.train_mode}")
+    elif args.train_mode == "grpo":
+        if args.reward_functions_file:
+            load_reward_functions_from_file(args.reward_functions_file)
+
+        reward_funcs = get_default_reward_functions()
+        if args.reward_functions:
+            func_names = [name.strip() for name in args.reward_functions.split(",")]
+            try:
+                reward_funcs = [get_reward_function(name) for name in func_names]
+            except KeyError as e:
+                print_error(f"Error: {str(e)}")
+                print_info(
+                    f"Available reward functions: {list_available_reward_functions()}"
+                )
+                return
+
+        from .trainer.grpo_trainer import iterate_batches, loss_fn
+
+        test_loss, test_ntokens, test_metrics = evaluate_grpo(
+            model=model,
+            dataset=test_set,
+            loss_fn=loss_fn,
+            ref_model=reference_model,
+            reward_funcs=reward_funcs,
+            tokenizer=tokenizer,
+            group_size=args.group_size,
+            batch_size=args.batch_size,
+            num_batches=args.test_batches,
+            max_seq_length=args.max_seq_length,
+            max_tokens=args.max_completion_length,
+            beta=args.beta,
+            epsilon=args.epsilon,
+            epsilon_high=args.epsilon_high,
+            iterate_batches=iterate_batches,
+            grpo_loss_type=args.grpo_loss_type,
+            end_answer_token=getattr(args, "end_answer_token", None),
+            temperature=args.temperature,
+            top_p=getattr(args, "top_p", 1.0),
+            top_k=getattr(args, "top_k", -1),
+            min_p=getattr(args, "min_p", 0.0),
+        )
+        test_ppl = math.exp(test_loss)
+        print(
+            f"{Colors.BOLD}Test Results:{Colors.RESET}\n"
+            f"  {Colors.YELLOW}Loss:{Colors.RESET} {test_loss:.3f}\n"
+            f"  {Colors.YELLOW}Perplexity:{Colors.RESET} {test_ppl:.3f}\n"
+            f"  {Colors.YELLOW}Tokens:{Colors.RESET} {test_ntokens}"
+        )
+        print(f"\n{Colors.CYAN}GRPO Test Metrics:{Colors.RESET}")
+        for metric_name, metric_value in test_metrics.items():
+            print(f"  {Colors.WHITE}{metric_name}:{Colors.RESET} {float(metric_value):.3f}")
+
+    elif args.train_mode == "sft":
+        test_loss, test_ntokens = evaluate_sft(
+            model=model,
+            dataset=test_set,
+            batch_size=args.batch_size,
+            num_batches=args.test_batches,
+            max_seq_length=args.max_seq_length,
+        )
+        test_ppl = math.exp(test_loss)
+        print(
+            f"{Colors.BOLD}Test Results:{Colors.RESET}\n"
+            f"  {Colors.YELLOW}Loss:{Colors.RESET} {test_loss:.3f}\n"
+            f"  {Colors.YELLOW}Perplexity:{Colors.RESET} {test_ppl:.3f}\n"
+            f"  {Colors.YELLOW}Tokens:{Colors.RESET} {test_ntokens}"
+        )
+
+    elif args.train_mode in ["online_dpo", "ppo", "rlhf_reinforce", "xpo"]:
+        raise ValueError(f"Evaluation not yet implemented for train mode: {args.train_mode}")
 
 
 def run(args, training_callback: TrainingCallback = None):
