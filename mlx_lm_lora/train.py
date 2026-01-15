@@ -73,13 +73,14 @@ CONFIG_DEFAULTS = {
     "load_in_4bits": False,
     "load_in_6bits": False,
     "load_in_8bits": False,
+    "load_in_mxfp4": False,
     "train_type": "lora",
     "train_mode": "sft",
     "optimizer": "adam",
     "optimizer_config": {"adam": {}, "adamw": {}, "muon": {}},
     "data": "data/",
     "seed": 0,
-    "num_layers": 16,
+    "num_layers": -1,
     "batch_size": 4,
     "iters": None,
     "epochs": None,
@@ -199,6 +200,12 @@ def build_parser():
         "--load-in-8bits",
         action="store_true",
         help="Load the model in 8-bit quantization.",
+        default=None,
+    )
+    parser.add_argument(
+        "--load-in-mxfp4",
+        action="store_true",
+        help="Load the model in mixed FP4 quantization.",
         default=None,
     )
     parser.add_argument(
@@ -858,11 +865,13 @@ def run(args, training_callback: TrainingCallback = None):
 
     quanziation_config = None
     if args.load_in_4bits:
-        quanziation_config = {"bits": 4, "group_size": 64}
+        quanziation_config = {"bits": 4, "group_size": 128}
     elif args.load_in_6bits:
-        quanziation_config = {"bits": 6, "group_size": 64}
+        quanziation_config = {"bits": 6, "group_size": 128}
     elif args.load_in_8bits:
-        quanziation_config = {"bits": 8, "group_size": 64}
+        quanziation_config = {"bits": 8, "group_size": 128}
+    elif args.load_in_mxfp4:
+        quanziation_config = {"bits": 4, "group_size": 32, "mode": "mxfp4"}
 
     print_info(f"Loading model: {Colors.CYAN}{args.model}{Colors.RESET}")
     model, tokenizer = from_pretrained(
