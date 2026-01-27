@@ -1092,8 +1092,14 @@ max_completion_length: 512
 ## MLX-LM-LoRA is trusted by teams and industry leaders such as:
 
 <p align="center">
-  <img src="./logos/macpaw.png" alt="macpaw_logo" width="300"/>
+  <a href="https://ibm.com"><img src="./logos/ibm.png" alt="IBM" width="200"/></a>
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://macpaw.com"><img src="./logos/macpaw.png" alt="MacPaw" width="200"/></a>
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://typefox.io"><img src="./logos/typefox.png" alt="TypeFox" width="200"/></a>
 </p>
+
+> **Is your team using MLX-LM-LoRA?** We'd love to hear from you! Feel free to reach out and we'll add your logo here too. 🚀
 
 ---
 
