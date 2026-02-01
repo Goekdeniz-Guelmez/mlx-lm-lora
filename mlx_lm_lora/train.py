@@ -10,7 +10,6 @@ import mlx.nn as nn
 import mlx.optimizers as optim
 import numpy as np
 import yaml
-from mlx_lm.utils import load_tokenizer
 from mlx_lm.tuner.callbacks import WandBCallback
 from mlx_lm.tuner.utils import (
     build_schedule,
@@ -18,7 +17,7 @@ from mlx_lm.tuner.utils import (
     load_adapters,
     print_trainable_parameters,
 )
-from mlx_lm.utils import load, save_config
+from mlx_lm.utils import load, load_tokenizer, save_config
 
 from .trainer.cpo_trainer import CPOTrainingArgs, evaluate_cpo, train_cpo
 from .trainer.datasets import CacheDataset, load_dataset
@@ -49,7 +48,15 @@ from .trainer.sft_trainer import (
 )
 from .trainer.xpo_trainer import XPOTrainingArgs, evaluate_xpo, train_xpo
 from .utils import from_pretrained, fuse_and_save_model
-from .visuals import print_banner, print_error, print_info, print_section, print_success, print_warning, Colors
+from .visuals import (
+    Colors,
+    print_banner,
+    print_error,
+    print_info,
+    print_section,
+    print_success,
+    print_warning,
+)
 
 yaml_loader = yaml.SafeLoader
 yaml_loader.add_implicit_resolver(
@@ -476,7 +483,9 @@ def train_model(
         raise ValueError(f"Received unknown train-type {args.train_type}")
 
     if args.resume_adapter_file is not None:
-        print_info(f"Loading fine-tuned weights from {Colors.CYAN}{args.resume_adapter_file}{Colors.RESET}")
+        print_info(
+            f"Loading fine-tuned weights from {Colors.CYAN}{args.resume_adapter_file}{Colors.RESET}"
+        )
         model.load_weights(args.resume_adapter_file, strict=False)
 
     print_trainable_parameters(model)
@@ -714,7 +723,7 @@ def evaluate_model(
     test_set: CacheDataset = None,
 ):
     """Evaluate model on test set based on training mode"""
-    
+
     print_section(f"Evaluating {args.train_mode.upper()} Model")
 
     if args.train_mode == "orpo":
@@ -735,10 +744,12 @@ def evaluate_model(
         )
         print(f"\n{Colors.CYAN}ORPO Test Metrics:{Colors.RESET}")
         for metric_name, metric_value in test_metrics.items():
-            print(f"  {Colors.WHITE}{metric_name}:{Colors.RESET} {float(metric_value):.3f}")
+            print(
+                f"  {Colors.WHITE}{metric_name}:{Colors.RESET} {float(metric_value):.3f}"
+            )
 
     elif args.train_mode == "dpo":
-        test_loss, _,_ , test_metrics = evaluate_dpo(
+        test_loss, _, _, test_metrics = evaluate_dpo(
             model=model,
             ref_model=reference_model,
             dataset=test_set,
@@ -757,10 +768,12 @@ def evaluate_model(
         )
         print(f"\n{Colors.CYAN}DPO Test Metrics:{Colors.RESET}")
         for metric_name, metric_value in test_metrics.items():
-            print(f"  {Colors.WHITE}{metric_name}:{Colors.RESET} {float(metric_value):.3f}")
+            print(
+                f"  {Colors.WHITE}{metric_name}:{Colors.RESET} {float(metric_value):.3f}"
+            )
 
     elif args.train_mode == "cpo":
-        test_loss, _,_ , test_metrics = evaluate_cpo(
+        test_loss, _, _, test_metrics = evaluate_cpo(
             model=model,
             dataset=test_set,
             batch_size=args.batch_size,
@@ -778,7 +791,9 @@ def evaluate_model(
         )
         print(f"\n{Colors.CYAN}CPO Test Metrics:{Colors.RESET}")
         for metric_name, metric_value in test_metrics.items():
-            print(f"  {Colors.WHITE}{metric_name}:{Colors.RESET} {float(metric_value):.3f}")
+            print(
+                f"  {Colors.WHITE}{metric_name}:{Colors.RESET} {float(metric_value):.3f}"
+            )
 
     elif args.train_mode == "grpo":
         if args.reward_functions_file:
@@ -830,7 +845,9 @@ def evaluate_model(
         )
         print(f"\n{Colors.CYAN}GRPO Test Metrics:{Colors.RESET}")
         for metric_name, metric_value in test_metrics.items():
-            print(f"  {Colors.WHITE}{metric_name}:{Colors.RESET} {float(metric_value):.3f}")
+            print(
+                f"  {Colors.WHITE}{metric_name}:{Colors.RESET} {float(metric_value):.3f}"
+            )
 
     elif args.train_mode == "sft":
         test_loss, test_ntokens = evaluate_sft(
@@ -849,7 +866,9 @@ def evaluate_model(
         )
 
     elif args.train_mode in ["online_dpo", "ppo", "rlhf_reinforce", "xpo"]:
-        raise ValueError(f"Evaluation not yet implemented for train mode: {args.train_mode}")
+        raise ValueError(
+            f"Evaluation not yet implemented for train mode: {args.train_mode}"
+        )
 
 
 def run(args, training_callback: TrainingCallback = None):
@@ -932,7 +951,9 @@ def run(args, training_callback: TrainingCallback = None):
             tokenizer=tokenizer,
             save_path=args.adapter_path,
         )
-        print_success(f"Model fused and saved to {Colors.CYAN}{args.adapter_path}{Colors.RESET}")
+        print_success(
+            f"Model fused and saved to {Colors.CYAN}{args.adapter_path}{Colors.RESET}"
+        )
 
 
 def main(args=None):
@@ -961,7 +982,7 @@ def main(args=None):
     for k, v in CONFIG_DEFAULTS.items():
         if getattr(args, k, None) is None:
             setattr(args, k, v)
-    
+
     print_section("Configuration Summary")
     print(f"{Colors.WHITE}Model:{Colors.RESET} {args.model}")
     print(f"{Colors.WHITE}Training Mode:{Colors.RESET} {args.train_mode.upper()}")

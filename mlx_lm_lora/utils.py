@@ -1,6 +1,6 @@
-import os
-import math
 import datetime
+import math
+import os
 from pathlib import Path
 from typing import Any, Optional, Tuple
 
@@ -9,12 +9,7 @@ from mlx.utils import tree_flatten, tree_unflatten
 from mlx_lm.gguf import convert_to_gguf
 from mlx_lm.tokenizer_utils import TokenizerWrapper
 from mlx_lm.tuner.utils import linear_to_lora_layers, load_adapters
-from mlx_lm.utils import (
-    load,
-    save_config,
-    save_model,
-    dequantize_model
-)
+from mlx_lm.utils import dequantize_model, load, save_config, save_model
 
 
 def calculate_iters(train_set, batch_size, epochs) -> int:
@@ -38,7 +33,7 @@ def fuse_and_save_model(
 ) -> None:
     """
     Fuse fine-tuned adapters into the base model.
-  
+
     Args:
         model: The MLX model to fuse adapters into.
         tokenizer: The tokenizer wrapper.
@@ -49,34 +44,33 @@ def fuse_and_save_model(
         gguf_path: Path to save the exported GGUF format model weights.
     """
     from ._version import __version__
+
     model.freeze()
-  
+
     if adapter_path is not None:
         print(f"Loading adapters from {adapter_path}")
         model = load_adapters(model, adapter_path)
-  
+
     args = vars(model.args)
-  
+
     fused_linears = [
-        (n, m.fuse())
-        for n, m in model.named_modules()
-        if hasattr(m, "fuse")
+        (n, m.fuse()) for n, m in model.named_modules() if hasattr(m, "fuse")
     ]
-  
+
     if fused_linears:
         model.update_modules(tree_unflatten(fused_linears))
-  
+
     if de_quantize:
         print("De-quantizing model")
         model = dequantize_model(model)
         args.pop("quantization", None)
         args.pop("quantization_config", None)
-  
+
     save_path_obj = Path(save_path)
     save_model(save_path_obj, model, donate_model=True)
     save_config(args, config_path=save_path_obj / "config.json")
     tokenizer.save_pretrained(save_path_obj)
-    
+
     readme_content = f"""# MLX-LM-LoRA Model
 
 This model was fine-tuned using [mlx-lm-lora](https://github.com/Goekdeniz-Guelmez/mlx-lm-lora) version {__version__}.
@@ -92,12 +86,12 @@ This model was fine-tuned using [mlx-lm-lora](https://github.com/Goekdeniz-Guelm
 
 This model can be loaded and used with the MLX framework.
 """
-    
+
     with open(save_path_obj / "README.md", "w") as f:
         f.write(readme_content)
-    
+
     print(f"Created README.md in {save_path}")
-  
+
     if export_gguf:
         model_type = args["model_type"]
         if model_type not in ["llama", "mixtral", "mistral"]:
@@ -159,7 +153,11 @@ def from_pretrained(
         nn.quantize(model, bits=bits, group_size=group_size, mode=mode)
 
         if hasattr(model, "args"):
-            model.args.quantization = {"group_size": group_size, "bits": bits, "quant_method": mode}
+            model.args.quantization = {
+                "group_size": group_size,
+                "bits": bits,
+                "mode": mode,
+            }
             model.args.quantization_config = model.args.quantization
 
     return model, tokenizer
@@ -170,7 +168,7 @@ def push_to_hf(
     hf_repo: str,
     api_key: str,
     private: bool = False,
-    commit_message: Optional[str] = None
+    commit_message: Optional[str] = None,
 ) -> None:
     """
     Push the fused model to the Hugging Face Hub.
@@ -191,26 +189,64 @@ def push_to_hf(
         )
 
     print(f"Pushing model to {hf_repo}...")
-    
+
     # Set the API token
-    os.environ["HUGGING_FACE_HUB_TOKEN"] = api_key
+    os.environ["HF_TOKEN"] = api_key
     api = HfApi()
-    
+
     # Create the repo if it doesn't exist
     try:
         create_repo(hf_repo, private=private, token=api_key)
     except Exception as e:
         print(f"Repository creation failed or repository already exists: {e}")
-    
+
     # Set default commit message if not provided
     if commit_message is None:
         commit_message = f"Upload fused MLX model {Path(model_path).name}"
-    
+
     # Upload the model files
     api.upload_folder(
-        folder_path=model_path,
-        repo_id=hf_repo,
-        commit_message=commit_message
+        folder_path=model_path, repo_id=hf_repo, commit_message=commit_message
     )
-    
+
     print(f"✅ Model successfully pushed to https://huggingface.co/{hf_repo}")
+
+
+def send_to_lmstudio(
+    model: nn.Module,
+    tokenizer: TokenizerWrapper,
+    new_model_name: str = "mlx_lm_lora_model",
+    de_quantize: Optional[bool] = True,
+) -> None:
+    """
+    Fuse fine-tuned adapters into the base model.
+
+    Args:
+        model: The MLX model to fuse adapters into.
+        tokenizer: The tokenizer wrapper.
+        new_model_name: The name of the new fused model.
+        de_quantize: Generate a de-quantized model.
+    """
+
+    lmstudio_models_root = Path.home() / ".lmstudio" / "models"
+
+    if not lmstudio_models_root.exists():
+        raise FileNotFoundError(
+            f"LM Studio models root not found at {lmstudio_models_root}"
+        )
+
+    lmstudio_models_path = lmstudio_models_root / "mlx_lm_lora"
+    lmstudio_models_path.mkdir(parents=True, exist_ok=True)
+
+    model_path = lmstudio_models_path / new_model_name
+
+    print(f"LM Studio models directory found at: {lmstudio_models_root}")
+
+    fuse_and_save_model(
+        model=model,
+        tokenizer=tokenizer,
+        save_path=str(model_path),
+        de_quantize=de_quantize,
+    )
+
+    print(f"Model successfully sent to LM Studio at {model_path}")

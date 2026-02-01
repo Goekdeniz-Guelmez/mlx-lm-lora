@@ -2,7 +2,7 @@ import json
 import random
 import types
 from pathlib import Path
-from typing import Any, Dict, List, Tuple, Union, Optional
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from transformers import PreTrainedTokenizer
 
