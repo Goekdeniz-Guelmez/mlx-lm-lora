@@ -193,7 +193,7 @@ def push_to_hf(
     print(f"Pushing model to {hf_repo}...")
     
     # Set the API token
-    os.environ["HUGGING_FACE_HUB_TOKEN"] = api_key
+    os.environ["HF_TOKEN"] = api_key
     api = HfApi()
     
     # Create the repo if it doesn't exist
@@ -214,3 +214,41 @@ def push_to_hf(
     )
     
     print(f"✅ Model successfully pushed to https://huggingface.co/{hf_repo}")
+
+
+def send_to_lmstudio(
+    model: nn.Module,
+    tokenizer: TokenizerWrapper,
+    new_model_name: str = "mlx_lm_lora_model",
+) -> None:
+    """
+    Fuse fine-tuned adapters into the base model.
+  
+    Args:
+        model: The MLX model to fuse adapters into.
+        tokenizer: The tokenizer wrapper.
+        new_model_name: The name of the new fused model.
+    """
+
+    lmstudio_models_root = Path.home() / ".lmstudio" / "models"
+
+    if not lmstudio_models_root.exists():
+        raise FileNotFoundError(
+            f"LM Studio models root not found at {lmstudio_models_root}"
+        )
+
+    lmstudio_models_path = lmstudio_models_root / "mlx_lm_lora"
+    lmstudio_models_path.mkdir(parents=True, exist_ok=True)
+
+    model_path = lmstudio_models_path / new_model_name
+
+    print(f"LM Studio models directory found at: {lmstudio_models_root}")
+
+    fuse_and_save_model(
+        model=model,
+        tokenizer=tokenizer,
+        save_path=str(model_path),
+        de_quantize=True,
+    )
+
+    print(f"Model successfully sent to LM Studio at {model_path}")
