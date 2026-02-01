@@ -159,7 +159,7 @@ def from_pretrained(
         nn.quantize(model, bits=bits, group_size=group_size, mode=mode)
 
         if hasattr(model, "args"):
-            model.args.quantization = {"group_size": group_size, "bits": bits, "quant_method": mode}
+            model.args.quantization = {"group_size": group_size, "bits": bits, "mode": mode}
             model.args.quantization_config = model.args.quantization
 
     return model, tokenizer
