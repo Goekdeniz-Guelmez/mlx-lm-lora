@@ -1,6 +1,6 @@
 import time
-from pathlib import Path
 from functools import partial
+from pathlib import Path
 
 import mlx.core as mx
 import mlx.nn as nn

@@ -83,7 +83,7 @@ parser.add_argument(
     "--use-ground-truth",
     action="store_true",
     help="Use ground truth from dataset to generate responses",
-    default=True
+    default=True,
 )
 
 args = parser.parse_args()
@@ -96,9 +96,7 @@ train_parquet_path = os.path.join(
 valid_parquet_path = os.path.join(
     args.output_dir, "data", "valid-00000-of-00001.parquet"
 )
-test_parquet_path = os.path.join(
-    args.output_dir, "data", "test-00000-of-00001.parquet"
-)
+test_parquet_path = os.path.join(args.output_dir, "data", "test-00000-of-00001.parquet")
 
 # Modified dataset loading with fallback
 try:
@@ -107,15 +105,16 @@ try:
 except Exception as e:
     print(f"Standard loading failed: {e}")
     print("Trying to load with custom format...")
-    
+
     # Custom loading for your specific format
     import pandas as pd
+
     if os.path.isdir(args.dataset_path):
         df = pd.read_parquet(os.path.join(args.dataset_path, "train.parquet"))
     else:
         df = pd.read_parquet(args.dataset_path)
     dataset = Dataset.from_pandas(df)
-    
+
     # Print info about loaded data
     print(f"Successfully loaded dataset with columns: {list(dataset.features.keys())}")
 
@@ -147,15 +146,12 @@ for item in dataset:
                 section = item["section"]
             elif "section" in item:
                 section = item["section"]
-        dataset_items.append({
-            "prompt": prompt,
-            "section": section
-        })
+        dataset_items.append({"prompt": prompt, "section": section})
 
 print(f"Loaded {len(dataset_items)} items.")
 
 if args.num_samples is not None and args.num_samples < len(dataset_items):
-    dataset_items = dataset_items[:args.num_samples]
+    dataset_items = dataset_items[: args.num_samples]
     print(f"Truncated dataset to {args.num_samples} items.")
 
 records = []
@@ -163,7 +159,7 @@ records = []
 pbar = tqdm(range(0, len(dataset_items), args.batch_size), desc="Generating SFT pairs")
 
 for i in pbar:
-    batch_items = dataset_items[i:i+args.batch_size]
+    batch_items = dataset_items[i : i + args.batch_size]
     # Prepare batch inputs with optional ground truth
     batch_inputs = []
     batch_prompts = []
@@ -181,7 +177,9 @@ for i in pbar:
             # Standard prompt without ground truth
             messages.append({"role": "user", "content": prompt})
         # Apply chat template
-        formatted_prompt = tokenizer.apply_chat_template(messages, add_generation_prompt=True)
+        formatted_prompt = tokenizer.apply_chat_template(
+            messages, add_generation_prompt=True
+        )
         batch_inputs.append(formatted_prompt)
 
     sampler = make_sampler(
