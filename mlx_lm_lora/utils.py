@@ -220,6 +220,7 @@ def send_to_lmstudio(
     model: nn.Module,
     tokenizer: TokenizerWrapper,
     new_model_name: str = "mlx_lm_lora_model",
+    de_quantize: Optional[bool] = True,
 ) -> None:
     """
     Fuse fine-tuned adapters into the base model.
@@ -228,6 +229,7 @@ def send_to_lmstudio(
         model: The MLX model to fuse adapters into.
         tokenizer: The tokenizer wrapper.
         new_model_name: The name of the new fused model.
+        de_quantize: Generate a de-quantized model.
     """
 
     lmstudio_models_root = Path.home() / ".lmstudio" / "models"
@@ -248,7 +250,7 @@ def send_to_lmstudio(
         model=model,
         tokenizer=tokenizer,
         save_path=str(model_path),
-        de_quantize=True,
+        de_quantize=de_quantize,
     )
 
     print(f"Model successfully sent to LM Studio at {model_path}")
