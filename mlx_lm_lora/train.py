@@ -795,6 +795,123 @@ def evaluate_model(
                 f"  {Colors.WHITE}{metric_name}:{Colors.RESET} {float(metric_value):.3f}"
             )
 
+    elif args.train_mode == "online_dpo":
+        test_loss, _, _, test_metrics = evaluate_online_dpo(
+            model=model,
+            ref_model=reference_model,
+            dataset=test_set,
+            batch_size=args.batch_size,
+            num_batches=args.test_batches,
+            beta=args.beta,
+            delta=args.delta,
+            max_seq_length=args.max_seq_length,
+            loss_type=args.dpo_cpo_loss_type,
+            judge_config=args.judge_config,
+            judge_model=judge_model,
+            judge_tokenizer=judge_tokenizer,
+            tokenizer=tokenizer,
+            max_tokens=args.max_completion_length,
+            temperature=args.temperature,
+        )
+        test_ppl = math.exp(test_loss)
+        print(
+            f"{Colors.BOLD}Test Results:{Colors.RESET}\n"
+            f"  {Colors.YELLOW}Loss:{Colors.RESET} {test_loss:.3f}\n"
+            f"  {Colors.YELLOW}Perplexity:{Colors.RESET} {test_ppl:.3f}"
+        )
+        print(f"\n{Colors.CYAN}Online DPO Test Metrics:{Colors.RESET}")
+        for metric_name, metric_value in test_metrics.items():
+            print(
+                f"  {Colors.WHITE}{metric_name}:{Colors.RESET} {float(metric_value):.3f}"
+            )
+
+    elif args.train_mode == "ppo":
+        test_loss, _, _, test_metrics = evaluate_ppo(
+            model=model,
+            ref_model=reference_model,
+            dataset=test_set,
+            batch_size=args.batch_size,
+            num_batches=args.test_batches,
+            beta=args.beta,
+            epsilon=args.epsilon,
+            max_seq_length=args.max_seq_length,
+            loss_type=args.dpo_cpo_loss_type,
+            judge_config=args.judge_config,
+            judge_model=judge_model,
+            judge_tokenizer=judge_tokenizer,
+            tokenizer=tokenizer,
+            max_tokens=args.max_completion_length,
+            temperature=args.temperature,
+        )
+        test_ppl = math.exp(test_loss)
+        print(
+            f"{Colors.BOLD}Test Results:{Colors.RESET}\n"
+            f"  {Colors.YELLOW}Loss:{Colors.RESET} {test_loss:.3f}\n"
+            f"  {Colors.YELLOW}Perplexity:{Colors.RESET} {test_ppl:.3f}"
+        )
+        print(f"\n{Colors.CYAN}PPO Test Metrics:{Colors.RESET}")
+        for metric_name, metric_value in test_metrics.items():
+            print(
+                f"  {Colors.WHITE}{metric_name}:{Colors.RESET} {float(metric_value):.3f}"
+            )
+
+    elif args.train_mode == "rlhf_reinforce":
+        test_loss, _, test_metrics = evaluate_rlhf_reinforce(
+            model=model,
+            ref_model=reference_model,
+            dataset=test_set,
+            batch_size=args.batch_size,
+            num_batches=args.test_batches,
+            beta=args.beta,
+            max_seq_length=args.max_seq_length,
+            judge_config=args.judge_config,
+            judge_model=judge_model,
+            judge_tokenizer=judge_tokenizer,
+            tokenizer=tokenizer,
+            max_tokens=args.max_completion_length,
+        )
+        test_ppl = math.exp(test_loss)
+        print(
+            f"{Colors.BOLD}Test Results:{Colors.RESET}\n"
+            f"  {Colors.YELLOW}Loss:{Colors.RESET} {test_loss:.3f}\n"
+            f"  {Colors.YELLOW}Perplexity:{Colors.RESET} {test_ppl:.3f}"
+        )
+        print(f"\n{Colors.CYAN}RLHF Reinforce Test Metrics:{Colors.RESET}")
+        for metric_name, metric_value in test_metrics.items():
+            print(
+                f"  {Colors.WHITE}{metric_name}:{Colors.RESET} {float(metric_value):.3f}"
+            )
+
+    elif args.train_mode == "xpo":
+        test_loss, _, _, test_metrics = evaluate_xpo(
+            model=model,
+            ref_model=reference_model,
+            dataset=test_set,
+            batch_size=args.batch_size,
+            num_batches=args.test_batches,
+            beta=args.beta,
+            delta=args.delta,
+            max_seq_length=args.max_seq_length,
+            loss_type=args.dpo_cpo_loss_type,
+            judge_config=args.judge_config,
+            alpha=args.alpha,
+            judge_model=judge_model,
+            judge_tokenizer=judge_tokenizer,
+            tokenizer=tokenizer,
+            max_tokens=args.max_completion_length,
+        )
+        test_ppl = math.exp(test_loss)
+        print(
+            f"{Colors.BOLD}Test Results:{Colors.RESET}\n"
+            f"  {Colors.YELLOW}Loss:{Colors.RESET} {test_loss:.3f}\n"
+            f"  {Colors.YELLOW}Perplexity:{Colors.RESET} {test_ppl:.3f}"
+        )
+        print(f"\n{Colors.CYAN}XPO Test Metrics:{Colors.RESET}")
+        for metric_name, metric_value in test_metrics.items():
+            print(
+                f"  {Colors.WHITE}{metric_name}:{Colors.RESET} {float(metric_value):.3f}"
+            )
+
     elif args.train_mode == "grpo":
         if args.reward_functions_file:
             load_reward_functions_from_file(args.reward_functions_file)
@@ -863,11 +980,6 @@ def evaluate_model(
             f"  {Colors.YELLOW}Loss:{Colors.RESET} {test_loss:.3f}\n"
             f"  {Colors.YELLOW}Perplexity:{Colors.RESET} {test_ppl:.3f}\n"
             f"  {Colors.YELLOW}Tokens:{Colors.RESET} {test_ntokens}"
-        )
-
-    elif args.train_mode in ["online_dpo", "ppo", "rlhf_reinforce", "xpo"]:
-        raise ValueError(
-            f"Evaluation not yet implemented for train mode: {args.train_mode}"
         )
 
 
