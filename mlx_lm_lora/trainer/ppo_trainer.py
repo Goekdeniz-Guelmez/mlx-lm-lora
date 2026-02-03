@@ -290,8 +290,8 @@ def train_ppo(
     tokenizer,
     optimizer,
     train_dataset,
-    val_dataset,
-    judge_config,
+    val_dataset: Optional[Any] = None,
+    judge_config=None,
     args: PPOTrainingArgs = PPOTrainingArgs(),
     judge_model: mx.array = None,
     judge_tokenizer: mx.array = None,
@@ -504,7 +504,11 @@ def train_ppo(
                 train=True,
             )
         )
-        if it == 1 or it % args.steps_per_eval == 0 or it == args.iters:
+        if (
+            val_dataset is not None
+            and len(val_dataset) > 0
+            and (it == 1 or it % args.steps_per_eval == 0 or it == args.iters)
+        ):
             stop = time.perf_counter()
             val_loss, val_rewards, val_ntokens, val_metrics = evaluate_ppo(
                 model=model,
