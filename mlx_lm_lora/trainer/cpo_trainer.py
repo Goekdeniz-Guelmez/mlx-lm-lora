@@ -1,6 +1,7 @@
 import time
 from functools import partial
 from pathlib import Path
+from typing import Any, Optional
 
 import mlx.core as mx
 import mlx.nn as nn
@@ -208,7 +209,7 @@ def train_cpo(
     model,
     optimizer,
     train_dataset,
-    val_dataset,
+    val_dataset: Optional[Any] = None,
     args: CPOTrainingArgs = CPOTrainingArgs(),
     loss_fn: callable = cpo_loss,
     training_callback: TrainingCallback = None,
@@ -305,7 +306,11 @@ def train_cpo(
             )
         )
 
-        if it == 1 or it % args.steps_per_eval == 0 or it == args.iters:
+        if (
+            val_dataset is not None
+            and len(val_dataset) > 0
+            and (it == 1 or it % args.steps_per_eval == 0 or it == args.iters)
+        ):
             stop = time.perf_counter()
             val_loss, val_rewards, val_ntokens, val_metrics = evaluate_cpo(
                 model=model,

@@ -2,6 +2,7 @@ import time
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
+from typing import Any, Optional
 
 import mlx.core as mx
 import mlx.nn as nn
@@ -172,7 +173,7 @@ def train_sft(
     model,
     optimizer,
     train_dataset,
-    val_dataset,
+    val_dataset: Optional[Any] = None,
     args: SFTTrainingArgs = SFTTrainingArgs(),
     loss: callable = default_loss,
     iterate_batches: callable = iterate_batches,
@@ -232,8 +233,11 @@ def train_sft(
             )
         )
         tic = time.perf_counter()
-        if args.steps_per_eval is not None and (
-            it == 1 or it % args.steps_per_eval == 0 or it == args.iters
+        if (
+            val_dataset is not None
+            and len(val_dataset) > 0
+            and args.steps_per_eval is not None
+            and (it == 1 or it % args.steps_per_eval == 0 or it == args.iters)
         ):
             tic = time.perf_counter()
             val_loss = evaluate_sft(

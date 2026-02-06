@@ -1,6 +1,7 @@
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any, Optional
 
 import mlx.core as mx
 import mlx.nn as nn
@@ -336,8 +337,8 @@ def train_xpo(
     tokenizer,
     optimizer,
     train_dataset,
-    val_dataset,
-    judge_config,
+    val_dataset: Optional[Any] = None,
+    judge_config=None,
     args: XPOTrainingArgs = XPOTrainingArgs(),
     judge_model: mx.array = None,
     judge_tokenizer: mx.array = None,
@@ -551,7 +552,11 @@ def train_xpo(
                 train=True,
             )
         )
-        if it == 1 or it % args.steps_per_eval == 0 or it == args.iters:
+        if (
+            val_dataset is not None
+            and len(val_dataset) > 0
+            and (it == 1 or it % args.steps_per_eval == 0 or it == args.iters)
+        ):
             stop = time.perf_counter()
             val_loss, val_rewards, val_ntokens, val_metrics = evaluate_xpo(
                 model=model,
