@@ -32,10 +32,8 @@ def find_lmstudio_models_path() -> Path:
     lm = Path.home() / ".lmstudio" / "models"
 
     if not lm.exists():
-        raise FileNotFoundError(
-            f"LM Studio models root not found at {lm}"
-        )
-    
+        raise FileNotFoundError(f"LM Studio models root not found at {lm}")
+
     return lm
 
 
@@ -137,7 +135,13 @@ def save_pretrained_merged(
         args.pop("quantization", None)
         args.pop("quantization_config", None)
 
-    save_pretrained(model=model, tokenizer=tokenizer, save_path=save_path, export_gguf=export_gguf, gguf_path=gguf_path)
+    save_pretrained(
+        model=model,
+        tokenizer=tokenizer,
+        save_path=save_path,
+        export_gguf=export_gguf,
+        gguf_path=gguf_path,
+    )
 
 
 def from_pretrained(
@@ -198,9 +202,16 @@ def from_pretrained(
                 "mode": mode,
             }
             model.args.quantization_config = model.args.quantization
-    
+
     if new_adapter_path is not None:
-        args = {"lora_parameters": lora_config, "num_layers": lora_config.get("num_layers", None)} if lora_config is not None else {} | args
+        args = (
+            {
+                "lora_parameters": lora_config,
+                "num_layers": lora_config.get("num_layers", None),
+            }
+            if lora_config is not None
+            else {} | args
+        )
         new_adapter_path = Path(new_adapter_path)
         new_adapter_path.mkdir(parents=True, exist_ok=True)
         new_adapter_file = new_adapter_path / "adapters.safetensors"
@@ -254,7 +265,12 @@ def push_to_hub(
 
     # Upload the model files
     api.upload_folder(
-        folder_path=model_path, repo_id=hf_repo, commit_message=commit_message, ignore_patterns=["adapters*.safetensors", "adapters*.json"] if remove_adapters else None
+        folder_path=model_path,
+        repo_id=hf_repo,
+        commit_message=commit_message,
+        ignore_patterns=(
+            ["adapters*.safetensors", "adapters*.json"] if remove_adapters else None
+        ),
     )
 
     print(f"✅ Model successfully pushed to https://huggingface.co/{hf_repo}")
