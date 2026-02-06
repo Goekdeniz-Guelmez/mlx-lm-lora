@@ -1,7 +1,7 @@
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 
 import mlx.core as mx
 import mlx.nn as nn
@@ -745,7 +745,7 @@ def train_grpo(
     tokenizer,
     optimizer,
     train_dataset,
-    val_dataset,
+    val_dataset: Optional[Any] = None,
     reward_funcs: Optional[List[RewardFunctions]] = [
         r1_accuracy_reward_func,
         r1_int_reward_func,
@@ -909,7 +909,11 @@ def train_grpo(
             )
         )
 
-        if it == 1 or it % args.steps_per_eval == 0 or it == args.iters:
+        if (
+            val_dataset is not None
+            and len(val_dataset) > 0
+            and (it == 1 or it % args.steps_per_eval == 0 or it == args.iters)
+        ):
             stop = time.perf_counter()
             val_loss, val_ntokens, val_metrics = evaluate_grpo(
                 model=model,
