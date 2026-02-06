@@ -179,13 +179,19 @@ def evaluate_sft(
         if efficient and cache is not None:
             seq_length = batch[0].shape[1]
             for s in range(0, seq_length, seq_step_size):
-                local_batch = (batch[0][:, s : s + seq_step_size], batch[1])
+                end = min(s + seq_step_size, seq_length)
+                # If next chunk would have only 1 token, absorb it into this chunk
+                if 0 < (seq_length - end) < 2:
+                    end = seq_length
+                local_batch = (batch[0][:, s : end], batch[1])
                 losses, toks = loss(model, *local_batch, cache)
                 all_losses += losses * toks
                 ntokens += toks
-                if s + seq_step_size >= seq_length:
+                if end >= seq_length:
                     reset_prompt_cache(cache)
                 mx.eval(all_losses, ntokens)
+                if end >= seq_length:
+                    break
         else:
             losses, toks = loss(model, *batch)
             all_losses += losses * toks
@@ -249,7 +255,7 @@ def train_sft(
 
         return lvalue, toks, grad
 
-    @partial(mx.compile, inputs=state, outputs=state)
+    # No compilation for seq_split_step since it uses cache mutation
     def seq_split_step(batch, prev_grad, do_update):
         # Sequence splitting logic for efficient training
         losses = mx.array(0.0)
@@ -258,7 +264,11 @@ def train_sft(
         seq_grad_accum = None
         
         for s in range(0, seq_length, seq_step_size):
-            local_batch = (batch[0][:, s : s + seq_step_size], batch[1])
+            end = min(s + seq_step_size, seq_length)
+            # If next chunk would have only 1 token, absorb it into this chunk
+            if 0 < (seq_length - end) < 2:
+                end = seq_length
+            local_batch = (batch[0][:, s : end], batch[1])
             (lvalue, toks), grad = loss_value_and_grad(model, *local_batch, cache)
             prev_n_tokens = n_tokens
             losses += toks * lvalue
@@ -274,9 +284,13 @@ def train_sft(
                 )
 
             # Reset prompt cache before the last eval
-            if s + seq_step_size >= seq_length:
+            if end >= seq_length:
                 reset_prompt_cache(cache)
-            mx.eval(seq_grad_accum, losses, n_tokens)
+            
+            # Evaluate intermediate results to ensure proper execution
+            mx.eval(state, seq_grad_accum, losses, n_tokens)
+            if end >= seq_length:
+                break
         
         lvalue = losses / n_tokens
         toks = n_tokens
