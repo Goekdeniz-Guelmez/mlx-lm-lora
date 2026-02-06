@@ -15,6 +15,15 @@ from tqdm import tqdm
 from .datasets import CacheDataset
 
 
+def reset_prompt_cache(cache):
+    from mlx_lm.models.cache import KVCache, make_prompt_cache
+    for e, c in enumerate(cache):
+        if isinstance(c, KVCache):
+            cache[e] = KVCache()
+        else:
+            raise ValueError("Unsupported cache")
+
+
 def grad_checkpoint(layer):
     """
     Update all instances of type(layer) to use gradient checkpointing.
@@ -65,15 +74,20 @@ class SFTTrainingArgs:
         default=False,
         metadata={"help": "Use gradient checkpointing to reduce memory use."},
     )
+    seq_step_size: Optional[int] = field(
+        default=None,
+        metadata={"help": "The examples are processsed sequentially in seq_step_size chunks."},
+    )
 
 
-def default_loss(model, batch, lengths):
+def default_loss(model, batch, lengths, cache=None):
     inputs = batch[:, :-1]
     targets = batch[:, 1:]
 
-    logits = model(inputs)
+    offset = cache[0].offset if cache is not None else 0
+    logits = model(inputs, cache=cache)
 
-    steps = mx.arange(1, targets.shape[1] + 1)
+    steps = mx.arange(1, targets.shape[1] + 1) + offset
     mask = mx.logical_and(steps >= lengths[:, 0:1], steps <= lengths[:, 1:])
 
     loss = nn.losses.cross_entropy(logits, targets) * mask
