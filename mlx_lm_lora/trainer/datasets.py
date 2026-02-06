@@ -399,10 +399,10 @@ class ChatDataset:
     def process(self, d):
         messages = d[self.chat_key]
         tools = d.get("tools", None)
-        tokens = self.tokenizer.apply_chat_template(messages, tools=tools)
+        tokens = self.tokenizer.encode(self.tokenizer.apply_chat_template(messages, tools=tools, tokenize=False))
         if self.mask_prompt:
             messages = messages[:-1]
-            offset = len(self.tokenizer.apply_chat_template(messages, tools=tools))
+            offset = len(self.tokenizer.encode(self.tokenizer.apply_chat_template(messages, tools=tools, tokenize=False)))
             return (tokens, offset)
         else:
             return tokens
@@ -436,17 +436,19 @@ class CompletionsDataset:
         self.tokenizer = tokenizer
 
     def process(self, d):
-        tokens = self.tokenizer.apply_chat_template(
+        tokens = self.tokenizer.encode(self.tokenizer.apply_chat_template(
             [
                 {"role": "user", "content": d[self.prompt_key]},
                 {"role": "assistant", "content": d[self.completion_key]},
             ],
-        )
+            tokenize=False,
+        ))
         if self.mask_prompt:
             offset = len(
-                self.tokenizer.apply_chat_template(
-                    [{"role": "user", "content": d[self.prompt_key]}]
-                )
+                self.tokenizer.encode(self.tokenizer.apply_chat_template(
+                    [{"role": "user", "content": d[self.prompt_key]}],
+                    tokenize=False,
+                ))
             )
             return (tokens, offset)
 
