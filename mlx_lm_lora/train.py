@@ -104,6 +104,7 @@ CONFIG_DEFAULTS = {
     "max_seq_length": 2048,
     "config": None,
     "grad_checkpoint": False,
+    "efficient_long_context": False,
     "lr_schedule": None,
     "lora_parameters": {"rank": 8, "dropout": 0.0, "scale": 10.0},
     "mask_prompt": False,
@@ -326,6 +327,12 @@ def build_parser():
         "--grad-checkpoint",
         action="store_true",
         help="Use gradient checkpointing to reduce memory use.",
+        default=None,
+    )
+    parser.add_argument(
+        "--efficient-long-context",
+        action="store_true",
+        help="Use efficient long context processing (only supported for SFT for now).",
         default=None,
     )
     parser.add_argument(
@@ -703,6 +710,7 @@ def train_model(
                 max_seq_length=args.max_seq_length,
                 grad_checkpoint=args.grad_checkpoint,
                 gradient_accumulation_steps=args.gradient_accumulation_steps,
+                seq_step_size=512 if args.efficient_long_context else None,
             ),
             optimizer=opt,
             train_dataset=train_set,
