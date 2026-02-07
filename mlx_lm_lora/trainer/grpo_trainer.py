@@ -11,6 +11,7 @@ from mlx_lm.generate import batch_generate
 from mlx_lm.sample_utils import make_sampler
 from mlx_lm.tuner.callbacks import TrainingCallback
 from tqdm import tqdm
+from functools import partial
 
 from .grpo_reward_functions import (
     RewardFunctions,
@@ -105,7 +106,6 @@ def get_per_token_logps(model: nn.Module, inputs, lengths):
             log_probs, seq_targets.reshape(seq_len, 1), axis=-1
         ).squeeze(-1)
         per_token_logps.append(token_log_probs)
-    mx.eval(logits)
     return per_token_logps
 
 
@@ -361,10 +361,7 @@ def grpo_loss(
     importance_sampling_level: str = "token",
     grpo_loss_type: str = "grpo",
 ):
-    _, _, prompt_text, answer_text, type_info = batch
-
     all_completions = completions
-    all_completion_texts = completion_texts
     batch_indices = batch_indices
 
     if not all_completions:
@@ -378,7 +375,7 @@ def grpo_loss(
     attention_masks = []
 
     for completion_ids in all_completions:
-        completion_tensor = mx.array(completion_ids.tolist())
+        completion_tensor = completion_ids
         padding_length = max_length - completion_tensor.shape[0]
         if padding_length > 0:
             padding = mx.zeros((padding_length,), dtype=completion_tensor.dtype)
@@ -398,14 +395,11 @@ def grpo_loss(
 
     # Calculate log probabilities
     token_log_probs = get_per_token_logps(model, inputs, lengths)
-    mx.eval(token_log_probs)
 
     if ref_model is None:
         ref_token_log_probs = token_log_probs
     else:
         ref_token_log_probs = get_per_token_logps(ref_model, inputs, lengths)
-        mx.eval(ref_token_log_probs)
-        mx.clear_cache()
 
     del inputs, attention_mask
     mx.clear_cache()
@@ -775,63 +769,18 @@ def train_grpo(
 
     state = [model.state, optimizer.state, mx.random.state]
 
-    def step(batch, prev_grad, do_update):
-        mx.clear_cache()
+    @partial(mx.compile, inputs=state, outputs=state)
+    def step(
+        batch,
+        ordered_completions,
+        ordered_completion_texts,
+        ordered_batch_indices,
+        advantages,
+        reward_metrics,
+        prev_grad,
+        do_update,
+    ):
         prompt_tokens, answer_tokens, prompt_text, answer_text, type_info = batch
-
-        all_completions, all_completion_texts, batch_indices = generate_grpo(
-            model=model,
-            tokenizer=tokenizer,
-            prompt_tokens=prompt_tokens,
-            max_tokens=args.max_completion_length,
-            group_size=args.group_size,
-            batch_size=args.batch_size,
-            end_token=end_answer_token,
-            temperature=args.temperature,
-            top_p=args.top_p,
-            top_k=args.top_k,
-            min_p=args.min_p,
-        )
-
-        # Prepare expanded data for reward calculation
-        expanded_answers = []
-        expanded_prompts = []
-        expanded_types = []
-        unique_prompt_indices = sorted(set(batch_indices))
-        grouped_completions = {idx: [] for idx in unique_prompt_indices}
-
-        for i, completion_idx in enumerate(batch_indices):
-            grouped_completions[completion_idx].append(i)
-
-        ordered_completions = []
-        ordered_completion_texts = []
-        ordered_batch_indices = []
-
-        for prompt_idx in unique_prompt_indices:
-            completion_indices = grouped_completions[prompt_idx]
-            for idx in completion_indices:
-                ordered_completions.append(all_completions[idx])
-                ordered_completion_texts.append(all_completion_texts[idx])
-                ordered_batch_indices.append(prompt_idx)
-                expanded_answers.append(answer_text[prompt_idx])
-                expanded_prompts.append(prompt_text[prompt_idx])
-                expanded_types.append(
-                    type_info[prompt_idx] if type_info is not None else None
-                )
-
-        # Calculate rewards and advantages outside of the loss function
-        advantages, reward_metrics = calculate_rewards_and_advantages(
-            reward_funcs=reward_funcs,
-            expanded_prompts=expanded_prompts,
-            all_completion_texts=ordered_completion_texts,
-            expanded_answers=expanded_answers,
-            expanded_types=expanded_types,
-            batch_indices=ordered_batch_indices,
-            unique_prompt_indices=unique_prompt_indices,
-            reward_weights=(
-                args.reward_weights if hasattr(args, "reward_weights") else None
-            ),
-        )
 
         # Update the loss function call to use the new signature
         (lvalue, toks, metrics), grad = loss_value_and_grad(
@@ -851,7 +800,6 @@ def train_grpo(
             max_tokens=args.max_completion_length,
         )
 
-        del all_completions, all_completion_texts, batch_indices
         del ordered_completions, ordered_completion_texts, ordered_batch_indices
         del advantages, reward_metrics
         mx.clear_cache()
@@ -956,8 +904,70 @@ def train_grpo(
 
             start = time.perf_counter()
 
+        prompt_tokens, answer_tokens, prompt_text, answer_text, type_info = batch
+
+        all_completions, all_completion_texts, batch_indices = generate_grpo(
+            model=model,
+            tokenizer=tokenizer,
+            prompt_tokens=prompt_tokens,
+            max_tokens=args.max_completion_length,
+            group_size=args.group_size,
+            batch_size=args.batch_size,
+            end_token=end_answer_token,
+            temperature=args.temperature,
+            top_p=args.top_p,
+            top_k=args.top_k,
+            min_p=args.min_p,
+        )
+
+        # Prepare expanded data for reward calculation
+        expanded_answers = []
+        expanded_prompts = []
+        expanded_types = []
+        unique_prompt_indices = sorted(set(batch_indices))
+        grouped_completions = {idx: [] for idx in unique_prompt_indices}
+
+        for i, completion_idx in enumerate(batch_indices):
+            grouped_completions[completion_idx].append(i)
+
+        ordered_completions = []
+        ordered_completion_texts = []
+        ordered_batch_indices = []
+
+        for prompt_idx in unique_prompt_indices:
+            completion_indices = grouped_completions[prompt_idx]
+            for idx in completion_indices:
+                ordered_completions.append(all_completions[idx])
+                ordered_completion_texts.append(all_completion_texts[idx])
+                ordered_batch_indices.append(prompt_idx)
+                expanded_answers.append(answer_text[prompt_idx])
+                expanded_prompts.append(prompt_text[prompt_idx])
+                expanded_types.append(
+                    type_info[prompt_idx] if type_info is not None else None
+                )
+
+        advantages, reward_metrics = calculate_rewards_and_advantages(
+            reward_funcs=reward_funcs,
+            expanded_prompts=expanded_prompts,
+            all_completion_texts=ordered_completion_texts,
+            expanded_answers=expanded_answers,
+            expanded_types=expanded_types,
+            batch_indices=ordered_batch_indices,
+            unique_prompt_indices=unique_prompt_indices,
+            reward_weights=(
+                args.reward_weights if hasattr(args, "reward_weights") else None
+            ),
+        )
+
+        del all_completions, all_completion_texts, batch_indices
+
         lvalue, toks, metrics, grad_accum = step(
             batch,
+            ordered_completions,
+            ordered_completion_texts,
+            ordered_batch_indices,
+            advantages,
+            reward_metrics,
             grad_accum,
             it % grad_accum_steps == 0,
         )
