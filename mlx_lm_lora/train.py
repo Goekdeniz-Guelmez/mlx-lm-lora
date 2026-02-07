@@ -332,7 +332,7 @@ def build_parser():
     parser.add_argument(
         "--efficient-long-context",
         action="store_true",
-        help="Use efficient long context processing (only supported for SFT for now).",
+        help="Use efficient long context processing (Experimental, only supports SFT).",
         default=None,
     )
     parser.add_argument(
