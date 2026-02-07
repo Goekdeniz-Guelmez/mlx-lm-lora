@@ -904,8 +904,6 @@ def train_grpo(
 
             start = time.perf_counter()
 
-        # Generate completions and calculate rewards outside of step()
-        mx.clear_cache()
         prompt_tokens, answer_tokens, prompt_text, answer_text, type_info = batch
 
         all_completions, all_completion_texts, batch_indices = generate_grpo(
