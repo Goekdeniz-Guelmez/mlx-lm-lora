@@ -22,7 +22,76 @@ def calculate_iters(train_set, batch_size, epochs) -> int:
     return iters
 
 
-def fuse_and_save_model(
+def find_lmstudio_models_path() -> Path:
+    """
+    Find the LM Studio models directory.
+
+    Returns:
+        Path: The path to the LM Studio models directory.
+    """
+    lm = Path.home() / ".lmstudio" / "models"
+
+    if not lm.exists():
+        raise FileNotFoundError(f"LM Studio models root not found at {lm}")
+
+    return lm
+
+
+def save_pretrained(
+    model: nn.Module,
+    tokenizer: TokenizerWrapper,
+    save_path: str = "fused_model",
+    export_gguf: Optional[bool] = False,
+    gguf_path: Optional[str] = "ggml-model-f16.gguf",
+) -> None:
+    """
+    Fuse fine-tuned adapters into the base model.
+
+    Args:
+        model: The MLX model to fuse adapters into.
+        tokenizer: The tokenizer wrapper.
+        save_path: The path to save the fused model.
+        export_gguf: Export model weights in GGUF format.
+        gguf_path: Path to save the exported GGUF format model weights.
+    """
+    from ._version import __version__
+
+    save_path_obj = Path(save_path)
+    save_model(save_path_obj, model, donate_model=True)
+    save_config(vars(model.args), config_path=save_path_obj / "config.json")
+    tokenizer.save_pretrained(save_path_obj)
+
+    readme_content = f"""# MLX-LM-LoRA Model
+
+This model was fine-tuned using [mlx-lm-lora](https://github.com/Goekdeniz-Guelmez/mlx-lm-lora) version {__version__}.
+
+## Model Details
+
+- Base model: {model.args.get('model_name', 'Unknown')}
+- Model type: {model.args.get('model_type', 'Unknown')}
+- Training method: LoRA fine-tuning with MLX
+- Fusion date: {datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+
+## Usage
+
+This model can be loaded and used with the MLX framework.
+"""
+    with open(save_path_obj / "README.md", "w") as f:
+        f.write(readme_content)
+
+    print(f"Created README.md in {save_path}")
+
+    if export_gguf:
+        model_type = model.args["model_type"]
+        if model_type not in ["llama", "mixtral", "mistral"]:
+            raise ValueError(
+                f"Model type {model_type} not supported for GGUF conversion."
+            )
+        weights = dict(tree_flatten(model.parameters()))
+        convert_to_gguf(save_path, weights, model.args, str(save_path_obj / gguf_path))
+
+
+def save_pretrained_merged(
     model: nn.Module,
     tokenizer: TokenizerWrapper,
     save_path: str = "fused_model",
@@ -66,45 +135,19 @@ def fuse_and_save_model(
         args.pop("quantization", None)
         args.pop("quantization_config", None)
 
-    save_path_obj = Path(save_path)
-    save_model(save_path_obj, model, donate_model=True)
-    save_config(args, config_path=save_path_obj / "config.json")
-    tokenizer.save_pretrained(save_path_obj)
-
-    readme_content = f"""# MLX-LM-LoRA Model
-
-This model was fine-tuned using [mlx-lm-lora](https://github.com/Goekdeniz-Guelmez/mlx-lm-lora) version {__version__}.
-
-## Model Details
-
-- Base model: {args.get('model_name', 'Unknown')}
-- Model type: {args.get('model_type', 'Unknown')}
-- Training method: LoRA fine-tuning with MLX
-- Fusion date: {datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-
-## Usage
-
-This model can be loaded and used with the MLX framework.
-"""
-
-    with open(save_path_obj / "README.md", "w") as f:
-        f.write(readme_content)
-
-    print(f"Created README.md in {save_path}")
-
-    if export_gguf:
-        model_type = args["model_type"]
-        if model_type not in ["llama", "mixtral", "mistral"]:
-            raise ValueError(
-                f"Model type {model_type} not supported for GGUF conversion."
-            )
-        weights = dict(tree_flatten(model.parameters()))
-        convert_to_gguf(save_path, weights, args, str(save_path_obj / gguf_path))
+    save_pretrained(
+        model=model,
+        tokenizer=tokenizer,
+        save_path=save_path,
+        export_gguf=export_gguf,
+        gguf_path=gguf_path,
+    )
 
 
 def from_pretrained(
     model: str,
     adapter_path: Optional[str] = None,
+    new_adapter_path: Optional[str] = None,
     lora_config: Optional[dict] = None,
     quantized_load: Optional[dict] = None,
 ) -> Tuple[nn.Module, Any]:
@@ -115,7 +158,7 @@ def from_pretrained(
         lora_config: Configuration for LoRA adapters.
         quantized_load: If provided, the model will be loaded with quantization.
     Returns:
-        Tuple[nn.Module, tokenizer]: The model with LoRA adapters loaded, and tokenizer.
+        Tuple[nn.Module, tokenizer, Optional[str]]: The model with LoRA adapters loaded, the tokenizer, and the adapter path if provided.
     """
     print(f"Loading model {model}")
     model, tokenizer = load(model, adapter_path=adapter_path)
@@ -147,7 +190,7 @@ def from_pretrained(
             raise ValueError("Cannot quantize already quantized model")
 
         bits = quantized_load.get("bits", 4)
-        group_size = quantized_load.get("group_size", 128)
+        group_size = quantized_load.get("group_size", 64)
         mode = quantized_load.get("mode", "affine")
 
         nn.quantize(model, bits=bits, group_size=group_size, mode=mode)
@@ -160,15 +203,30 @@ def from_pretrained(
             }
             model.args.quantization_config = model.args.quantization
 
-    return model, tokenizer
+    if new_adapter_path is not None:
+        args = (
+            {
+                "lora_parameters": lora_config,
+                "num_layers": lora_config.get("num_layers", None),
+            }
+            if lora_config is not None
+            else {} | args
+        )
+        new_adapter_path = Path(new_adapter_path)
+        new_adapter_path.mkdir(parents=True, exist_ok=True)
+        new_adapter_file = new_adapter_path / "adapters.safetensors"
+        save_config(args, new_adapter_path / "adapter_config.json")
+
+    return model, tokenizer, new_adapter_file if new_adapter_path is not None else None
 
 
-def push_to_hf(
+def push_to_hub(
     model_path: str,
     hf_repo: str,
     api_key: str,
     private: bool = False,
     commit_message: Optional[str] = None,
+    remove_adapters: Optional[bool] = False,
 ) -> None:
     """
     Push the fused model to the Hugging Face Hub.
@@ -179,6 +237,7 @@ def push_to_hf(
         api_key: Hugging Face API token.
         private: Whether to create a private repository.
         commit_message: Custom commit message for the upload.
+        remove_adapters: Whether to remove adapters before pushing.
     """
     try:
         from huggingface_hub import HfApi, create_repo
@@ -196,7 +255,7 @@ def push_to_hf(
 
     # Create the repo if it doesn't exist
     try:
-        create_repo(hf_repo, private=private, token=api_key)
+        create_repo(hf_repo, private=private, token=api_key, repo_type="model")
     except Exception as e:
         print(f"Repository creation failed or repository already exists: {e}")
 
@@ -206,13 +265,18 @@ def push_to_hf(
 
     # Upload the model files
     api.upload_folder(
-        folder_path=model_path, repo_id=hf_repo, commit_message=commit_message
+        folder_path=model_path,
+        repo_id=hf_repo,
+        commit_message=commit_message,
+        ignore_patterns=(
+            ["adapters*.safetensors", "adapters*.json"] if remove_adapters else None
+        ),
     )
 
     print(f"✅ Model successfully pushed to https://huggingface.co/{hf_repo}")
 
 
-def send_to_lmstudio(
+def save_to_lmstudio_merged(
     model: nn.Module,
     tokenizer: TokenizerWrapper,
     new_model_name: str = "mlx_lm_lora_model",
@@ -228,12 +292,7 @@ def send_to_lmstudio(
         de_quantize: Generate a de-quantized model.
     """
 
-    lmstudio_models_root = Path.home() / ".lmstudio" / "models"
-
-    if not lmstudio_models_root.exists():
-        raise FileNotFoundError(
-            f"LM Studio models root not found at {lmstudio_models_root}"
-        )
+    lmstudio_models_root = find_lmstudio_models_path()
 
     lmstudio_models_path = lmstudio_models_root / "mlx_lm_lora"
     lmstudio_models_path.mkdir(parents=True, exist_ok=True)
@@ -242,7 +301,7 @@ def send_to_lmstudio(
 
     print(f"LM Studio models directory found at: {lmstudio_models_root}")
 
-    fuse_and_save_model(
+    save_pretrained_merged(
         model=model,
         tokenizer=tokenizer,
         save_path=str(model_path),
