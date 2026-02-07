@@ -9,9 +9,9 @@ import mlx.nn as nn
 import numpy as np
 from mlx.nn.utils import average_gradients
 from mlx.utils import tree_flatten, tree_map
+from mlx_lm.models.cache import KVCache, make_prompt_cache
 from mlx_lm.tuner.callbacks import TrainingCallback
 from tqdm import tqdm
-from mlx_lm.models.cache import KVCache, make_prompt_cache
 
 from .datasets import CacheDataset
 
@@ -76,7 +76,9 @@ class SFTTrainingArgs:
     )
     seq_step_size: Optional[int] = field(
         default=None,
-        metadata={"help": "The examples are processsed sequentially in seq_step_size chunks."},
+        metadata={
+            "help": "The examples are processsed sequentially in seq_step_size chunks."
+        },
     )
 
 
@@ -183,7 +185,7 @@ def evaluate_sft(
                 # If next chunk would have only 1 token, absorb it into this chunk
                 if 0 < (seq_length - end) < 2:
                     end = seq_length
-                local_batch = (batch[0][:, s : end], batch[1])
+                local_batch = (batch[0][:, s:end], batch[1])
                 losses, toks = loss(model, *local_batch, cache)
                 all_losses += losses * toks
                 ntokens += toks
@@ -227,7 +229,7 @@ def train_sft(
     grad_accum_steps = args.gradient_accumulation_steps
     if grad_accum_steps < 1:
         raise ValueError("gradient_accumulation_steps must be at least 1")
-    
+
     efficient = True if args.seq_step_size is not None else False
 
     if efficient:
@@ -262,13 +264,13 @@ def train_sft(
         n_tokens = mx.array(0.0)
         seq_length = batch[0].shape[1]
         seq_grad_accum = None
-        
+
         for s in range(0, seq_length, seq_step_size):
             end = min(s + seq_step_size, seq_length)
             # If next chunk would have only 1 token, absorb it into this chunk
             if 0 < (seq_length - end) < 2:
                 end = seq_length
-            local_batch = (batch[0][:, s : end], batch[1])
+            local_batch = (batch[0][:, s:end], batch[1])
             (lvalue, toks), grad = loss_value_and_grad(model, *local_batch, cache)
             prev_n_tokens = n_tokens
             losses += toks * lvalue
@@ -286,12 +288,12 @@ def train_sft(
             # Reset prompt cache before the last eval
             if end >= seq_length:
                 reset_prompt_cache(cache)
-            
+
             # Evaluate intermediate results to ensure proper execution
             mx.eval(state, seq_grad_accum, losses, n_tokens)
             if end >= seq_length:
                 break
-        
+
         lvalue = losses / n_tokens
         toks = n_tokens
         grad = seq_grad_accum
