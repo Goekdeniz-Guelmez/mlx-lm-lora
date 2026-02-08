@@ -67,8 +67,8 @@ This model was fine-tuned using [mlx-lm-lora](https://github.com/Goekdeniz-Guelm
 
 ## Model Details
 
-- Base model: {model.args.get('model_name', 'Unknown')}
-- Model type: {model.args.get('model_type', 'Unknown')}
+- Base model: {vars(model.args).get('model_name', 'Unknown')}
+- Model type: {vars(model.args).get('model_type', 'Unknown')}
 - Training method: LoRA fine-tuning with MLX
 - Fusion date: {datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 
