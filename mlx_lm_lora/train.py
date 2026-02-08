@@ -488,12 +488,22 @@ def train_model(
         for l in model.layers[-max(args.num_layers, 0) :]:
             l.unfreeze()
     elif args.train_type in ["lora", "dora"]:
-        linear_to_lora_layers(
-            model,
-            args.num_layers,
-            args.lora_parameters,
-            use_dora=(args.train_type == "dora"),
+        has_adapters = any(
+            m.__class__.__name__ == "LoRALinear" for _, m in model.named_modules()
         )
+
+        if has_adapters:
+            print_info(f"Model already has {args.train_type} adapters. Unfreezing them.")
+            for _, m in model.named_modules():
+                if m.__class__.__name__ == "LoRALinear":
+                    m.unfreeze()
+        else:
+            linear_to_lora_layers(
+                model,
+                args.num_layers,
+                args.lora_parameters,
+                use_dora=(args.train_type == "dora"),
+            )
     else:
         raise ValueError(f"Received unknown train-type {args.train_type}")
 
@@ -1012,19 +1022,20 @@ def run(args, training_callback: TrainingCallback = None):
             wrapped_callback=training_callback,
         )
 
-    quanziation_config = None
+    quantization_config = None
     if args.load_in_4bits:
-        quanziation_config = {"bits": 4, "group_size": 128}
+        quantization_config = {"bits": 4, "group_size": 128}
     elif args.load_in_6bits:
-        quanziation_config = {"bits": 6, "group_size": 128}
+        quantization_config = {"bits": 6, "group_size": 128}
     elif args.load_in_8bits:
-        quanziation_config = {"bits": 8, "group_size": 128}
+        quantization_config = {"bits": 8, "group_size": 128}
     elif args.load_in_mxfp4:
-        quanziation_config = {"bits": 4, "group_size": 32, "mode": "mxfp4"}
+        quantization_config = {"bits": 4, "group_size": 32, "mode": "mxfp4"}
 
     print_info(f"Loading model: {Colors.CYAN}{args.model}{Colors.RESET}")
     model, tokenizer, adapter_file = from_pretrained(
-        model=args.model, quantized_load=quanziation_config
+        model=args.model, new_adapter_path=args.adapter_path,
+        lora_config=None, quantized_load=quantization_config
     )
     reference_model = (
         load_reference_model(args)
