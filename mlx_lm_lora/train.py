@@ -17,7 +17,7 @@ from mlx_lm.tuner.utils import (
     load_adapters,
     print_trainable_parameters,
 )
-from mlx_lm.utils import load, load_tokenizer, save_config
+from mlx_lm.utils import load, load_tokenizer
 
 from .trainer.cpo_trainer import CPOTrainingArgs, evaluate_cpo, train_cpo
 from .trainer.datasets import CacheDataset, load_dataset
@@ -339,7 +339,7 @@ def build_parser():
     parser.add_argument(
         "--efficient-long-context",
         action="store_true",
-        help="Use efficient long context processing (Experimental, only supports SFT).",
+        help="Use efficient long context processing (Experimental, only supported in SFT, DPO, CPO, ORPO).",
         default=None,
     )
     parser.add_argument(
@@ -493,7 +493,7 @@ def train_model(
         )
 
         if has_adapters:
-            print_info(f"Model already has {args.train_type} adapters. Unfreezing them.")
+            print_warning(f"Model already has {args.train_type} adapters. Unfreezing them.")
             for _, m in model.named_modules():
                 if m.__class__.__name__ == "LoRALinear":
                     m.unfreeze()
@@ -508,7 +508,7 @@ def train_model(
         raise ValueError(f"Received unknown train-type {args.train_type}")
 
     if args.resume_adapter_file is not None:
-        print_info(
+        print_warning(
             f"Loading fine-tuned weights from {Colors.CYAN}{args.resume_adapter_file}{Colors.RESET}"
         )
         model.load_weights(args.resume_adapter_file, strict=False)
@@ -652,6 +652,7 @@ def train_model(
                 beta=args.beta,
                 loss_type=args.dpo_cpo_loss_type,
                 delta=args.delta,
+                seq_step_size=512 if args.efficient_long_context else None,
                 reference_model_path=args.reference_model_path,
                 gradient_accumulation_steps=args.gradient_accumulation_steps,
             ),

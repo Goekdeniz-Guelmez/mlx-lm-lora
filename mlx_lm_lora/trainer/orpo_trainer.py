@@ -9,10 +9,19 @@ import mlx.nn as nn
 import numpy as np
 from mlx.nn.utils import average_gradients
 from mlx.utils import tree_flatten, tree_map
+from mlx_lm.models.cache import KVCache, make_prompt_cache
 from mlx_lm.tuner.callbacks import TrainingCallback
 from tqdm import tqdm
 
 from .sft_trainer import SFTTrainingArgs, grad_checkpoint
+
+
+def reset_prompt_cache(cache):
+    for e, c in enumerate(cache):
+        if isinstance(c, KVCache):
+            cache[e] = KVCache()
+        else:
+            raise ValueError("Unsupported cache")
 
 
 @dataclass
@@ -26,15 +35,22 @@ class ORPOTrainingArgs(SFTTrainingArgs):
     )
 
 
-def get_logps(model, tokens, mask):
+def get_logps(model, tokens, mask, cache=None):
     inputs = tokens[:, :-1]
     targets = tokens[:, 1:]
-    logits = model(inputs)
+    logits = model(inputs, cache=cache)
+    # Clip log_probs to avoid -inf and NaN stability issues
     log_probs = -nn.losses.cross_entropy(logits, targets, reduction="none")
+    log_probs = mx.clip(log_probs, -1000.0, 0.0)
+    
     mask = mask[:, :-1]
     seq_lengths = mask.sum(-1)
-    logp_seq_avg = (log_probs * mask).sum(-1) / seq_lengths
-    logits_mean = logits.sum() / mask.sum()
+    logp_sum = (log_probs * mask).sum(-1)
+    safe_seq_lengths = mx.where(seq_lengths > 0, seq_lengths, mx.array(1.0))
+    logp_seq_avg = mx.where(seq_lengths > 0, logp_sum / safe_seq_lengths, mx.array(0.0))
+    mask_sum = mask.sum()
+    safe_mask_sum = mx.where(mask_sum > 0, mask_sum, mx.array(1.0))
+    logits_mean = mx.where(mask_sum > 0, logits.sum() / safe_mask_sum, mx.array(0.0))
     return logp_seq_avg, logits_mean
 
 
@@ -51,6 +67,10 @@ def orpo_loss(
     chosen_logps = chosen_logps * preference_scores
 
     # Stable log-odds computation
+    # Ensure no NaN from inf - inf
+    chosen_logps = mx.nan_to_num(chosen_logps, nan=0.0, posinf=0.0, neginf=-1000.0)
+    rejected_logps = mx.nan_to_num(rejected_logps, nan=0.0, posinf=0.0, neginf=-1000.0)
+    
     log_odds = chosen_logps - rejected_logps
     ratio = nn.log_sigmoid(log_odds)
     loss = -beta * ratio
@@ -231,7 +251,34 @@ def train_orpo(
     if grad_accum_steps < 1:
         raise ValueError("gradient_accumulation_steps must be at least 1")
 
+    efficient = True if args.seq_step_size is not None else False
+    if efficient:
+        cache = make_prompt_cache(model)
+        seq_step_size = args.seq_step_size
+
     state = [model.state, optimizer.state, mx.random.state]
+
+    def loss_wrapper(
+        chosen_logps,
+        chosen_logits_mean,
+        rejected_logps,
+        rejected_logits_mean,
+        chosen_masks,
+        rejected_masks,
+        preference_scores,
+    ):
+        return loss(
+            chosen_logps=chosen_logps,
+            chosen_logits_mean=chosen_logits_mean,
+            rejected_logps=rejected_logps,
+            rejected_logits_mean=rejected_logits_mean,
+            chosen_masks=chosen_masks,
+            rejected_masks=rejected_masks,
+            preference_scores=preference_scores,
+            beta=args.beta,
+        )
+
+    loss_value_and_grad = nn.value_and_grad(model, loss_wrapper)
 
     @partial(mx.compile, inputs=state, outputs=state)
     def step(batch, prev_grad, do_update):
@@ -264,27 +311,132 @@ def train_orpo(
 
         return lvalue, reward, toks, metrics, grad
 
-    def loss_wrapper(
-        chosen_logps,
-        chosen_logits_mean,
-        rejected_logps,
-        rejected_logits_mean,
-        chosen_masks,
-        rejected_masks,
-        preference_scores,
-    ):
-        return loss(
-            chosen_logps=chosen_logps,
-            chosen_logits_mean=chosen_logits_mean,
-            rejected_logps=rejected_logps,
-            rejected_logits_mean=rejected_logits_mean,
-            chosen_masks=chosen_masks,
-            rejected_masks=rejected_masks,
-            preference_scores=preference_scores,
-            beta=args.beta,
+    def seq_split_step(batch, prev_grad, do_update):
+        chosen, rejected, chosen_masks, rejected_masks, preference_scores = batch
+        batch_size = chosen.shape[0]
+
+        def compute_logps_chunked(tokens, masks):
+            seq_length = tokens.shape[1]
+            logp_sum = mx.zeros((batch_size,))
+            logits_mean_sum = mx.array(0.0)
+            token_count = mx.array(0.0)
+
+            reset_prompt_cache(cache)
+
+            for s in range(0, seq_length, seq_step_size):
+                end = min(s + seq_step_size, seq_length)
+                if 0 < (seq_length - end) < 2:
+                    end = seq_length
+
+                chunk = tokens[:, s:end]
+                chunk_mask = masks[:, s:end]
+
+                chunk_avg, chunk_logits_mean = get_logps(model, chunk, chunk_mask, cache)
+                
+                chunk_input_mask = chunk_mask[:, :-1]
+                chunk_lens = chunk_input_mask.sum(-1)
+                
+                logp_sum += chunk_avg * chunk_lens
+                
+                valid_toks = chunk_input_mask.sum()
+                logits_mean_sum += chunk_logits_mean * valid_toks
+                token_count += valid_toks
+
+                if end >= seq_length:
+                    break
+            
+            # Safe division for logits mean
+            final_logits_mean = logits_mean_sum / (token_count + 1e-9)
+            return logp_sum, final_logits_mean
+
+        # 1. Forward Pass (No Grad)
+        c_logp_sum, c_logits_mean = compute_logps_chunked(chosen, chosen_masks)
+        r_logp_sum, r_logits_mean = compute_logps_chunked(rejected, rejected_masks)
+
+        c_lens = chosen_masks[:, :-1].sum(-1)
+        r_lens = rejected_masks[:, :-1].sum(-1)
+        c_lens_safe = mx.where(c_lens > 0, c_lens, mx.array(1.0))
+        r_lens_safe = mx.where(r_lens > 0, r_lens, mx.array(1.0))
+
+        c_avg = mx.where(c_lens > 0, c_logp_sum / c_lens_safe, mx.array(0.0))
+        r_avg = mx.where(r_lens > 0, r_logp_sum / r_lens_safe, mx.array(0.0))
+
+        # 2. Compute ORPO Gradients Weights
+        def internal_loss_fn(c, r):
+            return loss_wrapper(
+                c,
+                c_logits_mean,
+                r,
+                r_logits_mean,
+                chosen_masks,
+                rejected_masks,
+                preference_scores,
+            )[0]
+
+        # Get full metrics for reporting
+        (lvalue, reward, toks, metrics) = loss_wrapper(
+            c_avg,
+            c_logits_mean,
+            r_avg,
+            r_logits_mean,
+            chosen_masks,
+            rejected_masks,
+            preference_scores,
         )
 
-    loss_value_and_grad = nn.value_and_grad(model, loss_wrapper)
+        (g_c_avg, g_r_avg) = mx.grad(internal_loss_fn, argnums=[0, 1])(c_avg, r_avg)
+
+        w_c = mx.where(c_lens > 0, g_c_avg / c_lens_safe, mx.array(0.0))
+        w_r = mx.where(r_lens > 0, g_r_avg / r_lens_safe, mx.array(0.0))
+
+        # 3. Backward chunks
+        seq_grad_accum = None
+
+        def accum_chunk_grads(tokens, masks, weights):
+            nonlocal seq_grad_accum
+            seq_length = tokens.shape[1]
+            reset_prompt_cache(cache)
+
+            for s in range(0, seq_length, seq_step_size):
+                end = min(s + seq_step_size, seq_length)
+                if 0 < (seq_length - end) < 2:
+                    end = seq_length
+
+                chunk = tokens[:, s:end]
+                chunk_mask = masks[:, s:end]
+
+                def local_loss_fn(model):
+                    chunk_avg, _ = get_logps(model, chunk, chunk_mask, cache)
+                    chunk_lens = chunk_mask[:, :-1].sum(-1)
+                    chunk_sum = chunk_avg * chunk_lens
+                    return (chunk_sum * weights).sum()
+
+                grad = mx.grad(local_loss_fn)(model)
+
+                if seq_grad_accum is None:
+                    seq_grad_accum = grad
+                else:
+                    seq_grad_accum = tree_map(lambda x, y: x + y, seq_grad_accum, grad)
+                
+                mx.eval(seq_grad_accum)
+
+                if end >= seq_length:
+                    break
+
+        accum_chunk_grads(chosen, chosen_masks, w_c)
+        accum_chunk_grads(rejected, rejected_masks, w_r)
+
+        if prev_grad is not None:
+            seq_grad_accum = tree_map(lambda x, y: x + y, seq_grad_accum, prev_grad)
+
+        if do_update:
+            seq_grad_accum = average_gradients(seq_grad_accum)
+            if grad_accum_steps > 1:
+                seq_grad_accum = tree_map(lambda x: x / grad_accum_steps, seq_grad_accum)
+            optimizer.update(model, seq_grad_accum)
+            seq_grad_accum = None
+
+        return lvalue, reward, toks, metrics, seq_grad_accum
 
     model.train()
     losses = 0
@@ -307,9 +459,9 @@ def train_orpo(
     for it in pbar:
         batch = next(
             iterate_orpo_batches(
-                dataset=train_dataset,
-                batch_size=args.batch_size,
-                max_seq_length=args.max_seq_length,
+                train_dataset,
+                args.batch_size,
+                args.max_seq_length,
                 train=True,
             )
         )
@@ -355,11 +507,19 @@ def train_orpo(
             start = time.perf_counter()
 
         # Training step
-        lvalue, reward, toks, metrics, grad_accum = step(
-            batch,
-            grad_accum,
-            it % grad_accum_steps == 0,
-        )
+        if efficient:
+            lvalue, reward, toks, metrics, grad_accum = seq_split_step(
+                batch,
+                grad_accum,
+                it % grad_accum_steps == 0,
+            )
+        else:
+            lvalue, reward, toks, metrics, grad_accum = step(
+                batch,
+                grad_accum,
+                it % grad_accum_steps == 0,
+            )
+            
         losses += lvalue
         rewards += reward
         n_tokens += toks

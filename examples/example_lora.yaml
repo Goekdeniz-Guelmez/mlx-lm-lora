@@ -1,6 +1,9 @@
 # The path to the local model directory or Hugging Face repo.
 model: "mlx-community/Josiefied-Qwen3-0.6B-abliterated-v1-4bi"
 
+# The name of the model, LM Studio wil dislay.
+# lm_studio_name: "Qwen-0.6B-WikiSQL-FineTune"
+
 # Whether or not to load the model in 4 bits.
 # Can also be load_in_6bits, load_in_8bits
 load_in_4bits: true
@@ -10,6 +13,9 @@ train: true
 
 # The fine-tuning method: "lora", "dora", or "full".
 train_type: lora
+
+# Whether to use the efficient long context training method, which splits sequences into steps and accumulates gradients over them. Only compatible with "dora" train_type for now.
+efficient_long_context: true
 
 # The fine-tuning method: "sft", "dpo", "cpo", "orpo", "grpo", "online_dpo" or "xpo"
 train_mode: sft
