@@ -17,7 +17,7 @@ from mlx_lm.tuner.utils import (
     load_adapters,
     print_trainable_parameters,
 )
-from mlx_lm.utils import load, load_tokenizer, save_config
+from mlx_lm.utils import load, load_tokenizer
 
 from .trainer.cpo_trainer import CPOTrainingArgs, evaluate_cpo, train_cpo
 from .trainer.datasets import CacheDataset, load_dataset
@@ -642,6 +642,7 @@ def train_model(
                 beta=args.beta,
                 loss_type=args.dpo_cpo_loss_type,
                 delta=args.delta,
+                seq_step_size=512 if args.efficient_long_context else None,
                 reference_model_path=args.reference_model_path,
                 gradient_accumulation_steps=args.gradient_accumulation_steps,
             ),
@@ -1024,7 +1025,7 @@ def run(args, training_callback: TrainingCallback = None):
 
     print_info(f"Loading model: {Colors.CYAN}{args.model}{Colors.RESET}")
     model, tokenizer, adapter_file = from_pretrained(
-        model=args.model, quantized_load=quanziation_config
+        model=args.model, adapter_path=args.adapter_path, quantized_load=quanziation_config
     )
     reference_model = (
         load_reference_model(args)
