@@ -8,16 +8,17 @@ import mlx.nn as nn
 import numpy as np
 from mlx.nn.utils import average_gradients
 from mlx.utils import tree_flatten, tree_map
+from mlx_lm.models.cache import make_prompt_cache
 from mlx_lm.tuner.callbacks import TrainingCallback
 from tqdm import tqdm
 
 from .dpo_trainer import DPOTrainingArgs as CPOTrainingArgs
-from .sft_trainer import grad_checkpoint
+from .sft_trainer import grad_checkpoint, reset_prompt_cache
 
 
-def get_token_scores(model, x, mask):
+def get_token_scores(model, x, mask, cache=None):
     inputs, targets = x[:, :-1], x[:, 1:]
-    logits = model(inputs).astype(mx.float32)
+    logits = model(inputs, cache=cache).astype(mx.float32)
     return -nn.losses.cross_entropy(logits, targets) * mask[:, :-1]
 
 
@@ -228,6 +229,11 @@ def train_cpo(
     if grad_accum_steps < 1:
         raise ValueError("gradient_accumulation_steps must be at least 1")
 
+    efficient = True if args.seq_step_size is not None else False
+    if efficient:
+        cache = make_prompt_cache(model)
+        seq_step_size = args.seq_step_size
+
     state = [model.state, optimizer.state, mx.random.state]
 
     @partial(mx.compile, inputs=state, outputs=state)
@@ -277,6 +283,132 @@ def train_cpo(
         )
 
     loss_value_and_grad = nn.value_and_grad(model, loss_wrapper)
+
+    def seq_split_step(batch, prev_grad, do_update):
+        chosen, rejected, chosen_masks, rejected_masks = batch
+        batch_size = chosen.shape[0]
+
+        def compute_scores_chunked(curr_model, curr_cache, tokens, masks):
+            seq_length = tokens.shape[1]
+            score_sum = mx.zeros((batch_size,))
+            if curr_cache is not None:
+                reset_prompt_cache(curr_cache)
+
+            step_size = seq_step_size
+            for s in range(0, seq_length, step_size):
+                end = min(s + step_size, seq_length)
+                if 0 < (seq_length - end) < 2:
+                    end = seq_length
+
+                chunk = tokens[:, s:end]
+                chunk_mask = masks[:, s:end]
+
+                chunk_scores = get_token_scores(
+                    curr_model, chunk, chunk_mask, cache=curr_cache
+                )
+                score_sum += chunk_scores.sum(-1)
+
+                if end >= seq_length:
+                    break
+
+            return score_sum
+
+        # 1. Forward Pass (No Grad) - compute scores
+        c_score = compute_scores_chunked(model, cache, chosen, chosen_masks)
+        r_score = compute_scores_chunked(model, cache, rejected, rejected_masks)
+
+        c_tokens_count = chosen_masks[:, :-1].sum(-1)
+        r_tokens_count = rejected_masks[:, :-1].sum(-1)
+
+        if args.loss_type == "ipo":
+            c_score_arg = c_score / c_tokens_count
+            r_score_arg = r_score / r_tokens_count
+        else:
+            c_score_arg = c_score
+            r_score_arg = r_score
+
+        # 2. Compute Gradients Weights
+        def internal_loss_fn(c, r):
+            l, _, _, _ = loss_fn(
+                policy_chosen_score=c,
+                policy_rejected_score=r,
+                chosen_masks=chosen_masks,
+                rejected_masks=rejected_masks,
+                beta=args.beta,
+                delta=args.delta,
+                loss_type=args.loss_type,
+            )
+            return l
+
+        lvalue, reward, toks, metrics = loss_fn(
+            policy_chosen_score=c_score_arg,
+            policy_rejected_score=r_score_arg,
+            chosen_masks=chosen_masks,
+            rejected_masks=rejected_masks,
+            beta=args.beta,
+            delta=args.delta,
+            loss_type=args.loss_type,
+        )
+
+        (g_c, g_r) = mx.grad(internal_loss_fn, argnums=[0, 1])(c_score_arg, r_score_arg)
+
+        w_c = g_c
+        w_r = g_r
+
+        if args.loss_type == "ipo":
+            w_c = w_c / c_tokens_count
+            w_r = w_r / r_tokens_count
+
+        # 3. Backward chunks
+        seq_grad_accum = None
+
+        def accum_chunk_grads(tokens, masks, weights):
+            nonlocal seq_grad_accum
+            seq_length = tokens.shape[1]
+            reset_prompt_cache(cache)
+
+            step_size = seq_step_size
+            for s in range(0, seq_length, step_size):
+                end = min(s + step_size, seq_length)
+                if 0 < (seq_length - end) < 2:
+                    end = seq_length
+
+                chunk = tokens[:, s:end]
+                chunk_mask = masks[:, s:end]
+
+                def local_loss_fn(model):
+                    local_sum = get_token_scores(
+                        model, chunk, chunk_mask, cache=cache
+                    ).sum(-1)
+                    return (local_sum * weights).sum()
+
+                grad = mx.grad(local_loss_fn)(model)
+                if seq_grad_accum is None:
+                    seq_grad_accum = grad
+                else:
+                    seq_grad_accum = tree_map(lambda x, y: x + y, seq_grad_accum, grad)
+
+                mx.eval(seq_grad_accum)
+
+                if end >= seq_length:
+                    break
+
+        accum_chunk_grads(chosen, chosen_masks, w_c)
+        accum_chunk_grads(rejected, rejected_masks, w_r)
+
+        if prev_grad is not None:
+            seq_grad_accum = tree_map(lambda x, y: x + y, seq_grad_accum, prev_grad)
+
+        if do_update:
+            seq_grad_accum = average_gradients(seq_grad_accum)
+            if args.gradient_accumulation_steps > 1:
+                seq_grad_accum = tree_map(
+                    lambda x: x / args.gradient_accumulation_steps, seq_grad_accum
+                )
+            optimizer.update(model, seq_grad_accum)
+            seq_grad_accum = None
+
+        return lvalue, reward, toks, metrics, seq_grad_accum
 
     model.train()
     losses = 0
@@ -349,11 +481,18 @@ def train_cpo(
 
             start = time.perf_counter()
 
-        lvalue, reward, toks, metrics, grad_accum = step(
-            batch,
-            grad_accum,
-            it % grad_accum_steps == 0,
-        )
+        if efficient:
+            lvalue, reward, toks, metrics, grad_accum = seq_split_step(
+                batch,
+                grad_accum,
+                it % grad_accum_steps == 0,
+            )
+        else:
+            lvalue, reward, toks, metrics, grad_accum = step(
+                batch,
+                grad_accum,
+                it % grad_accum_steps == 0,
+            )
         losses += lvalue
         rewards += reward
         n_tokens += toks

@@ -493,7 +493,7 @@ def train_model(
         )
 
         if has_adapters:
-            print_info(f"Model already has {args.train_type} adapters. Unfreezing them.")
+            print_warning(f"Model already has {args.train_type} adapters. Unfreezing them.")
             for _, m in model.named_modules():
                 if m.__class__.__name__ == "LoRALinear":
                     m.unfreeze()
@@ -508,7 +508,7 @@ def train_model(
         raise ValueError(f"Received unknown train-type {args.train_type}")
 
     if args.resume_adapter_file is not None:
-        print_info(
+        print_warning(
             f"Loading fine-tuned weights from {Colors.CYAN}{args.resume_adapter_file}{Colors.RESET}"
         )
         model.load_weights(args.resume_adapter_file, strict=False)
