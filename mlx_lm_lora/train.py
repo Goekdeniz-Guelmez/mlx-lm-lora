@@ -47,7 +47,7 @@ from .trainer.sft_trainer import (
     train_sft,
 )
 from .trainer.xpo_trainer import XPOTrainingArgs, evaluate_xpo, train_xpo
-from .utils import from_pretrained, fuse_and_save_model
+from .utils import from_pretrained, save_pretrained_merged, save_to_lmstudio_merged
 from .visuals import (
     Colors,
     print_banner,
@@ -104,6 +104,7 @@ CONFIG_DEFAULTS = {
     "max_seq_length": 2048,
     "config": None,
     "grad_checkpoint": False,
+    "efficient_long_context": False,
     "lr_schedule": None,
     "lora_parameters": {"rank": 8, "dropout": 0.0, "scale": 10.0},
     "mask_prompt": False,
@@ -126,6 +127,7 @@ CONFIG_DEFAULTS = {
     "reward_functions_file": None,
     "grpo_loss_type": "grpo",
     "importance_sampling_level": None,
+    "lm_studio_name": None,
 }
 
 
@@ -191,6 +193,12 @@ def build_parser():
         type=str,
         help="The path to the local model directory or Hugging Face repo.",
     )
+    parser.add_argument(
+        "--lm-studio-name",
+        type=str,
+        help="The name to use when sending the trained model to LM Studio.",
+    )
+    
     parser.add_argument(
         "--load-in-4bits",
         action="store_true",
@@ -329,6 +337,12 @@ def build_parser():
         default=None,
     )
     parser.add_argument(
+        "--efficient-long-context",
+        action="store_true",
+        help="Use efficient long context processing (Experimental, only supports SFT).",
+        default=None,
+    )
+    parser.add_argument(
         "--wandb",
         type=str,
         default=None,
@@ -449,6 +463,7 @@ def train_model(
     args,
     model: nn.Module,
     tokenizer,
+    adapter_file: Path,
     reference_model: nn.Module = None,
     judge_model: nn.Module = None,
     judge_tokenizer=None,
@@ -489,10 +504,6 @@ def train_model(
         model.load_weights(args.resume_adapter_file, strict=False)
 
     print_trainable_parameters(model)
-    adapter_path = Path(args.adapter_path)
-    adapter_path.mkdir(parents=True, exist_ok=True)
-    adapter_file = adapter_path / "adapters.safetensors"
-    save_config(vars(args), adapter_path / "adapter_config.json")
 
     lr = build_schedule(args.lr_schedule) if args.lr_schedule else args.learning_rate
     optimizer_config = args.optimizer_config.get(args.optimizer.lower(), {})
@@ -521,6 +532,7 @@ def train_model(
                 max_seq_length=args.max_seq_length,
                 grad_checkpoint=args.grad_checkpoint,
                 beta=args.beta,
+                seq_step_size=512 if args.efficient_long_context else None,
                 reward_scaling=args.reward_scaling,
                 gradient_accumulation_steps=args.gradient_accumulation_steps,
             ),
@@ -548,6 +560,7 @@ def train_model(
                 loss_type=args.dpo_cpo_loss_type,
                 delta=args.delta,
                 reference_model_path=args.reference_model_path,
+                seq_step_size=512 if args.efficient_long_context else None,
                 gradient_accumulation_steps=args.gradient_accumulation_steps,
             ),
             training_callback=training_callback,
@@ -703,6 +716,7 @@ def train_model(
                 max_seq_length=args.max_seq_length,
                 grad_checkpoint=args.grad_checkpoint,
                 gradient_accumulation_steps=args.gradient_accumulation_steps,
+                seq_step_size=512 if args.efficient_long_context else None,
             ),
             optimizer=opt,
             train_dataset=train_set,
@@ -727,6 +741,8 @@ def evaluate_model(
     print_section(f"Evaluating {args.train_mode.upper()} Model")
 
     if args.train_mode == "orpo":
+        efficient = args.seq_step_size is not None
+        seq_step_size = args.seq_step_size or args.max_seq_length
         test_loss, test_rewards, _, test_metrics = evaluate_orpo(
             model=model,
             dataset=test_set,
@@ -734,6 +750,8 @@ def evaluate_model(
             num_batches=args.test_batches,
             max_seq_length=args.max_seq_length,
             beta=args.beta,
+            efficient=efficient,
+            seq_step_size=seq_step_size,
         )
         test_ppl = math.exp(test_loss)
         print(
@@ -1005,7 +1023,7 @@ def run(args, training_callback: TrainingCallback = None):
         quanziation_config = {"bits": 4, "group_size": 32, "mode": "mxfp4"}
 
     print_info(f"Loading model: {Colors.CYAN}{args.model}{Colors.RESET}")
-    model, tokenizer = from_pretrained(
+    model, tokenizer, adapter_file = from_pretrained(
         model=args.model, quantized_load=quanziation_config
     )
     reference_model = (
@@ -1028,15 +1046,16 @@ def run(args, training_callback: TrainingCallback = None):
     elif args.train:
         print_section("Training")
         train_model(
-            args,
-            model,
-            tokenizer,
-            reference_model,
-            judge_model,
-            judge_tokenizer,
-            CacheDataset(train_set),
-            CacheDataset(valid_set),
-            training_callback,
+            args=args,
+            model=model,
+            tokenizer=tokenizer,
+            adapter_file=adapter_file,
+            reference_model=reference_model,
+            judge_model=judge_model,
+            judge_tokenizer=judge_tokenizer,
+            train_set=CacheDataset(train_set),
+            valid_set=CacheDataset(valid_set),
+            training_callback=training_callback,
         )
     else:
         raise ValueError("Must provide at least one of --train or --test")
@@ -1044,13 +1063,13 @@ def run(args, training_callback: TrainingCallback = None):
     if args.test:
         print_section("Testing")
         evaluate_model(
-            args,
-            model,
-            tokenizer,
-            reference_model,
-            judge_model,
-            judge_tokenizer,
-            CacheDataset(test_set),
+            args=args,
+            model=model,
+            tokenizer=tokenizer,
+            reference_model=reference_model,
+            judge_model=judge_model,
+            judge_tokenizer=judge_tokenizer,
+            test_set=CacheDataset(test_set),
         )
 
     mx.clear_cache()
@@ -1058,14 +1077,23 @@ def run(args, training_callback: TrainingCallback = None):
 
     if args.fuse and args.train:
         print_section("Fusing Model")
-        fuse_and_save_model(
-            model=model,
-            tokenizer=tokenizer,
-            save_path=args.adapter_path,
-        )
-        print_success(
-            f"Model fused and saved to {Colors.CYAN}{args.adapter_path}{Colors.RESET}"
-        )
+        if args.lm_studio_name is not None:
+            save_to_lmstudio_merged(
+                model=model,
+                tokenizer=tokenizer,
+                new_model_name=args.lm_studio_name,
+                de_quantize=True
+            )
+        else:
+            save_pretrained_merged(
+                model=model,
+                tokenizer=tokenizer,
+                save_path=args.adapter_path,
+                de_quantize=False if (args.load_in_4bits or args.load_in_6bits or args.load_in_8bits or args.load_in_mxfp4) else True
+            )
+            print_success(
+                f"Model fused and saved to {Colors.CYAN}{args.adapter_path}{Colors.RESET}"
+            )
 
 
 def main(args=None):

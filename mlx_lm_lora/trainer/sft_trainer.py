@@ -9,10 +9,19 @@ import mlx.nn as nn
 import numpy as np
 from mlx.nn.utils import average_gradients
 from mlx.utils import tree_flatten, tree_map
+from mlx_lm.models.cache import KVCache, make_prompt_cache
 from mlx_lm.tuner.callbacks import TrainingCallback
 from tqdm import tqdm
 
 from .datasets import CacheDataset
+
+
+def reset_prompt_cache(cache):
+    for e, c in enumerate(cache):
+        if isinstance(c, KVCache):
+            cache[e] = KVCache()
+        else:
+            raise ValueError("Unsupported cache")
 
 
 def grad_checkpoint(layer):
@@ -65,15 +74,22 @@ class SFTTrainingArgs:
         default=False,
         metadata={"help": "Use gradient checkpointing to reduce memory use."},
     )
+    seq_step_size: Optional[int] = field(
+        default=None,
+        metadata={
+            "help": "The examples are processsed sequentially in seq_step_size chunks."
+        },
+    )
 
 
-def default_loss(model, batch, lengths):
+def default_loss(model, batch, lengths, cache=None):
     inputs = batch[:, :-1]
     targets = batch[:, 1:]
 
-    logits = model(inputs)
+    offset = cache[0].offset if cache is not None else 0
+    logits = model(inputs, cache=cache)
 
-    steps = mx.arange(1, targets.shape[1] + 1)
+    steps = mx.arange(1, targets.shape[1] + 1) + offset
     mask = mx.logical_and(steps >= lengths[:, 0:1], steps <= lengths[:, 1:])
 
     loss = nn.losses.cross_entropy(logits, targets) * mask
@@ -143,13 +159,17 @@ def evaluate_sft(
     max_seq_length=2048,
     loss: callable = default_loss,
     iterate_batches: callable = iterate_batches,
+    efficient: bool = False,
+    seq_step_size: int = 512,
 ):
     model.eval()
     all_losses = mx.array(0.0)
     ntokens = mx.array(0)
 
     index_iterator = iter(range(num_batches)) if num_batches != -1 else iter(int, 1)
+    seq_step_size = seq_step_size if efficient else max_seq_length
 
+    cache = make_prompt_cache(model) if efficient else None
     for _, batch in zip(
         index_iterator,
         iterate_batches(
@@ -158,10 +178,27 @@ def evaluate_sft(
             max_seq_length=max_seq_length,
         ),
     ):
-        losses, toks = loss(model, *batch)
-        all_losses += losses * toks
-        ntokens += toks
-        mx.eval(all_losses, ntokens)
+        if efficient and cache is not None:
+            seq_length = batch[0].shape[1]
+            for s in range(0, seq_length, seq_step_size):
+                end = min(s + seq_step_size, seq_length)
+                # If next chunk would have only 1 token, absorb it into this chunk
+                if 0 < (seq_length - end) < 2:
+                    end = seq_length
+                local_batch = (batch[0][:, s:end], batch[1])
+                losses, toks = loss(model, *local_batch, cache)
+                all_losses += losses * toks
+                ntokens += toks
+                if end >= seq_length:
+                    reset_prompt_cache(cache)
+                mx.eval(all_losses, ntokens)
+                if end >= seq_length:
+                    break
+        else:
+            losses, toks = loss(model, *batch)
+            all_losses += losses * toks
+            ntokens += toks
+            mx.eval(all_losses, ntokens)
 
     all_losses = mx.distributed.all_sum(all_losses, stream=mx.cpu)
     ntokens = mx.distributed.all_sum(ntokens, stream=mx.cpu)
@@ -193,12 +230,21 @@ def train_sft(
     if grad_accum_steps < 1:
         raise ValueError("gradient_accumulation_steps must be at least 1")
 
+    efficient = True if args.seq_step_size is not None else False
+
+    if efficient:
+        cache = make_prompt_cache(model)
+
     state = [model.state, optimizer.state, mx.random.state]
+
+    loss_value_and_grad = nn.value_and_grad(model, loss)
 
     @partial(mx.compile, inputs=state, outputs=state)
     def step(batch, prev_grad, do_update):
+        # Regular training without sequence splitting
         (lvalue, toks), grad = loss_value_and_grad(model, *batch)
 
+        # Handle gradient accumulation across steps
         if prev_grad is not None:
             grad = tree_map(lambda x, y: x + y, grad, prev_grad)
 
@@ -211,9 +257,62 @@ def train_sft(
 
         return lvalue, toks, grad
 
-    loss_value_and_grad = nn.value_and_grad(model, loss)
+    # No compilation for seq_split_step since it uses cache mutation
+    def seq_split_step(batch, prev_grad, do_update):
+        # Sequence splitting logic for efficient training
+        losses = mx.array(0.0)
+        n_tokens = mx.array(0.0)
+        seq_length = batch[0].shape[1]
+        seq_grad_accum = None
+
+        for s in range(0, seq_length, seq_step_size):
+            end = min(s + seq_step_size, seq_length)
+            # If next chunk would have only 1 token, absorb it into this chunk
+            if 0 < (seq_length - end) < 2:
+                end = seq_length
+            local_batch = (batch[0][:, s:end], batch[1])
+            (lvalue, toks), grad = loss_value_and_grad(model, *local_batch, cache)
+            prev_n_tokens = n_tokens
+            losses += toks * lvalue
+            n_tokens += toks
+
+            if seq_grad_accum is None:
+                seq_grad_accum = grad
+            else:
+                scale_g = toks / n_tokens
+                scale_acc = prev_n_tokens / n_tokens
+                seq_grad_accum = tree_map(
+                    lambda g, acc: scale_g * g + scale_acc * acc, grad, seq_grad_accum
+                )
+
+            # Reset prompt cache before the last eval
+            if end >= seq_length:
+                reset_prompt_cache(cache)
+
+            # Evaluate intermediate results to ensure proper execution
+            mx.eval(state, seq_grad_accum, losses, n_tokens)
+            if end >= seq_length:
+                break
+
+        lvalue = losses / n_tokens
+        toks = n_tokens
+        grad = seq_grad_accum
+
+        # Handle gradient accumulation across steps
+        if prev_grad is not None:
+            grad = tree_map(lambda x, y: x + y, grad, prev_grad)
+
+        if do_update:
+            grad = average_gradients(grad)
+            if grad_accum_steps > 1:
+                grad = tree_map(lambda x: x / grad_accum_steps, grad)
+            optimizer.update(model, grad)
+            grad = None
+
+        return lvalue, toks, grad
 
     model.train()
+    seq_step_size = args.seq_step_size or args.max_seq_length
     losses = 0
     n_tokens = 0
     steps = 0
@@ -268,11 +367,18 @@ def train_sft(
 
             tic = time.perf_counter()
 
-        lvalue, toks, grad_accum = step(
-            batch,
-            grad_accum,
-            it % grad_accum_steps == 0,
-        )
+        if efficient and batch[0].shape[1] > seq_step_size:
+            lvalue, toks, grad_accum = seq_split_step(
+                batch,
+                grad_accum,
+                it % grad_accum_steps == 0,
+            )
+        else:
+            lvalue, toks, grad_accum = step(
+                batch,
+                grad_accum,
+                it % grad_accum_steps == 0,
+            )
         losses += lvalue
         n_tokens += toks
         steps += 1
