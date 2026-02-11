@@ -397,6 +397,14 @@ def train_orpo(
             seq_length = tokens.shape[1]
             reset_prompt_cache(cache)
 
+            def chunk_loss_fn(chunk, chunk_mask, weights):
+                chunk_avg, _ = get_logps(model, chunk, chunk_mask, cache)
+                chunk_lens = chunk_mask[:, :-1].sum(-1)
+                chunk_sum = chunk_avg * chunk_lens
+                return (chunk_sum * weights).sum()
+            
+            chunk_value_and_grad = nn.value_and_grad(model, chunk_loss_fn)
+
             for s in range(0, seq_length, seq_step_size):
                 end = min(s + seq_step_size, seq_length)
                 if 0 < (seq_length - end) < 2:
@@ -405,13 +413,7 @@ def train_orpo(
                 chunk = tokens[:, s:end]
                 chunk_mask = masks[:, s:end]
 
-                def local_loss_fn(model):
-                    chunk_avg, _ = get_logps(model, chunk, chunk_mask, cache)
-                    chunk_lens = chunk_mask[:, :-1].sum(-1)
-                    chunk_sum = chunk_avg * chunk_lens
-                    return (chunk_sum * weights).sum()
-
-                grad = mx.grad(local_loss_fn)(model)
+                _, grad = chunk_value_and_grad(chunk, chunk_mask, weights)
 
                 if seq_grad_accum is None:
                     seq_grad_accum = grad
