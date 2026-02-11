@@ -10,7 +10,6 @@ import mlx.nn as nn
 import mlx.optimizers as optim
 import numpy as np
 import yaml
-from mlx_lm.tokenizer_utils import load_tokenizer
 from mlx_lm.tuner.callbacks import WandBCallback
 from mlx_lm.tuner.utils import (
     build_schedule,
@@ -18,7 +17,6 @@ from mlx_lm.tuner.utils import (
     load_adapters,
     print_trainable_parameters,
 )
-from mlx_lm.utils import load, save_config
 
 from .trainer.datasets import CacheDataset, load_dataset
 from .trainer.sft_trainer import (
@@ -27,7 +25,7 @@ from .trainer.sft_trainer import (
     evaluate_sft,
     train_sft,
 )
-from .utils import from_pretrained, fuse_and_save_model
+from .utils import from_pretrained, save_pretrained_merged
 
 yaml_loader = yaml.SafeLoader
 yaml_loader.add_implicit_resolver(
@@ -261,6 +259,7 @@ def train_model(
     args,
     model: nn.Module,
     tokenizer,
+    adapter_file,
     train_set,
     valid_set,
     training_callback: TrainingCallback = None,
@@ -299,12 +298,6 @@ def train_model(
         model.load_weights(args.resume_adapter_file, strict=False)
 
     print_trainable_parameters(model)
-
-    adapter_path = Path(args.adapter_path)
-    adapter_path.mkdir(parents=True, exist_ok=True)
-
-    adapter_file = adapter_path / "adapters.safetensors"
-    save_config(vars(args), adapter_path / "adapter_config.json")
 
     # Initialize the selected optimizer
     lr = build_schedule(args.lr_schedule) if args.lr_schedule else args.learning_rate
@@ -382,9 +375,10 @@ def run(args, training_callback: TrainingCallback = None):
     else:
         quanziation_config = None
 
-    model, tokenizer = from_pretrained(
+    model, tokenizer, adapter_file = from_pretrained(
         model=args.model,
         quantized_load=quanziation_config,
+        new_adapter_path=args.adapter_path,
     )
 
     print("Loading datasets")
@@ -398,7 +392,7 @@ def run(args, training_callback: TrainingCallback = None):
             load_adapters(model, args.adapter_path)
 
     print("Training")
-    train_model(args, model, tokenizer, train_set, valid_set, training_callback)
+    train_model(args, model, tokenizer, adapter_file, train_set, valid_set, training_callback)
 
     if args.test:
         print("Testing")
@@ -406,10 +400,11 @@ def run(args, training_callback: TrainingCallback = None):
 
     if args.fuse and args.train:
         print("Fusing model")
-        fuse_and_save_model(
+        save_pretrained_merged(
             model=model,
             tokenizer=tokenizer,
             save_path=args.adapter_path,
+            de_quantize=True
         )
 
 

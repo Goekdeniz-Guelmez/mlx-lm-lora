@@ -6,6 +6,16 @@ import numpy as np
 from mlx_lm.generate import generate
 from tqdm import tqdm
 
+from ..visuals import (
+    Colors,
+    print_banner,
+    print_error,
+    print_info,
+    print_section,
+    print_success,
+    print_warning,
+)
+
 RAW_TRAINING_SYSTEM_PROMPT = """You are a binary‑preference evaluator.  
 For each interaction you will receive:
 
@@ -144,26 +154,25 @@ Evaluate each response independently on a continuous scale based on quality, rel
 Provide scores that reflect the relative quality of each response. The scores should be between 0 and 10, with higher being better, so make sure it contains only one of the json and nothing else (no quotation marks, no other text, no new lines, ...).
 '''
 
-DEFAULT_PAIRWISE_HUMAN_PROMPT = '''## Instruction
+DEFAULT_PAIRWISE_HUMAN_PROMPT = f"""{Colors.BOLD}{Colors.MAGENTA}## Instruction{Colors.RESET}
 
-{{
-    "instruction": """{prompt}""",
-}}
+{{{{
+    "instruction": \"\"\"{{prompt}}\"\"\",
+}}}}
 
-## Model Outputs
+{Colors.BOLD}{Colors.YELLOW}## Model Outputs{Colors.RESET}
 
-{{
-    {{
-        "model_identifier": "0",
-        "output": """{response0}"""
-    }},
-    {{
-        "model_identifier": "1",
-        "output": """{response1}"""
-    }}
-}}
-
-'''
+{{{{
+    {{{{
+        "model_identifier": "{Colors.GREEN}{Colors.BOLD}0{Colors.RESET}",
+        "output": \"\"\"{{response0}}\"\"\"
+    }}}},
+    {{{{
+        "model_identifier": "{Colors.BLUE}{Colors.BOLD}1{Colors.RESET}",
+        "output": \"\"\"{{response1}}\"\"\"
+    }}}}
+}}}}
+"""
 
 
 class LLMPairwiseJudge:
@@ -319,6 +328,7 @@ class HumanPairwiseJudge:
         completions: list[list[str]],
         shuffle_order: bool = True,
     ) -> list[int]:
+        print_section("Human Pairwise Evaluation")
         if shuffle_order:
             flip_mask = np.random.randint(0, 2, (len(prompts),)).astype(bool)
             completions = [
@@ -331,13 +341,14 @@ class HumanPairwiseJudge:
                 prompt=prompt, response0=candidates[0], response1=candidates[1]
             )
             tqdm.write(content)
-            response = input(f"\nChoose with one is better (0, 1): ")
+            response = input(
+                f"\n{Colors.BOLD}{Colors.WHITE}Choose which one is better ({Colors.GREEN}0{Colors.RESET}{Colors.BOLD}{Colors.WHITE}, {Colors.BLUE}1{Colors.RESET}{Colors.BOLD}{Colors.WHITE}): {Colors.RESET}"
+            )
             if response in ["0", "1"]:
+                print_success(f"Selected Model {response}")
                 return int(response)
             else:
-                tqdm.write(
-                    f"Invalid response from the judge model: '{response}'. Returning -1."
-                )
+                print_error(f"Invalid response: '{response}'")
                 return -1
 
         ranks = []
