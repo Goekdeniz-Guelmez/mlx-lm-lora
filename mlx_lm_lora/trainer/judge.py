@@ -8,12 +8,9 @@ from tqdm import tqdm
 
 from ..visuals import (
     Colors,
-    print_banner,
     print_error,
-    print_info,
     print_section,
     print_success,
-    print_warning,
 )
 
 RAW_TRAINING_SYSTEM_PROMPT = """You are a binary‑preference evaluator.  
