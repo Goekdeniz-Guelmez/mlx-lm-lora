@@ -272,18 +272,14 @@ def train_sft(
                 end = seq_length
             local_batch = (batch[0][:, s:end], batch[1])
             (lvalue, toks), grad = loss_value_and_grad(model, *local_batch, cache)
-            prev_n_tokens = n_tokens
             losses += toks * lvalue
             n_tokens += toks
 
+            # Simple gradient summation (no weighted averaging)
             if seq_grad_accum is None:
                 seq_grad_accum = grad
             else:
-                scale_g = toks / n_tokens
-                scale_acc = prev_n_tokens / n_tokens
-                seq_grad_accum = tree_map(
-                    lambda g, acc: scale_g * g + scale_acc * acc, grad, seq_grad_accum
-                )
+                seq_grad_accum = tree_map(lambda g, acc: g + acc, grad, seq_grad_accum)
 
             # Reset prompt cache before the last eval
             if end >= seq_length:
@@ -296,7 +292,9 @@ def train_sft(
 
         lvalue = losses / n_tokens
         toks = n_tokens
-        grad = seq_grad_accum
+        # Normalize accumulated gradients by number of chunks for stable averaging
+        num_chunks = (seq_length + seq_step_size - 1) // seq_step_size
+        grad = tree_map(lambda g: g / num_chunks, seq_grad_accum)
 
         # Handle gradient accumulation across steps
         if prev_grad is not None:
