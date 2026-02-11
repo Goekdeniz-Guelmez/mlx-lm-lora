@@ -177,7 +177,10 @@ def generate_grpo(
                     ):
                         completion_ids = completion_ids[: -len(end_sequence)]
 
-                completion_ids = mx.array(completion_ids)
+                if len(completion_ids) == 0:
+                    completion_ids = mx.array([], dtype=mx.int32)
+                else:
+                    completion_ids = mx.array(completion_ids)
                 all_completions.append(mx.stop_gradient(completion_ids))
                 all_completion_texts.append(completion_text)
                 batch_indices.append(batched_indices[idx])
