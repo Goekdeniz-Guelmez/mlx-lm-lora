@@ -468,7 +468,7 @@ def grpo_loss(
     if beta != 0.0:
         # r_i,t = π_θ / π_old (already computed as coef_1)
         # KL = r_i,t * (π_ref / π_θ) - log(π_ref / π_θ) - 1
-        log_ratio_ref_theta = ref_token_log_probs - token_log_probs
+        log_ratio_ref_theta = token_log_probs - ref_token_log_probs
         ratio_ref_theta = mx.exp(log_ratio_ref_theta)
 
         # Unbiased KL estimator
@@ -478,11 +478,8 @@ def grpo_loss(
         per_token_loss = per_token_loss + beta * kl_div
     else:
         # Compute KL divergence using Schulman's approximator
-        kl_div = (
-            mx.exp(ref_token_log_probs - token_log_probs)
-            - (ref_token_log_probs - token_log_probs)
-            - 1
-        )
+        log_ratio = ref_token_log_probs - token_log_probs
+        kl_div = mx.exp(log_ratio) - log_ratio - 1
 
     if grpo_loss_type == "grpo":
         loss = (per_token_loss * length_mask).sum() / length_mask.sum()
