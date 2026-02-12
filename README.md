@@ -1094,9 +1094,16 @@ max_completion_length: 512
 <p align="center">
   <a href="https://ibm.com"><img src="./logos/ibm.png" alt="IBM" width="200"/></a>
   &nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://group.mercedes-benz.com"><img src="./logos/mb.png" alt="Daimler" height="80"/></a>
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://www.bosch.de"><img src="./logos/bosch.png" alt="Bosch" height="100"/></a>
+</p>
+<p align="center">
   <a href="https://macpaw.com"><img src="./logos/macpaw.png" alt="MacPaw" width="200"/></a>
   &nbsp;&nbsp;&nbsp;&nbsp;
   <a href="https://typefox.io"><img src="./logos/typefox.png" alt="TypeFox" width="200"/></a>
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://www.computacenter.com"><img src="./logos/cc.webp" alt="Computacenter" width="200"/></a>
 </p>
 
 > **Is your team using MLX-LM-LoRA?** We'd love to hear from you! Feel free to reach out and we'll add your logo here too. 🚀
