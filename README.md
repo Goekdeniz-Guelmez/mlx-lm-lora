@@ -1106,7 +1106,9 @@ max_completion_length: 512
   <a href="https://www.computacenter.com"><img src="./logos/cc.webp" alt="Computacenter" width="200"/></a>
 </p>
 
-> **Is your team using MLX-LM-LoRA?** We'd love to hear from you! Feel free to reach out and we'll add your logo here too. 🚀
+MLX-LM-LoRA is also beeing used by researchers, engineers, and other profesionals by Apple, IBM, Bosch, Daimler Truck, and Mercedes-Benz Group.
+
+> **Is you or your team using MLX-LM-LoRA?** I'd love to hear from you! Feel free to reach out and I'll add your logo here too. 🚀
 
 ---
 
