@@ -43,6 +43,7 @@ def save_pretrained(
     save_path: str = "fused_model",
     export_gguf: Optional[bool] = False,
     gguf_path: Optional[str] = "ggml-model-f16.gguf",
+    remove_adapters: Optional[bool] = False,
 ) -> None:
     """
     Fuse fine-tuned adapters into the base model.
@@ -53,6 +54,7 @@ def save_pretrained(
         save_path: The path to save the fused model.
         export_gguf: Export model weights in GGUF format.
         gguf_path: Path to save the exported GGUF format model weights.
+        remove_adapters: Whether to remove adapter files from the saved model directory.
     """
     from ._version import __version__
 
@@ -81,6 +83,16 @@ This model can be loaded and used with the MLX framework.
 
     print(f"Created README.md in {save_path}")
 
+    if remove_adapters:
+        adapter_config_file = save_path_obj / "adapter_config.json"
+        if adapter_config_file.exists():
+            adapter_config_file.unlink()
+            print(f"Removed {adapter_config_file}")
+
+        for adapter_file in save_path_obj.glob("adapters*.safetensors"):
+            adapter_file.unlink()
+            print(f"Removed {adapter_file}")
+
     if export_gguf:
         model_type = model.args["model_type"]
         if model_type not in ["llama", "mixtral", "mistral"]:
@@ -99,6 +111,7 @@ def save_pretrained_merged(
     de_quantize: Optional[bool] = False,
     export_gguf: Optional[bool] = False,
     gguf_path: Optional[str] = "ggml-model-f16.gguf",
+    remove_adapters: Optional[bool] = False,
 ) -> None:
     """
     Fuse fine-tuned adapters into the base model.
@@ -111,6 +124,7 @@ def save_pretrained_merged(
         de_quantize: Generate a de-quantized model.
         export_gguf: Export model weights in GGUF format.
         gguf_path: Path to save the exported GGUF format model weights.
+        remove_adapters: Whether to remove adapter files from the saved model directory.
     """
     from ._version import __version__
 
@@ -141,6 +155,7 @@ def save_pretrained_merged(
         save_path=save_path,
         export_gguf=export_gguf,
         gguf_path=gguf_path,
+        remove_adapters=remove_adapters,
     )
 
 
