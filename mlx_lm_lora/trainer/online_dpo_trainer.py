@@ -205,6 +205,7 @@ def evaluate_online_dpo(
     max_tokens: int = 512,
     temperature: float = 0.8,
 ):
+    model.eval()
     all_losses = 0
     all_rewards = mx.zeros((2,))
     all_metrics = None

@@ -109,6 +109,7 @@ def evaluate_rlhf_reinforce(
     tokenizer=None,
     max_tokens: int = 512,
 ):
+    model.eval()
     all_losses = 0
     all_metrics = None
     ntokens = 0
@@ -338,6 +339,7 @@ def train_rlhf_reinforce(
     loss_value_and_grad = nn.value_and_grad(model, loss_wrapper)
 
     model.train()
+    seq_step_size = args.seq_step_size or args.max_seq_length
     losses = 0
     n_tokens = 0
     steps = 0

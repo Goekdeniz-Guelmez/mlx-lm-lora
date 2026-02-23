@@ -621,6 +621,7 @@ def evaluate_grpo(
     importance_sampling_level: str = "token",
     end_answer_token: str = "</answer>",
 ):
+    model.eval()
     all_losses = 0
     ntokens = 0
     all_metrics = None

@@ -147,6 +147,7 @@ def evaluate_cpo(
     loss_type,
     loss_fn: callable = cpo_loss,
 ):
+    model.eval()
     all_losses = 0
     all_rewards = mx.zeros((2,))
     all_metrics = None
@@ -411,6 +412,7 @@ def train_cpo(
         return lvalue, reward, toks, metrics, seq_grad_accum
 
     model.train()
+    seq_step_size = args.seq_step_size or args.max_seq_length
     losses = 0
     rewards = mx.zeros((2,))
     n_tokens = 0
@@ -481,7 +483,7 @@ def train_cpo(
 
             start = time.perf_counter()
 
-        if efficient:
+        if efficient and batch[0].shape[1] > seq_step_size:
             lvalue, reward, toks, metrics, grad_accum = seq_split_step(
                 batch,
                 grad_accum,

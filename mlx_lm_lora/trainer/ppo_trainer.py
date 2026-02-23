@@ -128,6 +128,7 @@ def evaluate_ppo(
     max_tokens: int = 512,
     temperature: float = 0.8,
 ):
+    model.eval()
     all_losses = 0
     all_rewards = mx.zeros((2,))
     all_metrics = None
@@ -470,6 +471,7 @@ def train_ppo(
     loss_value_and_grad = nn.value_and_grad(model, loss_wrapper)
 
     model.train()
+    seq_step_size = args.seq_step_size or args.max_seq_length
     losses = 0
     rewards = mx.zeros((2,))
     n_tokens = 0
