@@ -903,6 +903,7 @@ def train_grpo(
                 }
                 training_callback.on_val_loss_report(val_info)
 
+            model.train()
             start = time.perf_counter()
 
         prompt_tokens, answer_tokens, prompt_text, answer_text, type_info = batch

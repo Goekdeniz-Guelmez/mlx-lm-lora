@@ -554,6 +554,7 @@ def train_ppo(
                     }
                 )
 
+            model.train()
             start = time.perf_counter()
 
         lvalue, reward, toks, metrics, grad_accum = step(

@@ -602,6 +602,7 @@ def train_xpo(
                     }
                 )
 
+            model.train()
             start = time.perf_counter()
 
         lvalue, reward, toks, metrics, grad_accum = step(

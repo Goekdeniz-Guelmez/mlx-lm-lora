@@ -559,6 +559,7 @@ def train_dpo(
                     }
                 )
 
+            model.train()
             start = time.perf_counter()
 
         if efficient and batch[0].shape[1] > seq_step_size:

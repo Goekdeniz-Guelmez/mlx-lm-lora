@@ -624,6 +624,7 @@ def train_online_dpo(
                     }
                 )
 
+            model.train()
             start = time.perf_counter()
 
         lvalue, reward, toks, metrics, grad_accum = step(

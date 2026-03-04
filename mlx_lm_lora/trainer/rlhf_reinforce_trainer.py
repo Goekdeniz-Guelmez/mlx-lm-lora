@@ -408,6 +408,7 @@ def train_rlhf_reinforce(
                     }
                 )
 
+            model.train()
             start = time.perf_counter()
 
         lvalue, rewards, toks, metrics, grad_accum = step(

@@ -508,6 +508,7 @@ def train_orpo(
                     }
                 )
 
+            model.train()
             start = time.perf_counter()
 
         # Training step
