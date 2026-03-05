@@ -89,9 +89,11 @@ This model can be loaded and used with the MLX framework.
             adapter_config_file.unlink()
             print(f"Removed {adapter_config_file}")
 
-        for adapter_file in save_path_obj.glob("adapters*.safetensors"):
-            adapter_file.unlink()
-            print(f"Removed {adapter_file}")
+        adapter_patterns = ["adapters*.safetensors", "*adapters.safetensors"]
+        for pattern in adapter_patterns:
+            for adapter_file in save_path_obj.glob(pattern):
+                adapter_file.unlink()
+                print(f"Removed {adapter_file}")
 
     if export_gguf:
         model_type = model.args["model_type"]
