@@ -9,7 +9,7 @@ import mlx.nn as nn
 import numpy as np
 from mlx.nn.utils import average_gradients
 from mlx.utils import tree_flatten, tree_map
-from mlx_lm.models.cache import KVCache, make_prompt_cache
+from mlx_lm.models.cache import make_prompt_cache
 from mlx_lm.tuner.callbacks import TrainingCallback
 from tqdm import tqdm
 

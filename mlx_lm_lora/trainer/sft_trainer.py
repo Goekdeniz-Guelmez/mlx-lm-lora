@@ -9,7 +9,7 @@ import mlx.nn as nn
 import numpy as np
 from mlx.nn.utils import average_gradients
 from mlx.utils import tree_flatten, tree_map
-from mlx_lm.models.cache import KVCache, make_prompt_cache
+from mlx_lm.models.cache import KVCache, CacheList, ArraysCache, make_prompt_cache
 from mlx_lm.tuner.callbacks import TrainingCallback
 from tqdm import tqdm
 
@@ -17,11 +17,51 @@ from .datasets import CacheDataset
 
 
 def reset_prompt_cache(cache):
-    for e, c in enumerate(cache):
-        if isinstance(c, KVCache):
-            cache[e] = KVCache()
-        else:
-            raise ValueError("Unsupported cache")
+    if cache is None:
+        return None
+
+    reset_fn = getattr(cache, "reset", None)
+    if callable(reset_fn):
+        reset_fn()
+        return cache
+
+    if isinstance(cache, KVCache):
+        return type(cache)()
+
+    if isinstance(cache, ArraysCache):
+        cache.state = [None] * len(cache.state)
+        finalize_fn = getattr(cache, "finalize", None)
+        if callable(finalize_fn):
+            finalize_fn()
+        return cache
+
+    if isinstance(cache, CacheList):
+        cache.caches = tuple(reset_prompt_cache(c) for c in cache.caches)
+        return cache
+
+    if isinstance(cache, list):
+        for e, c in enumerate(cache):
+            cache[e] = reset_prompt_cache(c)
+        return cache
+
+    raise ValueError(f"Unsupported cache type: {type(cache)!r}")
+
+
+def _find_cache_offset(cache):
+    if cache is None:
+        return None
+
+    offset = getattr(cache, "offset", None)
+    if offset is not None:
+        return offset
+
+    if isinstance(cache, (CacheList, list, tuple)):
+        for item in cache:
+            nested_offset = _find_cache_offset(item)
+            if nested_offset is not None:
+                return nested_offset
+
+    return None
 
 
 def grad_checkpoint(layer):
@@ -86,7 +126,8 @@ def default_loss(model, batch, lengths, cache=None):
     inputs = batch[:, :-1]
     targets = batch[:, 1:]
 
-    offset = cache[0].offset if cache is not None else 0
+    offset = _find_cache_offset(cache)
+    offset = 0 if offset is None else offset
     logits = model(inputs, cache=cache)
 
     steps = mx.arange(1, targets.shape[1] + 1) + offset
