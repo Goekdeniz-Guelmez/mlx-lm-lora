@@ -13,7 +13,6 @@ import yaml
 from mlx_lm.tuner.callbacks import WandBCallback
 from mlx_lm.tuner.utils import (
     build_schedule,
-    linear_to_lora_layers,
     load_adapters,
     print_trainable_parameters,
 )
@@ -492,18 +491,15 @@ def train_model(
             m.__class__.__name__ == "LoRALinear" for _, m in model.named_modules()
         )
 
-        if has_adapters:
-            print_warning(f"Model already has {args.train_type} adapters. Unfreezing them.")
-            for _, m in model.named_modules():
-                if m.__class__.__name__ == "LoRALinear":
-                    m.unfreeze()
-        else:
-            linear_to_lora_layers(
-                model,
-                args.num_layers,
-                args.lora_parameters,
-                use_dora=(args.train_type == "dora"),
+        if not has_adapters:
+            raise ValueError(
+                f"Model is missing {args.train_type} adapters. Expected from_pretrained() to initialize them before training."
             )
+
+        print_warning(f"Model already has {args.train_type} adapters. Unfreezing them.")
+        for _, m in model.named_modules():
+            if m.__class__.__name__ == "LoRALinear":
+                m.unfreeze()
     else:
         raise ValueError(f"Received unknown train-type {args.train_type}")
 
@@ -1012,6 +1008,20 @@ def evaluate_model(
         )
 
 
+def build_lora_config(args):
+    if args.train_type not in ["lora", "dora"]:
+        return None
+
+    lora_parameters = dict(getattr(args, "lora_parameters", {}) or {})
+    return {
+        "rank": lora_parameters.get("rank", 8),
+        "dropout": lora_parameters.get("dropout", 0.0),
+        "scale": lora_parameters.get("scale", 10.0),
+        "use_dora": args.train_type == "dora",
+        "num_layers": getattr(args, "num_layers", None),
+    }
+
+
 def run(args, training_callback: TrainingCallback = None):
     np.random.seed(args.seed)
 
@@ -1036,7 +1046,7 @@ def run(args, training_callback: TrainingCallback = None):
     print_info(f"Loading model: {Colors.CYAN}{args.model}{Colors.RESET}")
     model, tokenizer, adapter_file = from_pretrained(
         model=args.model, new_adapter_path=args.adapter_path,
-        lora_config=None, quantized_load=quantization_config
+        lora_config=build_lora_config(args), quantized_load=quantization_config
     )
     reference_model = (
         load_reference_model(args)

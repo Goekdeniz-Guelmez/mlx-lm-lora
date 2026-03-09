@@ -13,7 +13,6 @@ import yaml
 from mlx_lm.tuner.callbacks import WandBCallback
 from mlx_lm.tuner.utils import (
     build_schedule,
-    linear_to_lora_layers,
     load_adapters,
     print_trainable_parameters,
 )
@@ -282,13 +281,17 @@ def train_model(
         for l in model.layers[-max(args.num_layers, 0) :]:
             l.unfreeze()
     elif args.train_type in ["lora", "dora"]:
-        # Convert linear layers to lora/dora layers and unfreeze in the process
-        linear_to_lora_layers(
-            model,
-            args.num_layers,
-            args.lora_parameters,
-            use_dora=(args.train_type == "dora"),
+        has_adapters = any(
+            m.__class__.__name__ == "LoRALinear" for _, m in model.named_modules()
         )
+        if not has_adapters:
+            raise ValueError(
+                f"Model is missing {args.train_type} adapters. Expected from_pretrained() to initialize them before training."
+            )
+
+        for _, m in model.named_modules():
+            if m.__class__.__name__ == "LoRALinear":
+                m.unfreeze()
     else:
         raise ValueError(f"Received unknown train-type {args.train_type}")
 
@@ -375,10 +378,24 @@ def run(args, training_callback: TrainingCallback = None):
     else:
         quanziation_config = None
 
+    lora_parameters = dict(getattr(args, "lora_parameters", {}) or {})
+    lora_config = (
+        {
+            "rank": lora_parameters.get("rank", 8),
+            "dropout": lora_parameters.get("dropout", 0.0),
+            "scale": lora_parameters.get("scale", 10.0),
+            "use_dora": args.train_type == "dora",
+            "num_layers": getattr(args, "num_layers", None),
+        }
+        if args.train_type in ["lora", "dora"]
+        else None
+    )
+
     model, tokenizer, adapter_file = from_pretrained(
         model=args.model,
         quantized_load=quanziation_config,
         new_adapter_path=args.adapter_path,
+        lora_config=lora_config,
     )
 
     print("Loading datasets")
