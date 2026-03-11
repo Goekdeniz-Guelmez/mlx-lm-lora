@@ -477,31 +477,6 @@ def train_model(
             train_set=train_set, batch_size=args.batch_size, epochs=args.epochs
         )
 
-    model.freeze()
-    if args.num_layers > len(model.layers):
-        raise ValueError(
-            f"Requested to train {args.num_layers} layers but the model only has {len(model.layers)} layers."
-        )
-
-    if args.train_type == "full":
-        for l in model.layers[-max(args.num_layers, 0) :]:
-            l.unfreeze()
-    elif args.train_type in ["lora", "dora"]:
-        has_adapters = any(
-            m.__class__.__name__ == "LoRALinear" for _, m in model.named_modules()
-        )
-
-        if not has_adapters:
-            raise ValueError(
-                f"Model is missing {args.train_type} adapters. Expected from_pretrained() to initialize them before training."
-            )
-
-        for _, m in model.named_modules():
-            if m.__class__.__name__ == "LoRALinear":
-                m.unfreeze()
-    else:
-        raise ValueError(f"Received unknown train-type {args.train_type}")
-
     if args.resume_adapter_file is not None:
         print_warning(
             f"Loading fine-tuned weights from {Colors.CYAN}{args.resume_adapter_file}{Colors.RESET}"
@@ -1049,7 +1024,7 @@ def run(args, training_callback: TrainingCallback = None):
     )
     reference_model = (
         load_reference_model(args)
-        if args.train_mode in ["grpo", "online_dpo", "ppo", "rlhf_reinforce", "xpo"]
+        if args.train_mode in ["dpo", "grpo", "online_dpo", "ppo", "rlhf_reinforce", "xpo"]
         else None
     )
     judge_model, judge_tokenizer = (
