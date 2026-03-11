@@ -496,7 +496,6 @@ def train_model(
                 f"Model is missing {args.train_type} adapters. Expected from_pretrained() to initialize them before training."
             )
 
-        print_warning(f"Model already has {args.train_type} adapters. Unfreezing them.")
         for _, m in model.named_modules():
             if m.__class__.__name__ == "LoRALinear":
                 m.unfreeze()

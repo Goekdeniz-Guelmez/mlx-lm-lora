@@ -92,6 +92,7 @@ With MLX-LM-LoRA you can, train Large Language Models locally on Apple Silicon u
 - [Dataset Formats](#dataset-formats)
 - [Memory Optimization](#memory-optimization)
 - [Evaluation & Generation](#evaluation--generation)
+- [Performance Comparison](#performance-comparison)
 
 ---
 
@@ -1089,6 +1090,74 @@ max_completion_length: 512
 
 ---
 
+### Benchmarking Your Setup
+
+To measure performance on your hardware with MLX-LM-LoRA:
+
+```shell
+# SFT with speed/memory reporting
+mlx_lm_lora.train \
+  --model mlx-community/Qwen2.5-1B-Instruct-4bit \
+  --data mlx-community/wikisql \
+  --train --train-mode sft \
+  --batch-size 4 --iters 100 \
+  --steps-per-report 10
+```
+
+Monitor output for:
+- `it/s` (iterations per second)
+- `peak_memory` (in GB)
+- `tokens/sec` (throughput)
+
+---
+
+## Performance Comparison
+
+Below is a comparison of iteration speed and memory usage across different training libraries my (MLX-LM-LoRA), [Unsloth](https://github.com/unslothai/unsloth), [mlx-tune](https://github.com/ARahim3/mlx-tune). Benchmarks are approximate and depend on hardware, model size, and configuration.
+
+**Test Configuration:**
+- **Hardware**: M4 Pro (24GB unified memory) vs. NVIDIA A100 (80GB VRAM)
+- **Settings**: All LoRA layers trained, batch size of 1, max context length of 4096, 100 training steps
+- **Quantization**: No quantization for Qwen/Qwen3-0.6B, 4-bit quantization for Qwen/Qwen3-8B
+
+| Model Size | Training Mode | MLX-LM-LoRA | Unsloth | mlx-tune |
+|------------|---------------|-------------|---------|----------|
+| | | **(Apple Silicon)** | **(NVIDIA GPU)** | **(Apple Silicon)** |
+| | | **Speed / Memory** | **Speed / Memory** | **Speed / Memory** |
+| **Qwen/Qwen3-0.6B** | SFT | ~4.7 it/s<br/>~2-2 GB | ~2.7 it/s<br/>~1-2 GB VRAM | ~0.6 it/s<br/>~4-6 GB |
+| **Qwen/Qwen3-0.6B** | ORPO | ~4.5 it/s<br/>~2-4 GB | ~2.4 it/s<br/>~2-8 GB VRAM | None |
+| **Qwen/Qwen3-0.6B** | GRPO | ~0.02 it/s<br/>~9-20 GB | ~0.04 it/s<br/>~76-80 GB VRAM | None |
+| **Qwen/Qwen3-8B** | SFT | ~4.1 it/s<br/>~6-10 GB | ~1.3 it/s<br/>~10-16 GB VRAM | ~0.07 it/s<br/>~8-18 GB |
+
+#### Key Differences
+
+**MLX-LM-LoRA (Apple Silicon - Native MLX)**
+- ✅ **Comprehensive**: 12 training algorithms (SFT, DPO, CPO, ORPO, GRPO, GSPO, Dr. GRPO, DAPO, Online DPO, XPO, RLHF, PPO)
+- ✅ **Complete Solution**: Built-in synthetic dataset generation, custom judge training
+- ✅ **Unified Memory**: Access to full system RAM (up to 512GB on Ultra)
+- ✅ **Moderate Speed**: Optimized MLX implementation with native Apple Silicon support
+- ✅ **CLI-First**: Simple command-line, and notebook interface with YAML config support
+- ⚠️ **Apple Only**: Requires Apple Silicon (M1/M2/M3/M4)
+
+**Unsloth (NVIDIA GPU - CUDA/Triton)**
+- ✅ **Fastest**: Highly optimized Triton kernels for NVIDIA GPUs
+- ✅ **Production Ready**: Battle-tested, widely used in industry
+- ✅ **Memory Efficient**: Custom CUDA kernels minimize VRAM usage
+- ✅ **Rich Ecosystem**: Seamless integration with Hugging Face, TRL, PEFT
+- ⚠️ **NVIDIA Only**: Requires CUDA-compatible GPU (doesn't work on Apple Silicon)
+- ⚠️ **VRAM Limited**: Constrained by GPU VRAM (24-80GB typical)
+
+**mlx-tune (Apple Silicon - MLX with Unsloth API)**
+- ✅ **API Compatible**: Drop-in replacement for Unsloth code on Apple Silicon
+- ✅ **Unified Memory**: Same memory advantages as MLX-LM-LoRA
+- ✅ **Portability Focus**: Write once on Mac, deploy on CUDA
+- ✅ **Vision Models**: VLM fine-tuning support (Qwen3.5, etc.)
+- ⚠️ **Limited Methods**: Fewer training algorithms than MLX-LM-LoRA
+- ⚠️ **Wrapper Library**: Built on top of MLX, adds abstraction layer
+- ⚠️ **Moderate Speed**: Similar to MLX-LM-LoRA (both use MLX backend)
+
+---
+
 ## MLX-LM-LoRA is trusted by teams and industry leaders such as:
 
 <p align="center">
@@ -1099,7 +1168,7 @@ max_completion_length: 512
   <a href="https://www.computacenter.com"><img src="./logos/cc.webp" alt="Computacenter" width="200"/></a>
 </p>
 
-MLX-LM-LoRA is also beeing used by researchers, engineers, and other profesionals by Apple, IBM, Bosch, Daimler Truck, and Mercedes-Benz Group.
+MLX-LM-LoRA is also beeing used by researchers, engineers, and other profesionals by `Apple`, `IBM`, `Bosch`, `Daimler Truck`, and `Mercedes-Benz Group`.
 
 > **Is you or your team using MLX-LM-LoRA?** I'd love to hear from you! Feel free to reach out and I'll add your logo here too. 🚀
 
