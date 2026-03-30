@@ -1168,7 +1168,7 @@ Below is a comparison of iteration speed and memory usage across different train
   <a href="https://www.computacenter.com"><img src="./logos/cc.webp" alt="Computacenter" width="200"/></a>
 </p>
 
-MLX-LM-LoRA is also beeing used by researchers, engineers, and other profesionals by `Apple`, `IBM`, `Bosch`, `Daimler Truck`, and `Mercedes-Benz Group`.
+MLX-LM-LoRA is also beeing used by researchers, engineers, and other profesionals by `Apple`, `IBM`, `Bosch`, `Red Hat`, `Daimler Truck`, and `Mercedes-Benz Group`.
 
 > **Is you or your team using MLX-LM-LoRA?** I'd love to hear from you! Feel free to reach out and I'll add your logo here too. 🚀
 
