@@ -526,7 +526,7 @@ def train_orpo(
             accumulated_metrics[k] += v
 
         _acc = [v for v in accumulated_metrics.values() if isinstance(v, mx.array)]
-        mx.eval(state, losses, rewards, n_tokens, grad_accum
+        mx.eval(state, losses, rewards, n_tokens, grad_accum, *_acc)
 
         if it % args.steps_per_report == 0 or it == args.iters:
             stop = time.perf_counter()

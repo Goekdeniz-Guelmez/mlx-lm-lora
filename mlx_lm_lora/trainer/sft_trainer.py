@@ -333,7 +333,6 @@ def train_sft(
 
         lvalue = losses / n_tokens
         toks = n_tokens
-        # Normalize accumulated gradients by number of chunks for stable averaging
         num_chunks = (seq_length + seq_step_size - 1) // seq_step_size
         grad = tree_map(lambda g: g / num_chunks, seq_grad_accum)
 
