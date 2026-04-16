@@ -329,7 +329,7 @@ def save_to_lmstudio_merged(
 
 
 def save_pretrained_merged_vision(
-    model_name: str, text_model: nn.Module, output_path: Union[str, Path]
+    model_name: str, text_model: nn.Module, output_path: Union[str, Path], de_quantize: bool = True
 ) -> None:
     """Merge trained text model weights back into the full VLM and save."""
     from mlx_vlm.utils import load as vlm_load
@@ -338,8 +338,18 @@ def save_pretrained_merged_vision(
     output_path = Path(output_path)
     vlm_model, processor = vlm_load(model_name)
 
+    # Fuse LoRA layers and optionally de-quantize text_model
+    text_model.freeze()
+    fused_linears = [(n, m.fuse()) for n, m in text_model.named_modules() if hasattr(m, "fuse")]
+    if fused_linears:
+        text_model.update_modules(tree_unflatten(fused_linears))
+
+    if de_quantize:
+        text_model = dequantize_model(text_model)
+
     trained_weights = dict(tree_flatten(text_model.parameters()))
     vlm_weights = dict(tree_flatten(vlm_model.parameters()))
+
 
     updated = 0
     for key, value in trained_weights.items():
