@@ -350,7 +350,6 @@ def save_pretrained_merged_vision(
     trained_weights = dict(tree_flatten(text_model.parameters()))
     vlm_weights = dict(tree_flatten(vlm_model.parameters()))
 
-
     updated = 0
     for key, value in trained_weights.items():
         # Try direct match then common VLM prefixes
