@@ -2,7 +2,7 @@ import datetime
 import math
 import os
 from pathlib import Path
-from typing import Any, Optional, Tuple
+from typing import Any, Optional, Tuple, Union
 
 import mlx.nn as nn
 from mlx.utils import tree_flatten, tree_unflatten
@@ -326,3 +326,61 @@ def save_to_lmstudio_merged(
     )
 
     print(f"Model successfully sent to LM Studio at {model_path}")
+
+
+def merge_vision(model_name: str, text_model: nn.Module, output_path: Union[str, Path]) -> None:
+    """Merge trained text model weights back into the full VLM and save."""
+    from mlx_vlm.utils import load as vlm_load, save_weights, save_config
+
+    output_path = Path(output_path)
+    vlm_model, processor = vlm_load(model_name)
+
+    trained_weights = dict(tree_flatten(text_model.parameters()))
+    vlm_weights = dict(tree_flatten(vlm_model.parameters()))
+
+    updated = 0
+    for key, value in trained_weights.items():
+        # Try direct match then common VLM prefixes
+        found = False
+        if key in vlm_weights:
+            vlm_weights[key] = value
+            updated += 1
+            found = True
+        else:
+            for prefix in ["model.language_model.", "language_model.", "model.text_model.", "text_model.", "model."]:
+                prefixed_key = prefix + key
+                if prefixed_key in vlm_weights:
+                    vlm_weights[prefixed_key] = value
+                    updated += 1
+                    found = True
+                    break
+        if found: continue
+
+    if updated == 0:
+        raise ValueError(f"No weights matched. Text keys: {list(trained_weights.keys())[:5]}")
+
+    vlm_model.load_weights(list(vlm_weights.items()))
+    save_weights(output_path, vlm_model, donate_weights=True)
+
+    if hasattr(vlm_model, "config"):
+        import dataclasses
+        config = vlm_model.config
+        if not isinstance(config, dict):
+            if dataclasses.is_dataclass(config):
+                config = dataclasses.asdict(config)
+            else:
+                config = config.__dict__
+
+        def serialize(obj):
+            if isinstance(obj, (list, tuple)):
+                return [serialize(i) for i in obj]
+            if isinstance(obj, dict):
+                return {k: serialize(v) for k, v in obj.items()}
+            if dataclasses.is_dataclass(obj):
+                return serialize(dataclasses.asdict(obj))
+            return obj
+
+        save_config(serialize(config), output_path / "config.json")
+
+    processor.save_pretrained(str(output_path))
+    print(f"✓ Merged VLM saved to {output_path}")
