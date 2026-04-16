@@ -575,7 +575,8 @@ def train_ppo(
                 # Log warning for missing keys
                 print(f"Warning: Metric key '{k}' not found in accumulated_metrics")
 
-        mx.eval(state, losses, rewards, n_tokens, grad_accum)
+        _acc = [v for v in accumulated_metrics.values() if isinstance(v, mx.array)]
+        mx.eval(state, losses, rewards, n_tokens, grad_accum, *_acc)
 
         if it % args.steps_per_report == 0 or it == args.iters:
             stop = time.perf_counter()

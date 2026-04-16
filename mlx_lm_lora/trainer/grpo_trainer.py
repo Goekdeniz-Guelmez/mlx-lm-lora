@@ -980,7 +980,10 @@ def train_grpo(
         for k, v in metrics.items():
             accumulated_metrics[k] += v
 
-        mx.eval(state, losses, n_tokens, grad_accum)
+        # Include accumulated_metrics in mx.eval to prevent lazy computation
+        # graph growth — without this, memory increases linearly with steps.
+        _acc = [v for v in accumulated_metrics.values() if isinstance(v, mx.array)]
+        mx.eval(state, losses, n_tokens, grad_accum, *_acc)
 
         if it % args.steps_per_report == 0 or it == args.iters:
             stop = time.perf_counter()
