@@ -15,6 +15,7 @@ from tqdm import tqdm
 
 from .sft_trainer import SFTTrainingArgs, grad_checkpoint, reset_prompt_cache
 
+
 @dataclass
 class DPOTrainingArgs(SFTTrainingArgs):
     beta: float = field(
@@ -281,9 +282,7 @@ def train_dpo(
     if efficient:
         cache = make_prompt_cache(model)
         seq_step_size = args.seq_step_size
-        ref_cache = (
-            make_prompt_cache(ref_model) if ref_model is not None else None
-        )
+        ref_cache = make_prompt_cache(ref_model) if ref_model is not None else None
 
     state = [model.state, optimizer.state, mx.random.state]
 
@@ -368,7 +367,9 @@ def train_dpo(
                 chunk = tokens[:, s:end]
                 chunk_mask = masks[:, s:end]
 
-                chunk_scores = get_token_scores(curr_model, chunk, chunk_mask, cache=curr_cache)
+                chunk_scores = get_token_scores(
+                    curr_model, chunk, chunk_mask, cache=curr_cache
+                )
                 score_sum += chunk_scores.sum(-1)
 
                 if end >= seq_length:
@@ -381,8 +382,12 @@ def train_dpo(
         r_score = compute_scores_chunked(model, cache, rejected, rejected_masks)
 
         if ref_model is not None:
-            c_ref_score = compute_scores_chunked(ref_model, ref_cache, chosen, chosen_masks)
-            r_ref_score = compute_scores_chunked(ref_model, ref_cache, rejected, rejected_masks)
+            c_ref_score = compute_scores_chunked(
+                ref_model, ref_cache, chosen, chosen_masks
+            )
+            r_ref_score = compute_scores_chunked(
+                ref_model, ref_cache, rejected, rejected_masks
+            )
         else:
             c_ref_score = mx.zeros_like(c_score)
             r_ref_score = mx.zeros_like(r_score)

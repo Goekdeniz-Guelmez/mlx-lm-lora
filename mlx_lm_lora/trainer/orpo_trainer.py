@@ -34,7 +34,7 @@ def get_logps(model, tokens, mask, cache=None):
     # Clip log_probs to avoid -inf and NaN stability issues
     log_probs = -nn.losses.cross_entropy(logits, targets, reduction="none")
     log_probs = mx.clip(log_probs, -1000.0, 0.0)
-    
+
     mask = mask[:, :-1]
     seq_lengths = mask.sum(-1)
     logp_sum = (log_probs * mask).sum(-1)
@@ -62,7 +62,7 @@ def orpo_loss(
     # Ensure no NaN from inf - inf
     chosen_logps = mx.nan_to_num(chosen_logps, nan=0.0, posinf=0.0, neginf=-1000.0)
     rejected_logps = mx.nan_to_num(rejected_logps, nan=0.0, posinf=0.0, neginf=-1000.0)
-    
+
     log_odds = chosen_logps - rejected_logps
     ratio = nn.log_sigmoid(log_odds)
     loss = -beta * ratio
@@ -324,20 +324,22 @@ def train_orpo(
                 chunk = tokens[:, s:end]
                 chunk_mask = masks[:, s:end]
 
-                chunk_avg, chunk_logits_mean = get_logps(model, chunk, chunk_mask, cache)
-                
+                chunk_avg, chunk_logits_mean = get_logps(
+                    model, chunk, chunk_mask, cache
+                )
+
                 chunk_input_mask = chunk_mask[:, :-1]
                 chunk_lens = chunk_input_mask.sum(-1)
-                
+
                 logp_sum += chunk_avg * chunk_lens
-                
+
                 valid_toks = chunk_input_mask.sum()
                 logits_mean_sum += chunk_logits_mean * valid_toks
                 token_count += valid_toks
 
                 if end >= seq_length:
                     break
-            
+
             # Safe division for logits mean
             final_logits_mean = logits_mean_sum / (token_count + 1e-9)
             return logp_sum, final_logits_mean
@@ -395,7 +397,7 @@ def train_orpo(
                 chunk_lens = chunk_mask[:, :-1].sum(-1)
                 chunk_sum = chunk_avg * chunk_lens
                 return (chunk_sum * weights).sum()
-            
+
             chunk_value_and_grad = nn.value_and_grad(model, chunk_loss_fn)
 
             for s in range(0, seq_length, seq_step_size):
@@ -412,7 +414,7 @@ def train_orpo(
                     seq_grad_accum = grad
                 else:
                     seq_grad_accum = tree_map(lambda x, y: x + y, seq_grad_accum, grad)
-                
+
                 mx.eval(seq_grad_accum)
 
                 if end >= seq_length:
@@ -427,7 +429,9 @@ def train_orpo(
         if do_update:
             seq_grad_accum = average_gradients(seq_grad_accum)
             if grad_accum_steps > 1:
-                seq_grad_accum = tree_map(lambda x: x / grad_accum_steps, seq_grad_accum)
+                seq_grad_accum = tree_map(
+                    lambda x: x / grad_accum_steps, seq_grad_accum
+                )
             optimizer.update(model, seq_grad_accum)
             seq_grad_accum = None
 
@@ -516,7 +520,7 @@ def train_orpo(
                 grad_accum,
                 it % grad_accum_steps == 0,
             )
-            
+
         losses += lvalue
         rewards += reward
         n_tokens += toks

@@ -328,9 +328,12 @@ def save_to_lmstudio_merged(
     print(f"Model successfully sent to LM Studio at {model_path}")
 
 
-def save_pretrained_merged_vision(model_name: str, text_model: nn.Module, output_path: Union[str, Path]) -> None:
+def save_pretrained_merged_vision(
+    model_name: str, text_model: nn.Module, output_path: Union[str, Path]
+) -> None:
     """Merge trained text model weights back into the full VLM and save."""
-    from mlx_vlm.utils import load as vlm_load, save_weights, save_config
+    from mlx_vlm.utils import load as vlm_load
+    from mlx_vlm.utils import save_config, save_weights
 
     output_path = Path(output_path)
     vlm_model, processor = vlm_load(model_name)
@@ -347,23 +350,33 @@ def save_pretrained_merged_vision(model_name: str, text_model: nn.Module, output
             updated += 1
             found = True
         else:
-            for prefix in ["model.language_model.", "language_model.", "model.text_model.", "text_model.", "model."]:
+            for prefix in [
+                "model.language_model.",
+                "language_model.",
+                "model.text_model.",
+                "text_model.",
+                "model.",
+            ]:
                 prefixed_key = prefix + key
                 if prefixed_key in vlm_weights:
                     vlm_weights[prefixed_key] = value
                     updated += 1
                     found = True
                     break
-        if found: continue
+        if found:
+            continue
 
     if updated == 0:
-        raise ValueError(f"No weights matched. Text keys: {list(trained_weights.keys())[:5]}")
+        raise ValueError(
+            f"No weights matched. Text keys: {list(trained_weights.keys())[:5]}"
+        )
 
     vlm_model.load_weights(list(vlm_weights.items()))
     save_weights(output_path, vlm_model, donate_weights=True)
 
     if hasattr(vlm_model, "config"):
         import dataclasses
+
         config = vlm_model.config
         if not isinstance(config, dict):
             if dataclasses.is_dataclass(config):

@@ -409,7 +409,9 @@ def run(args, training_callback: TrainingCallback = None):
             load_adapters(model, args.adapter_path)
 
     print("Training")
-    train_model(args, model, tokenizer, adapter_file, train_set, valid_set, training_callback)
+    train_model(
+        args, model, tokenizer, adapter_file, train_set, valid_set, training_callback
+    )
 
     if args.test:
         print("Testing")
@@ -421,7 +423,7 @@ def run(args, training_callback: TrainingCallback = None):
             model=model,
             tokenizer=tokenizer,
             save_path=args.adapter_path,
-            de_quantize=True
+            de_quantize=True,
         )
 
 
