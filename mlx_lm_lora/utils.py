@@ -328,7 +328,7 @@ def save_to_lmstudio_merged(
     print(f"Model successfully sent to LM Studio at {model_path}")
 
 
-def merge_vision(model_name: str, text_model: nn.Module, output_path: Union[str, Path]) -> None:
+def save_pretrained_merged_vision(model_name: str, text_model: nn.Module, output_path: Union[str, Path]) -> None:
     """Merge trained text model weights back into the full VLM and save."""
     from mlx_vlm.utils import load as vlm_load, save_weights, save_config
 
