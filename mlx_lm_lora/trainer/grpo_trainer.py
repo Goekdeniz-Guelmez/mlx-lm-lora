@@ -1,5 +1,6 @@
 import time
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from typing import Any, List, Optional
 
@@ -11,7 +12,6 @@ from mlx_lm.generate import batch_generate
 from mlx_lm.sample_utils import make_sampler
 from mlx_lm.tuner.callbacks import TrainingCallback
 from tqdm import tqdm
-from functools import partial
 
 from .grpo_reward_functions import (
     RewardFunctions,
@@ -76,14 +76,16 @@ class GRPOTrainingArgs(SFTTrainingArgs):
         },
     )
     importance_sampling_level: str = field(
-        default=None,
+        default="token",
         metadata={
-            "help": "importance_sampling_level (`str`, *optional*, defaults to None): "
+            "help": "importance_sampling_level (`str`, *optional*, defaults to 'token'): "
             "Controls whether importance sampling ratios are computed at the 'token' or 'sequence' level. "
-            "keeps the raw per-token log-probability ratios (one weight per token).  'sequence' averages the "
+            "'token' keeps the raw per-token log-probability ratios (one weight per token).  'sequence' averages the "
             "log-probability ratios across valid tokens to produce a single ratio per sequence. The "
             "GSPO paper https://huggingface.co/papers/2507.18071) shows that sequence-level sampling often yields more "
-            "stable training and better alignment with  sequence-level rewards.."
+            "stable training and better alignment with  sequence-level rewards. "
+            "WARNING: 'none' disables importance sampling ratios entirely, which removes all gradient "
+            "signal from the policy gradient term — only the KL penalty provides gradients."
         },
     )
 
@@ -281,9 +283,9 @@ def calculate_rewards_and_advantages(
                 if idx == unique_prompt_indices[i]
             ]
             for j, idx in enumerate(indices):
-                advantages[idx] = (prompt_rewards[j] - mean_reward) / (
-                    std_reward + 1e-4
-                )
+                adv = (prompt_rewards[j] - mean_reward) / (std_reward + 1e-4)
+                # FIX: clip advantages to prevent gradient explosion with small G
+                advantages[idx] = mx.clip(adv, -2.0, 2.0)
         else:
             idx = batch_indices.index(unique_prompt_indices[i])
             advantages[idx] = 0.0
@@ -429,7 +431,10 @@ def grpo_loss(
     log_ratio = token_log_probs - mx.stop_gradient(ref_token_log_probs)
 
     # Apply importance sampling based on level
-    if importance_sampling_level == "token":
+    # NOTE: None defaults to "token" — the standard GRPO ratio pi_theta/pi_old.
+    # Using zeros_like here would make coef_1 = exp(0) = 1 (a constant),
+    # which removes ALL gradient signal from the policy gradient term.
+    if importance_sampling_level is None or importance_sampling_level == "token":
         log_importance_weights = log_ratio
     elif importance_sampling_level == "sequence":
         # Average log ratio over sequence length for each sequence
@@ -437,12 +442,15 @@ def grpo_loss(
             length_mask.sum(axis=1), 1.0
         )
         log_importance_weights = mx.expand_dims(sequence_log_ratio, axis=1)
-    elif importance_sampling_level is None or importance_sampling_level == "none":
+    elif importance_sampling_level == "none":
+        # WARNING: This disables importance sampling entirely.
+        # The only gradient signal comes from the KL penalty (beta > 0).
+        # Model weights will NOT update from the policy gradient term.
         log_importance_weights = mx.zeros_like(log_ratio)
     else:
         raise ValueError(
             f"Unknown importance sampling level: {importance_sampling_level}. "
-            "Possible values are 'token', 'sequence', or None."
+            "Possible values are 'token', 'sequence', or 'none'."
         )
 
     # Calculate importance weights
@@ -770,7 +778,10 @@ def train_grpo(
 
     state = [model.state, optimizer.state, mx.random.state]
 
-    @partial(mx.compile, inputs=state, outputs=state)
+    # BUG FIX: mx.compile treats LoRA weights as constants in the graph,
+    # so nn.value_and_grad returns zero gradients for LoRA params.
+    # Disable mx.compile for GRPO + LoRA until upstream fix.
+    # @partial(mx.compile, inputs=state, outputs=state)
     def step(
         batch,
         ordered_completions,
@@ -812,6 +823,7 @@ def train_grpo(
             grad = average_gradients(grad)
             if grad_accum_steps > 1:
                 grad = tree_map(lambda x: x / grad_accum_steps, grad)
+
             optimizer.update(model, grad)
             grad = None
             mx.clear_cache()
@@ -980,8 +992,35 @@ def train_grpo(
         for k, v in metrics.items():
             accumulated_metrics[k] += v
 
-        _acc = [v for v in accumulated_metrics.values() if isinstance(v, mx.array)]
-        mx.eval(state, losses, n_tokens, grad_accum, *_acc)
+        mx.eval(state, losses, n_tokens, grad_accum)
+
+        # FIX 7: NaN detection — skip iteration if loss is NaN
+        import math
+
+        loss_check = lvalue.item() if hasattr(lvalue, "item") else float(lvalue)
+        if not math.isfinite(loss_check):
+            tqdm.write(f"  ⚠️ NaN at iter {it}, skipping.")
+            losses = 0
+            n_tokens = 0
+            steps = 0
+            accumulated_metrics = {k: 0 for k in accumulated_metrics}
+            start = time.perf_counter()
+            continue
+
+        # DEBUG: check LoRA weights EVERY iter
+        if it <= 5:
+            tp = dict(tree_flatten(model.trainable_parameters()))
+            lora_keys = [k for k in tp if "lora" in k]
+            if lora_keys:
+                sample_key = lora_keys[0]
+                sample_sum = float(mx.abs(tp[sample_key]).sum())
+                print(
+                    f"  [LORA_DEBUG iter {it}] params: {len(lora_keys)}, {sample_key} abs_sum={sample_sum:.6f}",
+                    flush=True,
+                )
+            else:
+                all_keys = list(tp.keys())[:5]
+                print(f"  [LORA_DEBUG iter {it}] NO LoRA! Keys: {all_keys}", flush=True)
 
         if it % args.steps_per_report == 0 or it == args.iters:
             stop = time.perf_counter()
@@ -1079,18 +1118,26 @@ def train_grpo(
             start = time.perf_counter()
 
         if it % args.steps_per_save == 0:
-            adapter_weights = dict(tree_flatten(model.trainable_parameters()))
+            # FIX: extract weights from compiled state, filter LoRA only
+            mx.eval(state)
+            all_weights = dict(tree_flatten(state[0]))
+            adapter_weights = {k: v for k, v in all_weights.items() if "lora" in k}
             mx.save_safetensors(str(args.adapter_file), adapter_weights)
             checkpoint = (
                 Path(args.adapter_file).parent / f"{it:07d}_adapters.safetensors"
             )
             mx.save_safetensors(str(checkpoint), adapter_weights)
+            # REMOVED: full model save was filling disk (7.9GB × N checkpoints)
             tqdm.write(
                 f"\n"
                 f"Iter {it}: Saved adapter weights to "
                 f"{args.adapter_file} and {checkpoint}."
             )
 
-    adapter_weights = dict(tree_flatten(model.trainable_parameters()))
+    # FIX: extract weights from compiled state, filter LoRA only
+    mx.eval(state)
+    all_weights = dict(tree_flatten(state[0]))
+    adapter_weights = {k: v for k, v in all_weights.items() if "lora" in k}
     mx.save_safetensors(str(args.adapter_file), adapter_weights)
+    # REMOVED: full model save was filling disk
     tqdm.write(f"Saved final weights to {args.adapter_file}.")
