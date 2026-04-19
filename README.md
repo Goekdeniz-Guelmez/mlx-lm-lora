@@ -1181,7 +1181,7 @@ MLX-LM-LoRA is also beeing used by researchers, engineers, and other profesional
 ## Citing MLX-LM-LoRA
 
 ```bibtex
-@software{gülmez2026mlxlmlora,
+@software{gülmez2025mlxlmlora,
   author = {Gökdeniz Gülmez},
   title = {{MLX-LM-LoRA}: Train LLMs on Apple silicon with MLX and the Hugging Face Hub},
   url = {https://github.com/Goekdeniz-Guelmez/mlx-lm-lora},
