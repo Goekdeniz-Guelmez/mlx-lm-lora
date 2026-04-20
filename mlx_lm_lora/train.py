@@ -197,7 +197,7 @@ def build_parser():
         type=str,
         help="The name to use when sending the trained model to LM Studio.",
     )
-    
+
     parser.add_argument(
         "--load-in-4bits",
         action="store_true",
@@ -1019,12 +1019,15 @@ def run(args, training_callback: TrainingCallback = None):
 
     print_info(f"Loading model: {Colors.CYAN}{args.model}{Colors.RESET}")
     model, tokenizer, adapter_file = from_pretrained(
-        model=args.model, new_adapter_path=args.adapter_path,
-        lora_config=build_lora_config(args), quantized_load=quantization_config
+        model=args.model,
+        new_adapter_path=args.adapter_path,
+        lora_config=build_lora_config(args),
+        quantized_load=quantization_config,
     )
     reference_model = (
         load_reference_model(args)
-        if args.train_mode in ["dpo", "grpo", "online_dpo", "ppo", "rlhf_reinforce", "xpo"]
+        if args.train_mode
+        in ["dpo", "grpo", "online_dpo", "ppo", "rlhf_reinforce", "xpo"]
         else None
     )
     judge_model, judge_tokenizer = (
@@ -1078,14 +1081,23 @@ def run(args, training_callback: TrainingCallback = None):
                 model=model,
                 tokenizer=tokenizer,
                 new_model_name=args.lm_studio_name,
-                de_quantize=True
+                de_quantize=True,
             )
         else:
             save_pretrained_merged(
                 model=model,
                 tokenizer=tokenizer,
                 save_path=args.adapter_path,
-                de_quantize=False if (args.load_in_4bits or args.load_in_6bits or args.load_in_8bits or args.load_in_mxfp4) else True
+                de_quantize=(
+                    False
+                    if (
+                        args.load_in_4bits
+                        or args.load_in_6bits
+                        or args.load_in_8bits
+                        or args.load_in_mxfp4
+                    )
+                    else True
+                ),
             )
             print_success(
                 f"Model fused and saved to {Colors.CYAN}{args.adapter_path}{Colors.RESET}"

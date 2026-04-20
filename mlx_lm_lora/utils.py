@@ -1,15 +1,20 @@
 import datetime
+import json
 import math
 import os
+import shutil
 from pathlib import Path
-from typing import Any, Optional, Tuple
+from typing import Any, Optional, Tuple, Union
 
+import mlx.core as mx
 import mlx.nn as nn
+from huggingface_hub import snapshot_download
 from mlx.utils import tree_flatten, tree_unflatten
 from mlx_lm.gguf import convert_to_gguf
 from mlx_lm.tokenizer_utils import TokenizerWrapper
 from mlx_lm.tuner.utils import linear_to_lora_layers, load_adapters
 from mlx_lm.utils import dequantize_model, load, save_config, save_model
+from transformers import AutoProcessor
 
 
 def calculate_iters(train_set, batch_size, epochs) -> int:
@@ -326,3 +331,156 @@ def save_to_lmstudio_merged(
     )
 
     print(f"Model successfully sent to LM Studio at {model_path}")
+
+
+def save_pretrained_merged_vision(
+    model_name: str,
+    text_model: nn.Module,
+    output_path: Union[str, Path],
+    de_quantize: bool = True,
+) -> None:
+    """Merge trained text model weights back into the full VLM and save.
+
+    Works entirely with safetensors on disk – no need to instantiate the full
+    VLM in memory.  Only requires ``huggingface_hub`` and ``transformers``
+    (no ``mlx_vlm``).
+
+    Args:
+        model_name: HuggingFace repo id or local path of the original VLM.
+        text_model: The fine-tuned MLX text sub-model (may contain LoRA layers).
+        output_path: Directory where the merged model will be saved.
+        de_quantize: Whether to de-quantize the text model before merging.
+    """
+    output_path = Path(output_path)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    model_path = Path(model_name)
+    if not model_path.exists():
+        model_path = Path(snapshot_download(model_name))
+    print(f"[INFO] VLM source: {model_path}")
+
+    text_model.freeze()
+    fused_linears = [
+        (n, m.fuse()) for n, m in text_model.named_modules() if hasattr(m, "fuse")
+    ]
+    if fused_linears:
+        text_model.update_modules(tree_unflatten(fused_linears))
+    if de_quantize:
+        text_model = dequantize_model(text_model)
+
+    trained_weights = dict(tree_flatten(text_model.parameters()))
+
+    index_file = model_path / "model.safetensors.index.json"
+    if index_file.exists():
+        with open(index_file) as f:
+            weight_map = json.load(f)["weight_map"]
+        shard_files = sorted(set(weight_map.values()))
+    else:
+        shard_files = [
+            p.name
+            for p in sorted(model_path.glob("*.safetensors"))
+            if "adapter" not in p.name.lower()
+        ]
+        weight_map = None
+
+    if not shard_files:
+        raise FileNotFoundError(f"No safetensors files found in {model_path}")
+
+    vlm_keys: set = set()
+    for sf in shard_files:
+        shard = mx.load(str(model_path / sf))
+        vlm_keys.update(shard.keys())
+        del shard
+
+    PREFIXES = [
+        "",
+        "model.language_model.model.",
+        "model.language_model.",
+        "language_model.model.",
+        "language_model.",
+        "model.text_model.",
+        "text_model.",
+        "model.",
+    ]
+
+    def _strip_prefix(key: str) -> str:
+        """Strip the first matching known prefix to get the bare weight name."""
+        for p in PREFIXES[1:]:
+            if key.startswith(p):
+                return key[len(p) :]
+        return key
+
+    bare_to_vlm: dict[str, str] = {}
+    for vk in vlm_keys:
+        bare = _strip_prefix(vk)
+        bare_to_vlm[bare] = vk
+
+    key_mapping: dict[str, str] = {}
+    for tkey in trained_weights:
+        if tkey in vlm_keys:
+            key_mapping[tkey] = tkey
+            continue
+        bare = _strip_prefix(tkey)
+        if bare in bare_to_vlm:
+            key_mapping[bare_to_vlm[bare]] = tkey
+
+    if not key_mapping:
+        raise ValueError(
+            f"No weights matched between text model and VLM.\n"
+            f"  Text keys sample: {list(trained_weights.keys())[:5]}\n"
+            f"  VLM keys sample:  {sorted(vlm_keys)[:5]}"
+        )
+    print(
+        f"[INFO] Merging {len(key_mapping)}/{len(trained_weights)} text weights into VLM"
+    )
+
+    new_index: dict = {"metadata": {}, "weight_map": {}}
+    total_size = 0
+    shard_count = len(shard_files)
+
+    for i, sf in enumerate(shard_files):
+        shard = dict(mx.load(str(model_path / sf)))
+
+        for vlm_key in list(shard.keys()):
+            if vlm_key in key_mapping:
+                shard[vlm_key] = trained_weights[key_mapping[vlm_key]]
+
+        out_name = (
+            f"model-{i + 1:05d}-of-{shard_count:05d}.safetensors"
+            if shard_count > 1
+            else "model.safetensors"
+        )
+        mx.save_safetensors(
+            str(output_path / out_name), shard, metadata={"format": "mlx"}
+        )
+
+        for k, v in shard.items():
+            new_index["weight_map"][k] = out_name
+            total_size += v.nbytes
+        del shard
+
+    new_index["metadata"]["total_size"] = total_size
+    new_index["weight_map"] = dict(sorted(new_index["weight_map"].items()))
+
+    with open(output_path / "model.safetensors.index.json", "w") as f:
+        json.dump(new_index, f, indent=4)
+
+    for pattern in ["config.json", "*.json", "*.txt", "*.model", "*.tiktoken"]:
+        for src in model_path.glob(pattern):
+            if src.name == "model.safetensors.index.json":
+                continue  # we wrote our own
+            dst = output_path / src.name
+            if not dst.exists():
+                shutil.copy2(src, dst)
+
+    try:
+        processor = AutoProcessor.from_pretrained(str(model_path))
+        processor.save_pretrained(str(output_path))
+    except Exception as e:
+        print(f"[WARN] Could not save processor ({e}); config files were still copied.")
+
+    for adapter_file in output_path.glob("*adapter*"):
+        adapter_file.unlink()
+        print(f"[INFO] Removed adapter artifact: {adapter_file.name}")
+
+    print(f"✓ Merged VLM saved to {output_path}")

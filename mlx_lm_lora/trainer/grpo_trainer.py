@@ -1,5 +1,6 @@
 import time
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from typing import Any, List, Optional
 
@@ -11,7 +12,6 @@ from mlx_lm.generate import batch_generate
 from mlx_lm.sample_utils import make_sampler
 from mlx_lm.tuner.callbacks import TrainingCallback
 from tqdm import tqdm
-from functools import partial
 
 from .grpo_reward_functions import (
     RewardFunctions,
