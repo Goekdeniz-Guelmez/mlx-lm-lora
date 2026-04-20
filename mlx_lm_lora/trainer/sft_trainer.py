@@ -132,7 +132,9 @@ class SFTTrainingArgs:
     )
     qat_group_size: int = field(
         default=64,
-        metadata={"help": "Group size for QAT projection (0 or less means per-tensor)."},
+        metadata={
+            "help": "Group size for QAT projection (0 or less means per-tensor)."
+        },
     )
     qat_mode: str = field(
         default="affine",
@@ -198,7 +200,9 @@ def _apply_qat_projection(model, args: SFTTrainingArgs):
 
     trainable = model.trainable_parameters()
     projected = tree_map(
-        lambda t: _symmetric_fake_quantize_tensor(t, args.qat_bits, args.qat_group_size),
+        lambda t: _symmetric_fake_quantize_tensor(
+            t, args.qat_bits, args.qat_group_size
+        ),
         trainable,
     )
     model.update(projected)
