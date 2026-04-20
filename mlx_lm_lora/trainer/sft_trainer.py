@@ -120,6 +120,92 @@ class SFTTrainingArgs:
             "help": "The examples are processsed sequentially in seq_step_size chunks."
         },
     )
+    qat_enable: bool = field(
+        default=False,
+        metadata={
+            "help": "Enable minimal QAT-style projection on trainable weights after updates."
+        },
+    )
+    qat_bits: int = field(
+        default=8,
+        metadata={"help": "Bit-width used for QAT projection."},
+    )
+    qat_group_size: int = field(
+        default=64,
+        metadata={
+            "help": "Group size for QAT projection (0 or less means per-tensor)."
+        },
+    )
+    qat_mode: str = field(
+        default="affine",
+        metadata={"help": "QAT projection mode. Currently only 'affine' is supported."},
+    )
+    qat_start_step: int = field(
+        default=1,
+        metadata={"help": "Apply QAT projection starting from this optimizer step."},
+    )
+    qat_interval: int = field(
+        default=1,
+        metadata={"help": "Apply QAT projection every N optimizer steps."},
+    )
+
+
+def _symmetric_fake_quantize_tensor(x, bits: int, group_size: int):
+    qmax = (1 << (bits - 1)) - 1
+    qmin = -qmax - 1
+    eps = 1e-8
+
+    if group_size is None or group_size <= 0 or x.ndim == 0:
+        max_abs = mx.maximum(mx.max(mx.abs(x)), eps)
+        scale = max_abs / qmax
+        q = mx.clip(mx.round(x / scale), qmin, qmax)
+        return q * scale
+
+    last_dim = x.shape[-1]
+    if group_size >= last_dim:
+        max_abs = mx.maximum(mx.max(mx.abs(x), axis=-1, keepdims=True), eps)
+        scale = max_abs / qmax
+        q = mx.clip(mx.round(x / scale), qmin, qmax)
+        return q * scale
+
+    num_groups = (last_dim + group_size - 1) // group_size
+    pad = num_groups * group_size - last_dim
+
+    if pad > 0:
+        pad_width = [(0, 0)] * x.ndim
+        pad_width[-1] = (0, pad)
+        x = mx.pad(x, pad_width)
+
+    leading = int(np.prod(x.shape[:-1])) if x.ndim > 1 else 1
+    x_2d = x.reshape((leading, x.shape[-1]))
+    x_groups = x_2d.reshape((leading, num_groups, group_size))
+    max_abs = mx.maximum(mx.max(mx.abs(x_groups), axis=-1, keepdims=True), eps)
+    scale = max_abs / qmax
+    q = mx.clip(mx.round(x_groups / scale), qmin, qmax)
+    x_q = (q * scale).reshape((leading, num_groups * group_size))
+
+    if pad > 0:
+        x_q = x_q[:, :last_dim]
+
+    return x_q.reshape(x.shape[:-1] + (last_dim,))
+
+
+def _apply_qat_projection(model, args: SFTTrainingArgs):
+    if not args.qat_enable:
+        return
+    if args.qat_bits < 2 or args.qat_bits > 16:
+        raise ValueError("qat_bits must be in [2, 16]")
+    if args.qat_mode != "affine":
+        raise ValueError("Only qat_mode='affine' is supported in minimal QAT mode")
+
+    trainable = model.trainable_parameters()
+    projected = tree_map(
+        lambda t: _symmetric_fake_quantize_tensor(
+            t, args.qat_bits, args.qat_group_size
+        ),
+        trainable,
+    )
+    model.update(projected)
 
 
 def default_loss(model, batch, lengths, cache=None):
@@ -270,6 +356,10 @@ def train_sft(
     grad_accum_steps = args.gradient_accumulation_steps
     if grad_accum_steps < 1:
         raise ValueError("gradient_accumulation_steps must be at least 1")
+    if args.qat_start_step < 1:
+        raise ValueError("qat_start_step must be at least 1")
+    if args.qat_interval < 1:
+        raise ValueError("qat_interval must be at least 1")
 
     efficient = True if args.seq_step_size is not None else False
 
@@ -357,6 +447,7 @@ def train_sft(
     trained_tokens = 0
     train_time = 0
     grad_accum = None
+    opt_step = 0
 
     # Main training loop
     pbar = tqdm(range(1, args.iters + 1), desc="Training", disable=rank != 0)
@@ -417,6 +508,17 @@ def train_sft(
                 grad_accum,
                 it % grad_accum_steps == 0,
             )
+
+        if it % grad_accum_steps == 0:
+            opt_step += 1
+            should_qat = (
+                args.qat_enable
+                and opt_step >= args.qat_start_step
+                and (opt_step - args.qat_start_step) % args.qat_interval == 0
+            )
+            if should_qat:
+                _apply_qat_projection(model, args)
+
         losses += lvalue
         n_tokens += toks
         steps += 1
