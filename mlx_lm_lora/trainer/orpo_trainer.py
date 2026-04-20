@@ -13,7 +13,12 @@ from mlx_lm.models.cache import make_prompt_cache
 from mlx_lm.tuner.callbacks import TrainingCallback
 from tqdm import tqdm
 
-from .sft_trainer import SFTTrainingArgs, grad_checkpoint, reset_prompt_cache
+from .sft_trainer import (
+    SFTTrainingArgs,
+    _apply_qat_projection,
+    grad_checkpoint,
+    reset_prompt_cache,
+)
 
 
 @dataclass
@@ -243,6 +248,10 @@ def train_orpo(
     grad_accum_steps = args.gradient_accumulation_steps
     if grad_accum_steps < 1:
         raise ValueError("gradient_accumulation_steps must be at least 1")
+    if args.qat_start_step < 1:
+        raise ValueError("qat_start_step must be at least 1")
+    if args.qat_interval < 1:
+        raise ValueError("qat_interval must be at least 1")
 
     efficient = True if args.seq_step_size is not None else False
     if efficient:
@@ -453,6 +462,7 @@ def train_orpo(
         "chosen_logits_mean": 0,
     }
     grad_accum = None
+    opt_step = 0
 
     start = time.perf_counter()
     pbar = tqdm(range(1, args.iters + 1), desc="Training", disable=rank != 0)
@@ -520,6 +530,16 @@ def train_orpo(
                 grad_accum,
                 it % grad_accum_steps == 0,
             )
+
+        if it % grad_accum_steps == 0:
+            opt_step += 1
+            should_qat = (
+                args.qat_enable
+                and opt_step >= args.qat_start_step
+                and (opt_step - args.qat_start_step) % args.qat_interval == 0
+            )
+            if should_qat:
+                _apply_qat_projection(model, args)
 
         losses += lvalue
         rewards += reward
