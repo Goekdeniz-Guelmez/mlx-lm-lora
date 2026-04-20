@@ -127,6 +127,12 @@ CONFIG_DEFAULTS = {
     "grpo_loss_type": "grpo",
     "importance_sampling_level": None,
     "lm_studio_name": None,
+    "qat_enable": False,
+    "qat_bits": 8,
+    "qat_group_size": 64,
+    "qat_mode": "affine",
+    "qat_start_step": 1,
+    "qat_interval": 1,
 }
 
 
@@ -455,6 +461,43 @@ def build_parser():
         default=None,
         help="Level of importance sampling to use.",
     )
+    parser.add_argument(
+        "--qat-enable",
+        action="store_true",
+        default=None,
+        help="Enable minimal QAT-style projection in SFT training.",
+    )
+    parser.add_argument(
+        "--qat-bits",
+        type=int,
+        default=None,
+        help="Bit-width used by QAT projection (SFT only).",
+    )
+    parser.add_argument(
+        "--qat-group-size",
+        type=int,
+        default=None,
+        help="Group size used by QAT projection (SFT only).",
+    )
+    parser.add_argument(
+        "--qat-mode",
+        type=str,
+        choices=["affine"],
+        default=None,
+        help="QAT projection mode (SFT only).",
+    )
+    parser.add_argument(
+        "--qat-start-step",
+        type=int,
+        default=None,
+        help="Apply QAT projection starting from this optimizer step (SFT only).",
+    )
+    parser.add_argument(
+        "--qat-interval",
+        type=int,
+        default=None,
+        help="Apply QAT projection every N optimizer steps (SFT only).",
+    )
     return parser
 
 
@@ -698,6 +741,12 @@ def train_model(
                 grad_checkpoint=args.grad_checkpoint,
                 gradient_accumulation_steps=args.gradient_accumulation_steps,
                 seq_step_size=512 if args.efficient_long_context else None,
+                qat_enable=args.qat_enable,
+                qat_bits=args.qat_bits,
+                qat_group_size=args.qat_group_size,
+                qat_mode=args.qat_mode,
+                qat_start_step=args.qat_start_step,
+                qat_interval=args.qat_interval,
             ),
             optimizer=opt,
             train_dataset=train_set,
@@ -1138,6 +1187,12 @@ def main(args=None):
     print(f"{Colors.WHITE}Batch Size:{Colors.RESET} {args.batch_size}")
     print(f"{Colors.WHITE}Learning Rate:{Colors.RESET} {args.learning_rate}")
     print(f"{Colors.WHITE}Optimizer:{Colors.RESET} {args.optimizer}")
+    if args.train_mode == "sft" and args.qat_enable:
+        print(
+            f"{Colors.WHITE}QAT:{Colors.RESET} enabled "
+            f"(bits={args.qat_bits}, group_size={args.qat_group_size}, "
+            f"mode={args.qat_mode}, start={args.qat_start_step}, interval={args.qat_interval})"
+        )
     if args.load_in_4bits:
         print(f"{Colors.WHITE}Quantization:{Colors.RESET} 4-bit")
     elif args.load_in_6bits:
