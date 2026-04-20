@@ -6,16 +6,12 @@
 
 [![image](https://img.shields.io/pypi/v/mlx-lm-lora.svg)](https://pypi.python.org/pypi/mlx-lm-lora)
 
-With MLX-LM-LoRA you can, train Large Language Models locally on Apple Silicon using MLX. Training works with all models supported by MLX-LM, including:
+With MLX-LM-LoRA you can, train Large Language Models locally on Apple Silicon using MLX. Training works with all models supported by [MLX-LM](https://github.com/ml-explore/mlx-lm), including:
 
-- Llama 3, 4
-- Phi 2, 3
+- Llama
 - Mistral
-- Mixtral
-- Qwen 2, 2.5, 3
-- Qwen3 MoE
-- Qwen3 Next
-- Gemma 1, 2, 3
+- Qwen
+- Gemma
 - OLMo, OLMoE
 - MiniCPM, MiniCPM3
 - and more...
@@ -28,6 +24,7 @@ With MLX-LM-LoRA you can, train Large Language Models locally on Apple Silicon u
 - **DoRA**: Weight-Decomposed Low-Rank Adaptation
 - **Full-precision**: Train all model parameters
 - **Quantized training**: QLoRA with 4-bit, 6-bit, or 8-bit quantization
+- **Quantization Aware Training (QAT)**: Apply quantization projection during training for SFT, DPO, and ORPO
 
 **Training Algorithms:**
 
@@ -45,6 +42,12 @@ With MLX-LM-LoRA you can, train Large Language Models locally on Apple Silicon u
 - **PPO**: Proximal policy Optimization
 
 ## New Features
+
+**Quantization Aware Training (QAT):**
+
+- Enable QAT for SFT, DPO, and ORPO with minimal post-update quantization projection.
+- Supports 4-16 bit, group or per-tensor, and configurable start/interval.
+- Use QAT to simulate quantization effects during training for better quantized model performance.
 
 **Synthetic Dataset Creation:**
 
@@ -131,6 +134,61 @@ Command-line flags will override corresponding values in the config file.
 ---
 
 ## Training Methods
+
+### Quantization Aware Training (QAT)
+
+QAT projects trainable weights onto a quantized grid after each optimizer update, simulating quantization effects during training. This improves quantized model performance and robustness.
+
+**Supported for:** SFT, DPO, ORPO
+
+**QAT Flags:**
+
+- `--qat-enable`    Enable QAT projection during training
+- `--qat-bits`     Bit-width for QAT (default: 8)
+- `--qat-group-size`  Group size for QAT (default: 64, 0=per-tensor)
+- `--qat-mode`     QAT mode (default: affine)
+- `--qat-start-step`  Start QAT after this optimizer step (default: 1)
+- `--qat-interval`   Apply QAT every N optimizer steps (default: 1)
+
+**Example (SFT):**
+
+```shell
+mlx_lm_lora.train \
+  --model <model> \
+  --train \
+  --train-mode sft \
+  --data <data> \
+  --qat-enable \
+  --qat-bits 4 \
+  --qat-group-size 64 \
+  --qat-start-step 1 \
+  --qat-interval 1
+```
+
+**Example (DPO):**
+
+```shell
+mlx_lm_lora.train \
+  --model <model> \
+  --train \
+  --train-mode dpo \
+  --data <data> \
+  --qat-enable \
+  --qat-bits 4
+```
+
+**Example (ORPO):**
+
+```shell
+mlx_lm_lora.train \
+  --model <model> \
+  --train \
+  --train-mode orpo \
+  --data <data> \
+  --qat-enable \
+  --qat-bits 8 \
+  --qat-group-size 32
+```
 
 ### Supervised Fine-Tuning (SFT)
 
@@ -607,9 +665,32 @@ python -m mlx_lm_lora.train_judge \
 --grad-checkpoint                # Enable gradient checkpointing
 
 # Quantization
+
+# Quantization Aware Training (QAT)
+
+QAT projects trainable weights onto a quantized grid after each optimizer update, simulating quantization effects during training. This improves quantized model performance and robustness. QAT is supported for SFT, DPO, and ORPO.
+
+**QAT Flags:**
+
+- `--qat-enable`    Enable QAT projection during training
+- `--qat-bits`     Bit-width for QAT (default: 8)
+- `--qat-group-size`  Group size for QAT (default: 64, 0=per-tensor)
+- `--qat-mode`     QAT mode (default: affine)
+- `--qat-start-step`  Start QAT after this optimizer step (default: 1)
+- `--qat-interval`   Apply QAT every N optimizer steps (default: 1)
+
+See [QAT section above](#quantization-aware-training-qat) for usage examples.
 --load-in-4bits                  # 4-bit quantization
 --load-in-6bits                  # 6-bit quantization  
 --load-in-8bits                  # 8-bit quantization
+
+# Quantization Aware Training (QAT)
+--qat-enable                      # Enable QAT projection during training
+--qat-bits 4                      # Bit-width for QAT (default: 8)
+--qat-group-size 64               # Group size for QAT (default: 64, 0=per-tensor)
+--qat-mode affine                 # QAT mode (default: affine)
+--qat-start-step 1                # Start QAT after this optimizer step (default: 1)
+--qat-interval 1                  # Apply QAT every N optimizer steps (default: 1)
 
 # Monitoring
 --steps-per-report 10            # Steps between loss reports
@@ -1168,7 +1249,7 @@ Below is a comparison of iteration speed and memory usage across different train
   <a href="https://www.computacenter.com"><img src="./logos/cc.webp" alt="Computacenter" width="200"/></a>
 </p>
 
-MLX-LM-LoRA is also beeing used by researchers, engineers, and other profesionals by `Apple`, `IBM`, `Bosch`, `Red Hat`, `Daimler Truck`, and `Mercedes-Benz Group`.
+MLX-LM-LoRA is also beeing used by researchers, engineers, and other profesionals by `Apple`, `IBM`, `Bosch`, `Red Hat`, `Daimler Truck`, `Red Hat`, and `Mercedes-Benz Group`.
 
 > **Is you or your team using MLX-LM-LoRA?** I'd love to hear from you! Feel free to reach out and I'll add your logo here too. 🚀
 
