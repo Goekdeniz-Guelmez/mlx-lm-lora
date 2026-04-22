@@ -9,7 +9,13 @@ import mlx.nn as nn
 import numpy as np
 from mlx.nn.utils import average_gradients
 from mlx.utils import tree_flatten, tree_map
-from mlx_lm.models.cache import ArraysCache, CacheList, KVCache, RotatingKVCache, make_prompt_cache
+from mlx_lm.models.cache import (
+    ArraysCache,
+    CacheList,
+    KVCache,
+    RotatingKVCache,
+    make_prompt_cache,
+)
 from mlx_lm.tuner.callbacks import TrainingCallback
 from tqdm import tqdm
 
@@ -193,22 +199,45 @@ def _symmetric_fake_quantize_tensor(x, bits: int, group_size: int):
     return x_q.reshape(x.shape[:-1] + (last_dim,))
 
 
-def _apply_qat_projection(model, args: SFTTrainingArgs):
+def _install_qat_hooks(model, args: SFTTrainingArgs):
+    """Patch nn.Linear layers with a STE fake-quantize hook in their forward pass.
+
+    The STE trick `w + stop_gradient(quantize(w) - w)` runs inside the
+    computation graph so gradients flow straight through while the model sees
+    quantization noise during every forward pass.  Must be called once;
+    `self.weight` is restored after each forward so the optimizer still
+    operates on full-precision weights.
+    """
     if not args.qat_enable:
         return
     if args.qat_bits < 2 or args.qat_bits > 16:
         raise ValueError("qat_bits must be in [2, 16]")
-    if args.qat_mode != "affine":
-        raise ValueError("Only qat_mode='affine' is supported in minimal QAT mode")
 
-    trainable = model.trainable_parameters()
-    projected = tree_map(
-        lambda t: _symmetric_fake_quantize_tensor(
-            t, args.qat_bits, args.qat_group_size
-        ),
-        trainable,
-    )
-    model.update(projected)
+    bits, gs = args.qat_bits, args.qat_group_size
+    seen: set = set()
+
+    def _patch(_, module):
+        if not isinstance(module, nn.Linear):
+            return
+        cls = type(module)
+        if cls in seen:
+            return
+        seen.add(cls)
+        _orig = cls.__call__
+
+        def _qat_fwd(self, x):
+            w = self.weight
+            # STE: forward = quantized weight, backward = identity
+            self.weight = w + mx.stop_gradient(
+                _symmetric_fake_quantize_tensor(w, bits, gs) - w
+            )
+            out = _orig(self, x)
+            self.weight = w  # restore so the optimizer sees full-precision weights
+            return out
+
+        cls.__call__ = _qat_fwd
+
+    model.apply_to_modules(_patch)
 
 
 def default_loss(model, batch, lengths, cache=None):
@@ -361,9 +390,8 @@ def train_sft(
         raise ValueError("gradient_accumulation_steps must be at least 1")
     if args.qat_start_step < 1:
         raise ValueError("qat_start_step must be at least 1")
-    if args.qat_interval < 1:
-        raise ValueError("qat_interval must be at least 1")
 
+    qat_installed = False  # hooks installed lazily at qat_start_step
     efficient = True if args.seq_step_size is not None else False
 
     if efficient:
@@ -514,13 +542,13 @@ def train_sft(
 
         if it % grad_accum_steps == 0:
             opt_step += 1
-            should_qat = (
+            if (
                 args.qat_enable
+                and not qat_installed
                 and opt_step >= args.qat_start_step
-                and (opt_step - args.qat_start_step) % args.qat_interval == 0
-            )
-            if should_qat:
-                _apply_qat_projection(model, args)
+            ):
+                _install_qat_hooks(model, args)
+                qat_installed = True
 
         losses += lvalue
         n_tokens += toks
