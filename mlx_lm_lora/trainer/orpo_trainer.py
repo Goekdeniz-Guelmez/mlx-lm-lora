@@ -15,7 +15,7 @@ from tqdm import tqdm
 
 from .sft_trainer import (
     SFTTrainingArgs,
-    _apply_qat_projection,
+    _install_qat_hooks,
     grad_checkpoint,
     reset_prompt_cache,
 )
@@ -250,9 +250,8 @@ def train_orpo(
         raise ValueError("gradient_accumulation_steps must be at least 1")
     if args.qat_start_step < 1:
         raise ValueError("qat_start_step must be at least 1")
-    if args.qat_interval < 1:
-        raise ValueError("qat_interval must be at least 1")
 
+    qat_installed = False
     efficient = True if args.seq_step_size is not None else False
     if efficient:
         cache = make_prompt_cache(model)
@@ -533,13 +532,9 @@ def train_orpo(
 
         if it % grad_accum_steps == 0:
             opt_step += 1
-            should_qat = (
-                args.qat_enable
-                and opt_step >= args.qat_start_step
-                and (opt_step - args.qat_start_step) % args.qat_interval == 0
-            )
-            if should_qat:
-                _apply_qat_projection(model, args)
+            if args.qat_enable and not qat_installed and opt_step >= args.qat_start_step:
+                _install_qat_hooks(model, args)
+                qat_installed = True
 
         losses += lvalue
         rewards += reward
