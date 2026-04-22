@@ -532,7 +532,11 @@ def train_orpo(
 
         if it % grad_accum_steps == 0:
             opt_step += 1
-            if args.qat_enable and not qat_installed and opt_step >= args.qat_start_step:
+            if (
+                args.qat_enable
+                and not qat_installed
+                and opt_step >= args.qat_start_step
+            ):
                 _install_qat_hooks(model, args)
                 qat_installed = True
 

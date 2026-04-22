@@ -9,7 +9,13 @@ import mlx.nn as nn
 import numpy as np
 from mlx.nn.utils import average_gradients
 from mlx.utils import tree_flatten, tree_map
-from mlx_lm.models.cache import ArraysCache, CacheList, KVCache, RotatingKVCache, make_prompt_cache
+from mlx_lm.models.cache import (
+    ArraysCache,
+    CacheList,
+    KVCache,
+    RotatingKVCache,
+    make_prompt_cache,
+)
 from mlx_lm.tuner.callbacks import TrainingCallback
 from tqdm import tqdm
 
@@ -536,7 +542,11 @@ def train_sft(
 
         if it % grad_accum_steps == 0:
             opt_step += 1
-            if args.qat_enable and not qat_installed and opt_step >= args.qat_start_step:
+            if (
+                args.qat_enable
+                and not qat_installed
+                and opt_step >= args.qat_start_step
+            ):
                 _install_qat_hooks(model, args)
                 qat_installed = True
 
