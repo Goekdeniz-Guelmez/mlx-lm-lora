@@ -61,6 +61,8 @@ With MLX-LM-LoRA you can, train Large Language Models locally on Apple Silicon u
 
 ## 📓 Example Notebooks
 
+All example notebook can be found [here](https://github.com/Goekdeniz-Guelmez/mlx-lm-lora-example-notebooks).
+
 - [🧪 Fine-Tuning (Simple)](examples/conversational_sft_minimal.ipynb) – Shows how to fine-tune a model using LoRA on a standard SFT dataset.
 - [🧠 Fine-Tuning (Detailed)](examples/conversational_sft_detailed.ipynb) – Uses full model weights instead of LoRA for supervised fine-tuning.
 - [⚖️ ORPO Training](examples/orpo_minimal.ipynb) – Monolithic preference optimization without the need for a reference model.
