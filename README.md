@@ -1180,7 +1180,7 @@ To measure performance on your hardware with MLX-LM-LoRA:
 ```shell
 # SFT with speed/memory reporting
 mlx_lm_lora.train \
-  --model mlx-community/Qwen2.5-1B-Instruct-4bit \
+  --model Goekdeniz-Guelmez/JOSIE-1.1-4B-Instruct \
   --data mlx-community/wikisql \
   --train --train-mode sft \
   --batch-size 4 --iters 100 \
@@ -1208,8 +1208,8 @@ Below is a comparison of iteration speed and memory usage across different train
 | | | **(Apple Silicon)** | **(NVIDIA GPU)** | **(Apple Silicon)** |
 | | | **Speed / Memory** | **Speed / Memory** | **Speed / Memory** |
 | **Qwen/Qwen3-0.6B** | SFT | ~4.7 it/s<br/>~2-2 GB | ~2.7 it/s<br/>~1-2 GB VRAM | ~0.6 it/s<br/>~4-6 GB |
-| **Qwen/Qwen3-0.6B** | ORPO | ~4.5 it/s<br/>~2-4 GB | ~2.4 it/s<br/>~2-8 GB VRAM | None |
-| **Qwen/Qwen3-0.6B** | GRPO | ~0.02 it/s<br/>~9-20 GB | ~0.04 it/s<br/>~76-80 GB VRAM | None |
+| **Qwen/Qwen3-0.6B** | ORPO | ~4.5 it/s<br/>~2-4 GB | ~2.4 it/s<br/>~2-8 GB VRAM | OOM |
+| **Qwen/Qwen3-0.6B** | GRPO | ~0.02 it/s<br/>~9-20 GB | ~0.04 it/s<br/>~76-80 GB VRAM | OOM |
 | **Qwen/Qwen3-8B** | SFT | ~4.1 it/s<br/>~6-10 GB | ~1.3 it/s<br/>~10-16 GB VRAM | ~0.07 it/s<br/>~8-18 GB |
 
 #### Key Differences
