@@ -59,16 +59,27 @@ With MLX-LM-LoRA you can, train Large Language Models locally on Apple Silicon u
 
 - You can now train a custom preference model for online preference training
 
-## 📓 Example Notebooks
+# 📓 Example Notebooks
 
-All example notebook can be found [here](https://github.com/Goekdeniz-Guelmez/mlx-lm-lora-example-notebooks).
-
-- [🧪 Fine-Tuning (Simple)](examples/conversational_sft_minimal.ipynb) – Shows how to fine-tune a model using LoRA on a standard SFT dataset.
-- [🧠 Fine-Tuning (Detailed)](examples/conversational_sft_detailed.ipynb) – Uses full model weights instead of LoRA for supervised fine-tuning.
-- [⚖️ ORPO Training](examples/orpo_minimal.ipynb) – Monolithic preference optimization without the need for a reference model.
-- [📈 DPO Training](examples/dpo_minimal.ipynb) – Direct preference optimization to improve model on human preference.
-- [👥 GRPO Training](examples/grpo_minimal.ipynb) – Group-based reinforcement training with multiple completions per prompt.
-- [Yaml configuration](examples/example_lora.yaml) – Yaml configuration file.
+> ## 📦 All example notebooks live in a **separate, dedicated repository**:
+>
+> # 👉 [**`Goekdeniz-Guelmez/mlx-lm-lora-example-notebooks`**](https://github.com/Goekdeniz-Guelmez/mlx-lm-lora-example-notebooks) 👈
+>
+> ### 🔗 **Direct link: https://github.com/Goekdeniz-Guelmez/mlx-lm-lora-example-notebooks**
+>
+> ---
+>
+> Head over to the examples repository for every notebook, YAML config, and walkthrough, including:
+>
+> - 🧪 **Fine-Tuning (Simple)** — LoRA on a standard SFT dataset
+> - 🧠 **Fine-Tuning (Detailed)** — Full model weights for supervised fine-tuning
+> - ⚖️ **ORPO Training** — Monolithic preference optimization
+> - 📈 **DPO Training** — Direct preference optimization
+> - 👥 **GRPO Training** — Group-based reinforcement training
+> - 📄 **YAML configuration** — Example config file
+> - …and more being added over time!
+>
+> ⭐ **Star the examples repo** to bookmark it: https://github.com/Goekdeniz-Guelmez/mlx-lm-lora-example-notebooks
 
 ## Contents
 
@@ -88,6 +99,7 @@ All example notebook can be found [here](https://github.com/Goekdeniz-Guelmez/ml
   - [Reinforcement Learning from Human Feedback Reinforce (RLHF Reinforce)](#reinforced-reinforcement-learning-from-human-feedback-with-kl)
   - [Proximal Policy Optimization](#proximal-policy-optimization)
 - [Other Features](#other-features)
+  - [Examples Repository (moved)](#-examples-have-moved-)
   - [Synthetic Dataset Creation](#synthetic-dataset-creation)
     - [Prompts](#synthetic-prompts-dataset-creation)
     - [SFT](#synthetic-sft-dataset-creation)
