@@ -26,19 +26,19 @@ class Colors:
 def print_banner():
     """Print a beautiful ASCII banner"""
     banner = f"""
-{Colors.CYAN}╔══════════════════════════════════════════════════════════════════════════════════════════╗{Colors.RESET}
-{Colors.CYAN}║{Colors.RESET}                                                                                          {Colors.CYAN}║{Colors.RESET}
-{Colors.CYAN}║{Colors.RESET} {Colors.BOLD}{Colors.MAGENTA}███╗   ███╗██╗     ██╗  ██╗    ██╗     ███╗   ███╗    ██╗      ██████╗ ██████╗  █████╗{Colors.RESET}   {Colors.CYAN}║{Colors.RESET}
-{Colors.CYAN}║{Colors.RESET} {Colors.BOLD}{Colors.MAGENTA}████╗ ████║██║     ╚██╗██╔╝    ██║     ████╗ ████║    ██║     ██╔═══██╗██╔══██╗██╔══██╗{Colors.RESET}  {Colors.CYAN}║{Colors.RESET}
-{Colors.CYAN}║{Colors.RESET} {Colors.BOLD}{Colors.BLUE}██╔████╔██║██║      ╚███╔╝     ██║     ██╔████╔██║    ██║     ██║   ██║██████╔╝███████║{Colors.RESET}  {Colors.CYAN}║{Colors.RESET}
-{Colors.CYAN}║{Colors.RESET} {Colors.BOLD}{Colors.BLUE}██║╚██╔╝██║██║      ██╔██╗     ██║     ██║╚██╔╝██║    ██║     ██║   ██║██╔══██╗██╔══██║{Colors.RESET}  {Colors.CYAN}║{Colors.RESET}
-{Colors.CYAN}║{Colors.RESET} {Colors.BOLD}{Colors.CYAN}██║ ╚═╝ ██║███████╗██╔╝ ██╗    ███████╗██║ ╚═╝ ██║    ███████╗╚██████╔╝██║  ██║██║  ██║{Colors.RESET}  {Colors.CYAN}║{Colors.RESET}
-{Colors.CYAN}║{Colors.RESET} {Colors.BOLD}{Colors.CYAN}╚═╝     ╚═╝╚══════╝╚═╝  ╚═╝    ╚══════╝╚═╝     ╚═╝    ╚══════╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝{Colors.RESET}  {Colors.CYAN}║{Colors.RESET}
-{Colors.CYAN}║{Colors.RESET}                                                                                          {Colors.CYAN}║{Colors.RESET}
-{Colors.CYAN}║{Colors.RESET} {Colors.YELLOW}{Colors.BOLD}Advanced Fine-Tuning Framework{Colors.RESET}                                                           {Colors.CYAN}║{Colors.RESET}
-{Colors.CYAN}║{Colors.RESET} {Colors.DIM}{Colors.WHITE}LoRA • (Online-)DPO • XPO • CPO • CPO • ORPO • PPO • GRPO • DrGRPO • GSPO • RLHF • SFT{Colors.RESET}   {Colors.CYAN}║{Colors.RESET}
-{Colors.CYAN}║{Colors.RESET}                                                                                          {Colors.CYAN}║{Colors.RESET}
-{Colors.CYAN}╚══════════════════════════════════════════════════════════════════════════════════════════╝{Colors.RESET}
+{Colors.CYAN}╔═════════════════════════════════════════════════════════════════════════════════════════════════╗{Colors.RESET}
+{Colors.CYAN}║{Colors.RESET}                                                                                                 {Colors.CYAN}║{Colors.RESET}
+{Colors.CYAN}║{Colors.RESET} {Colors.BOLD}{Colors.MAGENTA}███╗   ███╗██╗     ██╗  ██╗    ██╗     ███╗   ███╗    ██╗      ██████╗ ██████╗  █████╗{Colors.RESET}          {Colors.CYAN}║{Colors.RESET}
+{Colors.CYAN}║{Colors.RESET} {Colors.BOLD}{Colors.MAGENTA}████╗ ████║██║     ╚██╗██╔╝    ██║     ████╗ ████║    ██║     ██╔═══██╗██╔══██╗██╔══██╗{Colors.RESET}         {Colors.CYAN}║{Colors.RESET}
+{Colors.CYAN}║{Colors.RESET} {Colors.BOLD}{Colors.BLUE}██╔████╔██║██║      ╚███╔╝     ██║     ██╔████╔██║    ██║     ██║   ██║██████╔╝███████║{Colors.RESET}         {Colors.CYAN}║{Colors.RESET}
+{Colors.CYAN}║{Colors.RESET} {Colors.BOLD}{Colors.BLUE}██║╚██╔╝██║██║      ██╔██╗     ██║     ██║╚██╔╝██║    ██║     ██║   ██║██╔══██╗██╔══██║{Colors.RESET}         {Colors.CYAN}║{Colors.RESET}
+{Colors.CYAN}║{Colors.RESET} {Colors.BOLD}{Colors.CYAN}██║ ╚═╝ ██║███████╗██╔╝ ██╗    ███████╗██║ ╚═╝ ██║    ███████╗╚██████╔╝██║  ██║██║  ██║{Colors.RESET}         {Colors.CYAN}║{Colors.RESET}
+{Colors.CYAN}║{Colors.RESET} {Colors.BOLD}{Colors.CYAN}╚═╝     ╚═╝╚══════╝╚═╝  ╚═╝    ╚══════╝╚═╝     ╚═╝    ╚══════╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝{Colors.RESET}         {Colors.CYAN}║{Colors.RESET}
+{Colors.CYAN}║{Colors.RESET}                                                                                                 {Colors.CYAN}║{Colors.RESET}
+{Colors.CYAN}║{Colors.RESET} {Colors.YELLOW}{Colors.BOLD}Advanced Fine-Tuning Framework{Colors.RESET}                                                                  {Colors.CYAN}║{Colors.RESET}
+{Colors.CYAN}║{Colors.RESET} {Colors.DIM}{Colors.WHITE}LoRA • (Online-)DPO • XPO • CPO • CPO • ORPO • PPO • FTPO • GRPO • DrGRPO • GSPO • RLHF • SFT{Colors.RESET}   {Colors.CYAN}║{Colors.RESET}
+{Colors.CYAN}║{Colors.RESET}                                                                                                 {Colors.CYAN}║{Colors.RESET}
+{Colors.CYAN}╚═════════════════════════════════════════════════════════════════════════════════════════════════╝{Colors.RESET}
     """
     print(banner)
 
