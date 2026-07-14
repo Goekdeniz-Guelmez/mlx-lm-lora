@@ -125,7 +125,7 @@ CONFIG_DEFAULTS = {
     "reward_functions": None,
     "reward_functions_file": None,
     "grpo_loss_type": "grpo",
-    "importance_sampling_level": None,
+    "importance_sampling_level": "token",
     "lm_studio_name": None,
     "qat_enable": False,
     "qat_bits": 8,
@@ -457,9 +457,9 @@ def build_parser():
     parser.add_argument(
         "--importance-sampling-level",
         type=str,
-        choices=["token", "sequence", None],
-        default=None,
-        help="Level of importance sampling to use.",
+        choices=["token", "sequence"],
+        default="token",
+        help="Level of importance sampling to use (default: token).",
     )
     parser.add_argument(
         "--qat-enable",
