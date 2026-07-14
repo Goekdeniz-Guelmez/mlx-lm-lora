@@ -2,16 +2,18 @@ import unittest
 
 import mlx.core as mx
 
-from mlx_lm_lora.trainer import cpo_trainer
-from mlx_lm_lora.trainer import dpo_trainer
-from mlx_lm_lora.trainer import grpo_trainer
-from mlx_lm_lora.trainer import ftpo_trainer
-from mlx_lm_lora.trainer import online_dpo_trainer
-from mlx_lm_lora.trainer import orpo_trainer
-from mlx_lm_lora.trainer import ppo_trainer
-from mlx_lm_lora.trainer import rlhf_reinforce_trainer
-from mlx_lm_lora.trainer import sft_trainer
-from mlx_lm_lora.trainer import xpo_trainer
+from mlx_lm_lora.trainer import (
+    cpo_trainer,
+    dpo_trainer,
+    ftpo_trainer,
+    grpo_trainer,
+    online_dpo_trainer,
+    orpo_trainer,
+    ppo_trainer,
+    rlhf_reinforce_trainer,
+    sft_trainer,
+    xpo_trainer,
+)
 
 
 def _scalar(value):
@@ -130,7 +132,9 @@ class DPOTrainerTest(unittest.TestCase):
         scores = mx.array([[2.0, 4.0]])
         mask = mx.ones((1, 2))
         self.assertEqual(_scalar(dpo_trainer.compute_score(scores, mask, "ipo")), 3.0)
-        self.assertEqual(_scalar(dpo_trainer.compute_score(scores, mask, "sigmoid")), 6.0)
+        self.assertEqual(
+            _scalar(dpo_trainer.compute_score(scores, mask, "sigmoid")), 6.0
+        )
 
     def test_dpo_batch_iterator_pads_and_tracks_masks(self):
         data = [
@@ -168,8 +172,14 @@ class FTPOTrainerTest(unittest.TestCase):
     def test_ftpo_clipped_pair_has_no_preference_loss(self):
         policy = mx.array([[0.0, 4.0, 0.0]])
         loss, _, metrics = ftpo_trainer.ftpo_loss(
-            policy, policy, mx.array([[1]]), mx.array([[1.0]]), mx.array([2]),
-            lambda_mse=0.0, lambda_mse_target=0.0, clip_epsilon_logits=2.0,
+            policy,
+            policy,
+            mx.array([[1]]),
+            mx.array([[1.0]]),
+            mx.array([2]),
+            lambda_mse=0.0,
+            lambda_mse_target=0.0,
+            clip_epsilon_logits=2.0,
         )
         self.assertAlmostEqual(_scalar(loss), 0.0, places=7)
         self.assertAlmostEqual(_scalar(metrics["active_weight"]), 0.0, places=7)
@@ -215,18 +225,14 @@ class OnlineDPOTrainerTest(unittest.TestCase):
 
     def test_online_dpo_rejects_unknown_loss(self):
         with self.assertRaisesRegex(ValueError, "Unknown loss type"):
-            online_dpo_trainer.online_dpo_loss(
-                **_preference_inputs(), loss_type="bad"
-            )
+            online_dpo_trainer.online_dpo_loss(**_preference_inputs(), loss_type="bad")
 
     def test_online_dpo_batch_iterator_preserves_prompt_pairs(self):
         data = [
             {"prompt": [1], "prompt_text": "one"},
             {"prompt": [2, 3], "prompt_text": "two"},
         ]
-        prompts, texts = next(
-            online_dpo_trainer.iterate_online_dpo_batches(data, 2, 8)
-        )
+        prompts, texts = next(online_dpo_trainer.iterate_online_dpo_batches(data, 2, 8))
         self.assertEqual(prompts, [[1], [2, 3]])
         self.assertEqual(texts, ["one", "two"])
 

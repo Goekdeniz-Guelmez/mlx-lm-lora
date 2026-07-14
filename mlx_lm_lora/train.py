@@ -871,7 +871,9 @@ def evaluate_model(
         )
         print(f"{Colors.BOLD}FTPO Test loss:{Colors.RESET} {test_loss:.3f}")
         for metric_name, metric_value in test_metrics.items():
-            print(f"  {Colors.WHITE}{metric_name}:{Colors.RESET} {float(metric_value):.3f}")
+            print(
+                f"  {Colors.WHITE}{metric_name}:{Colors.RESET} {float(metric_value):.3f}"
+            )
 
     elif args.train_mode == "dpo":
         test_loss, _, _, test_metrics = evaluate_dpo(

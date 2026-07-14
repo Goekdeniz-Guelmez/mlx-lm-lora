@@ -237,13 +237,11 @@ class FTPODataset:
                 for surface in row.get("multi_chosen_decoded", [])
             ]
             chosen_ids = list(dict.fromkeys(ids[0] for ids in chosen if len(ids) == 1))
-            if (
-                not prompt_ids
-                or len(prompt_ids) > max_seq_length
-                or len(rejected) != 1
-            ):
+            if not prompt_ids or len(prompt_ids) > max_seq_length or len(rejected) != 1:
                 continue
-            chosen_ids = [token_id for token_id in chosen_ids if token_id != rejected[0]]
+            chosen_ids = [
+                token_id for token_id in chosen_ids if token_id != rejected[0]
+            ]
             if chosen_ids:
                 self._data.append(
                     {

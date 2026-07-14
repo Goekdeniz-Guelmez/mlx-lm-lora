@@ -83,11 +83,13 @@ class DatasetAdaptersTest(unittest.TestCase):
 
     def test_ftpo_dataset_keeps_only_single_token_alternatives(self):
         dataset = datasets.FTPODataset(
-            [{
-                "context_with_chat_template": "ctx",
-                "rejected_decoded": "x",
-                "multi_chosen_decoded": ["y", "zz", "x"],
-            }],
+            [
+                {
+                    "context_with_chat_template": "ctx",
+                    "rejected_decoded": "x",
+                    "multi_chosen_decoded": ["y", "zz", "x"],
+                }
+            ],
             self.tokenizer,
         )
         self.assertEqual(
