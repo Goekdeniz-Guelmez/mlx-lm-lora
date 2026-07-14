@@ -391,7 +391,7 @@ mlx_lm_lora.train \
 
 **Key Parameters:**
 
-- `--importance-sampling-level`: Choose `token`, `sequence`, or `None` (default: None)
+- `--importance-sampling-level`: Choose `token` (default) or `sequence`
 - All other GRPO parameters apply
 
 **Dataset Format:** Same as GRPO
@@ -760,7 +760,7 @@ See [QAT section above](#quantization-aware-training-qat) for usage examples.
 **GSPO (GRPO + Importance Sampling):**
 
 ```shell
---importance-sampling-level token # token, sequence, or None
+--importance-sampling-level token # token (default) or sequence
 # Plus all GRPO parameters
 ```
 
