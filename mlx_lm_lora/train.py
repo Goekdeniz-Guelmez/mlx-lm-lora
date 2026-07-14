@@ -43,6 +43,7 @@ from .trainer.sft_trainer import (
     SFTTrainingArgs,
     TrainingCallback,
     evaluate_sft,
+    get_sft_loss,
     train_sft,
 )
 from .trainer.xpo_trainer import XPOTrainingArgs, evaluate_xpo, train_xpo
@@ -82,6 +83,7 @@ CONFIG_DEFAULTS = {
     "load_in_mxfp4": False,
     "train_type": "lora",
     "train_mode": "sft",
+    "sft_loss_type": "cross_entropy",
     "optimizer": "adam",
     "optimizer_config": {"adam": {}, "adamw": {}, "muon": {}},
     "data": "data/",
@@ -265,6 +267,13 @@ def build_parser():
         choices=["adam", "adamw", "muon"],
         default=None,
         help="Optimizer to use for training",
+    )
+    parser.add_argument(
+        "--sft-loss-type",
+        type=str,
+        choices=["cross_entropy", "dft"],
+        default="cross_entropy",
+        help="SFT loss type: standard cross entropy or dynamic fine-tuning loss.",
     )
     parser.add_argument(
         "--mask-prompt",
@@ -742,6 +751,7 @@ def train_model(
         train_sft(
             model=model,
             args=SFTTrainingArgs(
+                loss_type=args.sft_loss_type,
                 batch_size=args.batch_size,
                 iters=args.iters,
                 val_batches=args.val_batches,
@@ -1033,6 +1043,7 @@ def evaluate_model(
             batch_size=args.batch_size,
             num_batches=args.test_batches,
             max_seq_length=args.max_seq_length,
+            loss=get_sft_loss(args.sft_loss_type),
         )
         test_ppl = math.exp(test_loss)
         print(

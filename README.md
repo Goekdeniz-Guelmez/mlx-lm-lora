@@ -213,6 +213,7 @@ mlx_lm_lora.train \
 --model Goekdeniz-Guelmez/Josiefied-Qwen2.5-0.5B-Instruct-abliterated-v1 \
 --train \
 --train-mode sft \
+--sft-loss-type dft \
 --data mlx-community/hermes-3 \
 --batch-size 4 \
 --learning-rate 1e-5 \
@@ -223,6 +224,7 @@ mlx_lm_lora.train \
 
 - `--train-type`: Choose `lora` (default), `dora`, or `full`
 - `--mask-prompt`: Apply loss only to assistant responses
+- `--sft-loss-type`: SFT loss function - `cross_entropy` (default) or dynamic fine-tuning loss `dft`
 - `--max-seq-length`: Maximum sequence length (default: 2048)
 - `--gradient-accumulation-steps`: Accumulate gradients over multiple steps
 

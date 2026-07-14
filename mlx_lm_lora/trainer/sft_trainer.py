@@ -91,6 +91,10 @@ def grad_checkpoint(layer):
 
 @dataclass
 class SFTTrainingArgs:
+    loss_type: str = field(
+        default="cross_entropy",
+        metadata={"help": "SFT loss type: 'cross_entropy' or 'dft'."},
+    )
     batch_size: int = field(default=4, metadata={"help": "Minibatch size."})
     iters: int = field(default=100, metadata={"help": "Iterations to train for."})
     gradient_accumulation_steps: int = field(
@@ -257,6 +261,37 @@ def default_loss(model, batch, lengths, cache=None):
     return loss, ntoks
 
 
+def dft_loss(model, batch, lengths, cache=None):
+    """Dynamic fine-tuning loss with detached probability weighting."""
+    inputs = batch[:, :-1]
+    targets = batch[:, 1:]
+
+    offset = _find_cache_offset(cache)
+    offset = 0 if offset is None else offset
+    logits = model(inputs, cache=cache)
+
+    steps = mx.arange(1, targets.shape[1] + 1) + offset
+    mask = mx.logical_and(steps >= lengths[:, 0:1], steps <= lengths[:, 1:])
+
+    logprobs = mx.take_along_axis(
+        nn.log_softmax(logits, axis=-1), targets[..., None], axis=-1
+    ).squeeze(-1)
+    weights = mx.stop_gradient(mx.exp(logprobs))
+    ntoks = mask.sum()
+    loss = (-(weights * logprobs) * mask).astype(mx.float32).sum() / ntoks
+    return loss, ntoks
+
+
+def get_sft_loss(loss_type: str):
+    if loss_type == "cross_entropy":
+        return default_loss
+    if loss_type == "dft":
+        return dft_loss
+    raise ValueError(
+        f"Unknown SFT loss type: {loss_type!r}. Expected 'cross_entropy' or 'dft'."
+    )
+
+
 def iterate_batches(
     dataset,
     batch_size,
@@ -390,6 +425,8 @@ def train_sft(
         raise ValueError("gradient_accumulation_steps must be at least 1")
     if args.qat_start_step < 1:
         raise ValueError("qat_start_step must be at least 1")
+    if loss is default_loss:
+        loss = get_sft_loss(args.loss_type)
 
     qat_installed = False  # hooks installed lazily at qat_start_step
     efficient = True if args.seq_step_size is not None else False
