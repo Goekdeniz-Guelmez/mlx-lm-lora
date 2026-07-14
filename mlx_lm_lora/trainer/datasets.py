@@ -64,7 +64,7 @@ class PreferenceDataset:
 
         for d in data:
             self._chosen_data.append(tokenizer.encode(d[chosen_key]))
-            self._rejected_data.append(tokenizer.encode(rejected_key))
+            self._rejected_data.append(tokenizer.encode(d[rejected_key]))
 
     def __getitem__(self, idx: int):
         return {"chosen": self._chosen_data[idx], "rejected": self._rejected_data[idx]}
@@ -83,7 +83,7 @@ class JudgeDataset:
         tokenizer: PreTrainedTokenizer,
         prompt_key: str = "prompt",
         chosen_key: str = "chosen",
-        rejected_key: str = "regected",
+        rejected_key: str = "rejected",
         mask_prompt: bool = False,
     ):
         from .judge import DEFAULT_PAIRWISE_SYSTEM_PROMPT, RAW_TRAINING_SYSTEM_PROMPT
@@ -367,7 +367,7 @@ class TextDataset:
 
     def process(self, d):
         d = self.tokenizer.encode(d[self.text_key])
-        if d[-1] != self.tokenizer.eos_token_id:
+        if not d or d[-1] != self.tokenizer.eos_token_id:
             d.append(self.tokenizer.eos_token_id)
         return d
 
