@@ -83,7 +83,8 @@ CONFIG_DEFAULTS = {
     "load_in_mxfp4": False,
     "train_type": "lora",
     "train_mode": "sft",
-    "sft_loss_type": "cross_entropy",
+    "sft_loss_type": "nll",
+    "sft_loss_chunk_size": 1024,
     "optimizer": "adam",
     "optimizer_config": {"adam": {}, "adamw": {}, "muon": {}},
     "data": "data/",
@@ -271,9 +272,15 @@ def build_parser():
     parser.add_argument(
         "--sft-loss-type",
         type=str,
-        choices=["cross_entropy", "dft"],
-        default="cross_entropy",
-        help="SFT loss type: standard cross entropy or dynamic fine-tuning loss.",
+        choices=["nll", "chunked_nll", "dft", "cross_entropy"],
+        default="nll",
+        help="SFT loss type: NLL, memory-efficient chunked NLL, or DFT.",
+    )
+    parser.add_argument(
+        "--sft-loss-chunk-size",
+        type=int,
+        default=1024,
+        help="Number of target tokens per chunk for chunked NLL.",
     )
     parser.add_argument(
         "--mask-prompt",
@@ -752,6 +759,7 @@ def train_model(
             model=model,
             args=SFTTrainingArgs(
                 loss_type=args.sft_loss_type,
+                loss_chunk_size=args.sft_loss_chunk_size,
                 batch_size=args.batch_size,
                 iters=args.iters,
                 val_batches=args.val_batches,
@@ -1043,7 +1051,7 @@ def evaluate_model(
             batch_size=args.batch_size,
             num_batches=args.test_batches,
             max_seq_length=args.max_seq_length,
-            loss=get_sft_loss(args.sft_loss_type),
+            loss=get_sft_loss(args.sft_loss_type, args.sft_loss_chunk_size),
         )
         test_ppl = math.exp(test_loss)
         print(

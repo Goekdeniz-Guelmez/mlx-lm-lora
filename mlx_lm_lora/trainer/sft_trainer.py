@@ -92,8 +92,12 @@ def grad_checkpoint(layer):
 @dataclass
 class SFTTrainingArgs:
     loss_type: str = field(
-        default="cross_entropy",
-        metadata={"help": "SFT loss type: 'cross_entropy' or 'dft'."},
+        default="nll",
+        metadata={"help": "SFT loss type: 'nll', 'chunked_nll', or 'dft'."},
+    )
+    loss_chunk_size: int = field(
+        default=1024,
+        metadata={"help": "Number of target tokens per chunk for chunked NLL."},
     )
     batch_size: int = field(default=4, metadata={"help": "Minibatch size."})
     iters: int = field(default=100, metadata={"help": "Iterations to train for."})
@@ -261,6 +265,33 @@ def default_loss(model, batch, lengths, cache=None):
     return loss, ntoks
 
 
+def chunked_nll_loss(model, batch, lengths, cache=None, chunk_size=1024):
+    """Compute standard NLL in token chunks to reduce peak loss activations."""
+    if chunk_size < 1:
+        raise ValueError("loss_chunk_size must be at least 1")
+
+    inputs = batch[:, :-1]
+    targets = batch[:, 1:]
+
+    offset = _find_cache_offset(cache)
+    offset = 0 if offset is None else offset
+    logits = model(inputs, cache=cache)
+
+    steps = mx.arange(1, targets.shape[1] + 1) + offset
+    mask = mx.logical_and(steps >= lengths[:, 0:1], steps <= lengths[:, 1:])
+    ntoks = mask.sum()
+
+    loss_sum = mx.array(0.0, dtype=mx.float32)
+    for start in range(0, targets.shape[1], chunk_size):
+        end = min(start + chunk_size, targets.shape[1])
+        chunk_loss = nn.losses.cross_entropy(
+            logits[:, start:end], targets[:, start:end]
+        )
+        loss_sum += (chunk_loss * mask[:, start:end]).astype(mx.float32).sum()
+
+    return loss_sum / ntoks, ntoks
+
+
 def dft_loss(model, batch, lengths, cache=None):
     """Dynamic fine-tuning loss with detached probability weighting."""
     inputs = batch[:, :-1]
@@ -282,13 +313,18 @@ def dft_loss(model, batch, lengths, cache=None):
     return loss, ntoks
 
 
-def get_sft_loss(loss_type: str):
-    if loss_type == "cross_entropy":
+def get_sft_loss(loss_type: str, chunk_size: int = 1024):
+    if loss_type in {"nll", "cross_entropy"}:
         return default_loss
+    if loss_type == "chunked_nll":
+        if chunk_size < 1:
+            raise ValueError("loss_chunk_size must be at least 1")
+        return partial(chunked_nll_loss, chunk_size=chunk_size)
     if loss_type == "dft":
         return dft_loss
     raise ValueError(
-        f"Unknown SFT loss type: {loss_type!r}. Expected 'cross_entropy' or 'dft'."
+        f"Unknown SFT loss type: {loss_type!r}. "
+        "Expected 'nll', 'chunked_nll', or 'dft'."
     )
 
 
@@ -426,7 +462,7 @@ def train_sft(
     if args.qat_start_step < 1:
         raise ValueError("qat_start_step must be at least 1")
     if loss is default_loss:
-        loss = get_sft_loss(args.loss_type)
+        loss = get_sft_loss(args.loss_type, args.loss_chunk_size)
 
     qat_installed = False  # hooks installed lazily at qat_start_step
     efficient = True if args.seq_step_size is not None else False

@@ -213,7 +213,7 @@ mlx_lm_lora.train \
 --model Goekdeniz-Guelmez/Josiefied-Qwen2.5-0.5B-Instruct-abliterated-v1 \
 --train \
 --train-mode sft \
---sft-loss-type dft \
+--sft-loss-type chunked_nll \
 --data mlx-community/hermes-3 \
 --batch-size 4 \
 --learning-rate 1e-5 \
@@ -224,7 +224,8 @@ mlx_lm_lora.train \
 
 - `--train-type`: Choose `lora` (default), `dora`, or `full`
 - `--mask-prompt`: Apply loss only to assistant responses
-- `--sft-loss-type`: SFT loss function - `cross_entropy` (default) or dynamic fine-tuning loss `dft`
+- `--sft-loss-type`: SFT loss function - `nll` (default), memory-efficient `chunked_nll`, or dynamic fine-tuning loss `dft`; `cross_entropy` is retained as an alias for `nll`
+- `--sft-loss-chunk-size`: Target tokens processed per `chunked_nll` chunk (default: 1024)
 - `--max-seq-length`: Maximum sequence length (default: 2048)
 - `--gradient-accumulation-steps`: Accumulate gradients over multiple steps
 
