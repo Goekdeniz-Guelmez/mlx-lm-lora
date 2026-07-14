@@ -50,12 +50,6 @@ With MLX-LM-LoRA you can, train Large Language Models locally on Apple Silicon u
 - Supports 4-16 bit, group or per-tensor, and configurable start/interval.
 - Use QAT to simulate quantization effects during training for better quantized model performance.
 
-**Synthetic Dataset Creation:**
-
-- **Prompts**: Create a synthetic prompt dataset using a base model
-- **SFT**: Create a synthetic sft dataset using a teacher model
-- **Preferences**: Create a synthetic preference dataset using a base and a teacher model
-
 **Training Your Custom Preference Model:**
 
 - You can now train a custom preference model for online preference training
@@ -101,10 +95,6 @@ With MLX-LM-LoRA you can, train Large Language Models locally on Apple Silicon u
   - [Proximal Policy Optimization](#proximal-policy-optimization)
 - [Other Features](#other-features)
   - [Examples Repository (moved)](#-examples-have-moved-)
-  - [Synthetic Dataset Creation](#synthetic-dataset-creation)
-    - [Prompts](#synthetic-prompts-dataset-creation)
-    - [SFT](#synthetic-sft-dataset-creation)
-    - [Preference](#synthetic-preference-dataset-creation)
   - [Training Your Custom Preference Model](#training-your-custom-preference-model)
 - [Configuration](#configuration)
 - [Dataset Formats](#dataset-formats)
@@ -577,81 +567,6 @@ mlx_lm_lora.train \
 ---
 
 ## Other Features
-
-### Synthetic Dataset Creation
-
-This feature makes it able to use mlx-lm's powerfull batch genebrate to create a synthetic datasets using a teacher model, this can be used for knowledge distiliation, etc., and is a powerfull tool to create custom model, fuly locally.
-
-#### Synthetic Prompts Dataset Creation
-
-With this you can create a synthetic user prompts dataset using a model. this creates multible files, the first file is a JSONL file that has the generated samples in it, the next ones are parquet verison for HF compatibility. Example:
-
-```shell
-python -m mlx_lm_lora.synthetic_prompts \
---model mlx-community/Josiefied-Qwen3-4B-Instruct-2507-abliterated-v1-8bit \
---topics 'ML' 'politics' 'web security' \
---docs-dir ./docs-pdfs \
---output-dir ./sft_dataset \
---system-prompt "You are Josie, a cool and fresh ai asstant that talks like a gangster"
---num-samples 1000 \
---valid-split 0.01 \
---batch-size 4 \
---max-tokens 4096
-```
-
-**Resulting Dataset Format:**
-
-```jsonl
-{"prompt": "Question", "section": "only happens when using files via --docs-dir", "topic": "only happens when using topics via --topics"}
-...
-```
-
-You can directly add that into the synthetic SFT dataset creation after finishing.
-
-#### Synthetic SFT Dataset Creation
-
-With this you can create a synthetic SFT dataset using a teacher model. this creates multible files, the first file is a JSONL file that has the generated samples in it, the next ones are parquet verison for HF compatibility. Example:
-
-```shell
-python -m mlx_lm_lora.synthetic_sft \
---dataset-path Goekdeniz-Guelmez/Josiefication-prompts-online-po \
---model mlx-community/Josiefied-Qwen3-4B-Instruct-2507-abliterated-v1-8bit \
---output-dir ./sft_dataset \
---num-samples 1000 \
---valid-split 0.01 \
---batch-size 16 \
---max-tokens 4096 \
---use-ground-truth \
-
-```
-
-**Dataset Format:**
-
-```jsonl
-{"prompt": "Question"}
-{"prompt": "Question"}
-{"prompt": "Question"}
-```
-
-#### Synthetic Preference Dataset Creation
-
-With this you can create a synthetic DPO flatt-dataset using a teacher model. this creates multible files just like sft. Example:
-
-```shell
-python -m mlx_lm_lora.synthetic_dpo \
---dataset-path Goekdeniz-Guelmez/Josiefication-prompts-online-po \
---base-model mlx-community/Qwen3-4B-Instruct-2507-4bit \
---teacher-model mlx-community/Qwen3-4B-Instruct-2507-4bit \
---system-promtp "can be a normal string or the path to a .txt file for longer prompts"t \
---output-dir ./dpo_dataset \
---num-samples 10000 \
---valid-split 0.0001 \
---test-split 0.2 \
---batch-size 16 \
---max-tokens 8192
-```
-
-**Dataset Format:** Same as abouve
 
 ### Training Your Custom Preference Model
 
@@ -1257,7 +1172,7 @@ Below is a comparison of iteration speed and memory usage across different train
 
 **MLX-LM-LoRA (Apple Silicon - Native MLX)**
 - ✅ **Comprehensive**: 12 training algorithms (SFT, DPO, CPO, ORPO, GRPO, GSPO, Dr. GRPO, DAPO, Online DPO, XPO, RLHF, PPO)
-- ✅ **Complete Solution**: Built-in synthetic dataset generation, custom judge training
+- ✅ **Custom Preference Models**: Built-in judge training for online preference workflows
 - ✅ **Unified Memory**: Access to full system RAM (up to 512GB on Ultra)
 - ✅ **Moderate Speed**: Optimized MLX implementation with native Apple Silicon support
 - ✅ **CLI-First**: Simple command-line, and notebook interface with YAML config support
