@@ -76,14 +76,13 @@ class GRPOTrainingArgs(SFTTrainingArgs):
         },
     )
     importance_sampling_level: str = field(
-        default=None,
+        default="token",
         metadata={
-            "help": "importance_sampling_level (`str`, *optional*, defaults to None): "
-            "Controls whether importance sampling ratios are computed at the 'token' or 'sequence' level. "
-            "keeps the raw per-token log-probability ratios (one weight per token).  'sequence' averages the "
-            "log-probability ratios across valid tokens to produce a single ratio per sequence. The "
-            "GSPO paper https://huggingface.co/papers/2507.18071) shows that sequence-level sampling often yields more "
-            "stable training and better alignment with  sequence-level rewards.."
+            "help": (
+                "Importance-sampling level (defaults to 'token'). 'token' keeps "
+                "one log-probability ratio per token, while 'sequence' averages "
+                "the ratios across valid tokens."
+            )
         },
     )
 
@@ -107,6 +106,42 @@ def get_per_token_logps(model: nn.Module, inputs, lengths):
         ).squeeze(-1)
         per_token_logps.append(token_log_probs)
     return per_token_logps
+
+
+def compute_log_importance_weights(
+    log_ratio: mx.array,
+    length_mask: mx.array,
+    importance_sampling_level: str,
+) -> mx.array:
+    """Computes token- or sequence-level GRPO importance weights in log space.
+
+    The returned value must retain its gradient path through ``log_ratio``. A
+    graph-independent zero would have the same on-policy forward value but
+    would remove the policy gradient entirely.
+
+    Args:
+        log_ratio: Per-token log probability ratio between the policy and old
+            policy.
+        length_mask: Mask selecting valid completion tokens.
+        importance_sampling_level: Either ``"token"`` or ``"sequence"``.
+
+    Returns:
+        Log importance weights with a gradient path to ``log_ratio``.
+
+    Raises:
+        ValueError: If ``importance_sampling_level`` is unsupported.
+    """
+    if importance_sampling_level == "token":
+        return log_ratio
+    if importance_sampling_level == "sequence":
+        sequence_log_ratio = (log_ratio * length_mask).sum(axis=1) / mx.maximum(
+            length_mask.sum(axis=1), 1.0
+        )
+        return mx.expand_dims(sequence_log_ratio, axis=1)
+    raise ValueError(
+        f"Unknown importance sampling level: {importance_sampling_level}. "
+        "Possible values are 'token' or 'sequence'."
+    )
 
 
 def generate_grpo(
@@ -428,22 +463,9 @@ def grpo_loss(
     # Compute log ratio for importance sampling
     log_ratio = token_log_probs - mx.stop_gradient(ref_token_log_probs)
 
-    # Apply importance sampling based on level
-    if importance_sampling_level == "token":
-        log_importance_weights = log_ratio
-    elif importance_sampling_level == "sequence":
-        # Average log ratio over sequence length for each sequence
-        sequence_log_ratio = (log_ratio * length_mask).sum(axis=1) / mx.maximum(
-            length_mask.sum(axis=1), 1.0
-        )
-        log_importance_weights = mx.expand_dims(sequence_log_ratio, axis=1)
-    elif importance_sampling_level is None or importance_sampling_level == "none":
-        log_importance_weights = mx.zeros_like(log_ratio)
-    else:
-        raise ValueError(
-            f"Unknown importance sampling level: {importance_sampling_level}. "
-            "Possible values are 'token', 'sequence', or None."
-        )
+    log_importance_weights = compute_log_importance_weights(
+        log_ratio, length_mask, importance_sampling_level
+    )
 
     # Calculate importance weights
     coef_1 = mx.exp(log_importance_weights)
