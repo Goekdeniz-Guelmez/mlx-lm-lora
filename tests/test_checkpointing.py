@@ -17,7 +17,10 @@ class CheckpointingTest(unittest.TestCase):
     def test_full_training_state_round_trip(self):
         model = nn.Linear(2, 1)
         optimizer = optim.Adam(learning_rate=1e-3)
-        gradients = {"weight": mx.ones_like(model.weight), "bias": mx.ones_like(model.bias)}
+        gradients = {
+            "weight": mx.ones_like(model.weight),
+            "bias": mx.ones_like(model.bias),
+        }
         optimizer.update(model, gradients)
         mx.eval(model.parameters(), optimizer.state)
         saved_weights = dict(tree_flatten(model.trainable_parameters()))

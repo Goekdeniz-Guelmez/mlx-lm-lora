@@ -8,7 +8,6 @@ import mlx.core as mx
 import numpy as np
 from mlx.utils import tree_flatten, tree_unflatten
 
-
 CHECKPOINT_VERSION = 1
 
 
@@ -116,8 +115,6 @@ def load_training_checkpoint(path, *, model, optimizer) -> dict:
     )
     grad_accum = None
     if metadata["has_grad_accum"]:
-        grad_accum = tree_unflatten(
-            dict(mx.load(str(path / "grad_accum.safetensors")))
-        )
+        grad_accum = tree_unflatten(dict(mx.load(str(path / "grad_accum.safetensors"))))
     mx.eval(model.trainable_parameters(), optimizer.state, mx.random.state, grad_accum)
     return {**metadata, "grad_accum": grad_accum}

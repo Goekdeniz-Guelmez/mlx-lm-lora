@@ -132,7 +132,9 @@ def r1_soft_format_reward_func(
             and answer_end != -1
             and reason_start < reason_end < answer_start < answer_end
         ):
-            reason_content = completion[reason_start + len("<think>") : reason_end].strip()
+            reason_content = completion[
+                reason_start + len("<think>") : reason_end
+            ].strip()
             answer_content = completion[answer_start + 8 : answer_end].strip()
             if reason_content and answer_content:
                 scores.append(0.5)

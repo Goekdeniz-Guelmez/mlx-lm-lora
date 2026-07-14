@@ -546,7 +546,9 @@ def train_model(
             "--resume-checkpoint (full SFT state), not both."
         )
     if args.resume_checkpoint is not None and args.train_mode != "sft":
-        raise ValueError("--resume-checkpoint currently supports --train-mode sft only.")
+        raise ValueError(
+            "--resume-checkpoint currently supports --train-mode sft only."
+        )
 
     if args.iters is None and args.epochs is not None:
         args.iters = calculate_iters(
@@ -886,7 +888,9 @@ def evaluate_model(
         )
         print(f"{Colors.BOLD}FTPO Test loss:{Colors.RESET} {test_loss:.3f}")
         for metric_name, metric_value in test_metrics.items():
-            print(f"  {Colors.WHITE}{metric_name}:{Colors.RESET} {float(metric_value):.3f}")
+            print(
+                f"  {Colors.WHITE}{metric_name}:{Colors.RESET} {float(metric_value):.3f}"
+            )
 
     elif args.train_mode == "dpo":
         test_loss, _, _, test_metrics = evaluate_dpo(

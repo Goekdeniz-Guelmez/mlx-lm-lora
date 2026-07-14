@@ -19,9 +19,8 @@ from mlx_lm.models.cache import (
 from mlx_lm.tuner.callbacks import TrainingCallback
 from tqdm import tqdm
 
-from .datasets import CacheDataset
 from .checkpointing import load_training_checkpoint, save_training_checkpoint
-
+from .datasets import CacheDataset
 
 _CHUNKED_NLL_CHUNK_SIZE = 256
 
