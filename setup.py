@@ -27,8 +27,6 @@ setup(
     entry_points={
         "console_scripts": [
             "mlx_lm_lora.train = mlx_lm_lora.train:main",
-            "mlx_lm_lora.synthetic_sft = mlx_lm_lora.synthetic_sft:main",
-            "mlx_lm_lora.synthetic_dpo = mlx_lm_lora.synthetic_dpo:main",
         ]
     },
 )
