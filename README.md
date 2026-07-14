@@ -224,7 +224,7 @@ mlx_lm_lora.train \
 
 - `--train-type`: Choose `lora` (default), `dora`, or `full`
 - `--mask-prompt`: Apply loss only to assistant responses
-- `--sft-loss-type`: SFT loss function - `cross_entropy` (default) or dynamic fine-tuning loss `dft`
+- `--sft-loss-type`: SFT loss function - `nll` (default), memory-bounded `chunked_nll`, or dynamic fine-tuning loss `dft`
 - `--max-seq-length`: Maximum sequence length (default: 2048)
 - `--gradient-accumulation-steps`: Accumulate gradients over multiple steps
 

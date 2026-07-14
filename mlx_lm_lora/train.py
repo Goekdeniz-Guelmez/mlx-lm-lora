@@ -83,7 +83,7 @@ CONFIG_DEFAULTS = {
     "load_in_mxfp4": False,
     "train_type": "lora",
     "train_mode": "sft",
-    "sft_loss_type": "cross_entropy",
+    "sft_loss_type": "nll",
     "optimizer": "adam",
     "optimizer_config": {"adam": {}, "adamw": {}, "muon": {}},
     "data": "data/",
@@ -271,9 +271,9 @@ def build_parser():
     parser.add_argument(
         "--sft-loss-type",
         type=str,
-        choices=["cross_entropy", "dft"],
-        default="cross_entropy",
-        help="SFT loss type: standard cross entropy or dynamic fine-tuning loss.",
+        choices=["nll", "chunked_nll", "dft"],
+        default="nll",
+        help="SFT loss type: NLL, chunked NLL, or dynamic fine-tuning loss.",
     )
     parser.add_argument(
         "--mask-prompt",

@@ -33,17 +33,37 @@ def _preference_inputs():
 class SFTTrainerTest(unittest.TestCase):
     def test_training_argument_defaults(self):
         args = sft_trainer.SFTTrainingArgs()
-        self.assertEqual(args.loss_type, "cross_entropy")
+        self.assertEqual(args.loss_type, "nll")
         self.assertEqual(args.gradient_accumulation_steps, 1)
         self.assertFalse(args.qat_enable)
 
     def test_get_sft_loss_selects_supported_losses(self):
-        self.assertIs(sft_trainer.get_sft_loss("cross_entropy"), sft_trainer.default_loss)
+        self.assertIs(sft_trainer.get_sft_loss("nll"), sft_trainer.default_loss)
+        self.assertIs(
+            sft_trainer.get_sft_loss("chunked_nll"),
+            sft_trainer.chunked_nll_loss,
+        )
         self.assertIs(sft_trainer.get_sft_loss("dft"), sft_trainer.dft_loss)
 
     def test_get_sft_loss_rejects_unknown_loss(self):
         with self.assertRaisesRegex(ValueError, "Unknown SFT loss type"):
             sft_trainer.get_sft_loss("unknown")
+
+    def test_chunked_nll_matches_nll_across_multiple_chunks(self):
+        class UniformModel:
+            def __call__(self, inputs, cache=None):
+                del cache
+                return mx.zeros((*inputs.shape, 4))
+
+        batch = mx.array([[index % 4 for index in range(301)]])
+        lengths = mx.array([[1, 300]])
+        nll, nll_tokens = sft_trainer.default_loss(UniformModel(), batch, lengths)
+        chunked_nll, chunked_tokens = sft_trainer.chunked_nll_loss(
+            UniformModel(), batch, lengths
+        )
+
+        self.assertAlmostEqual(_scalar(chunked_nll), _scalar(nll), places=6)
+        self.assertEqual(_scalar(chunked_tokens), _scalar(nll_tokens))
 
     def test_fake_quantization_preserves_shape_and_bounds_error(self):
         values = mx.array([[-2.0, -0.2, 0.3, 2.0, 0.7]])
