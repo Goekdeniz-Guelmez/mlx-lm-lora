@@ -99,6 +99,7 @@ CONFIG_DEFAULTS = {
     "steps_per_report": 10,
     "steps_per_eval": 200,
     "resume_adapter_file": None,
+    "resume_checkpoint": None,
     "adapter_path": "adapters",
     "save_every": 100,
     "test": False,
@@ -327,6 +328,11 @@ def build_parser():
         help="Load path to resume training from the given fine-tuned weights.",
     )
     parser.add_argument(
+        "--resume-checkpoint",
+        type=str,
+        help="Resume model, optimizer, RNG, gradients, and iteration from a full checkpoint directory.",
+    )
+    parser.add_argument(
         "--adapter-path", type=str, help="Save/load path for the fine-tuned weights."
     )
     parser.add_argument(
@@ -533,6 +539,14 @@ def train_model(
     training_callback: TrainingCallback = None,
 ):
     mx.random.seed(args.seed)
+
+    if args.resume_adapter_file is not None and args.resume_checkpoint is not None:
+        raise ValueError(
+            "Use either --resume-adapter-file (weights only) or "
+            "--resume-checkpoint (full SFT state), not both."
+        )
+    if args.resume_checkpoint is not None and args.train_mode != "sft":
+        raise ValueError("--resume-checkpoint currently supports --train-mode sft only.")
 
     if args.iters is None and args.epochs is not None:
         args.iters = calculate_iters(
@@ -795,6 +809,7 @@ def train_model(
                 steps_per_eval=args.steps_per_eval,
                 steps_per_save=args.save_every,
                 adapter_file=adapter_file,
+                resume_checkpoint=args.resume_checkpoint,
                 max_seq_length=args.max_seq_length,
                 grad_checkpoint=args.grad_checkpoint,
                 gradient_accumulation_steps=args.gradient_accumulation_steps,
