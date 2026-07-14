@@ -5,6 +5,7 @@ import mlx.core as mx
 from mlx_lm_lora.trainer import cpo_trainer
 from mlx_lm_lora.trainer import dpo_trainer
 from mlx_lm_lora.trainer import grpo_trainer
+from mlx_lm_lora.trainer import ftpo_trainer
 from mlx_lm_lora.trainer import online_dpo_trainer
 from mlx_lm_lora.trainer import orpo_trainer
 from mlx_lm_lora.trainer import ppo_trainer
@@ -143,6 +144,35 @@ class DPOTrainerTest(unittest.TestCase):
         self.assertEqual(rejected.shape, (2, 3))
         self.assertEqual(_scalar(chosen_mask.sum()), 5.0)
         self.assertEqual(_scalar(rejected_mask.sum()), 5.0)
+
+
+class FTPOTrainerTest(unittest.TestCase):
+    def test_ftpo_defaults_match_antidoom(self):
+        args = ftpo_trainer.FTPOTrainingArgs()
+        self.assertEqual(args.lambda_mse_target, 0.05)
+        self.assertEqual(args.tau_mse_target, 1.0)
+        self.assertEqual(args.lambda_mse, 0.4)
+        self.assertEqual(args.clip_epsilon_logits, 2.0)
+
+    def test_ftpo_loss_is_finite_and_reports_wins(self):
+        policy = mx.array([[0.0, 3.0, -1.0, 0.5]])
+        reference = mx.zeros_like(policy)
+        loss, samples, metrics = ftpo_trainer.ftpo_loss(
+            policy, reference, mx.array([[1, 3]]), mx.array([[1.0, 1.0]]), mx.array([2])
+        )
+        self.assertTrue(mx.isfinite(loss).item())
+        self.assertEqual(_scalar(samples), 1.0)
+        self.assertEqual(_scalar(metrics["chosen_win"]), 1.0)
+        self.assertGreaterEqual(_scalar(metrics["margin_win"]), 0.5)
+
+    def test_ftpo_clipped_pair_has_no_preference_loss(self):
+        policy = mx.array([[0.0, 4.0, 0.0]])
+        loss, _, metrics = ftpo_trainer.ftpo_loss(
+            policy, policy, mx.array([[1]]), mx.array([[1.0]]), mx.array([2]),
+            lambda_mse=0.0, lambda_mse_target=0.0, clip_epsilon_logits=2.0,
+        )
+        self.assertAlmostEqual(_scalar(loss), 0.0, places=7)
+        self.assertAlmostEqual(_scalar(metrics["active_weight"]), 0.0, places=7)
 
 
 class CPOTrainerTest(unittest.TestCase):

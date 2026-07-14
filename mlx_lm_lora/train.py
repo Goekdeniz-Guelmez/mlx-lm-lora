@@ -21,6 +21,7 @@ from mlx_lm.utils import load, load_tokenizer
 from .trainer.cpo_trainer import CPOTrainingArgs, evaluate_cpo, train_cpo
 from .trainer.datasets import CacheDataset, load_dataset
 from .trainer.dpo_trainer import DPOTrainingArgs, evaluate_dpo, train_dpo
+from .trainer.ftpo_trainer import FTPOTrainingArgs, evaluate_ftpo, train_ftpo
 from .trainer.grpo_reward_functions import (
     get_default_reward_functions,
     get_reward_function,
@@ -115,6 +116,10 @@ CONFIG_DEFAULTS = {
     "dpo_cpo_loss_type": "sigmoid",
     "delta": 50.0,
     "reference_model_path": None,
+    "lambda_mse_target": 0.05,
+    "tau_mse_target": 1.0,
+    "lambda_mse": 0.4,
+    "clip_epsilon_logits": 2.0,
     "judge": None,
     "judge_config": {},
     "alpha": 1e-5,
@@ -251,6 +256,7 @@ def build_parser():
         choices=[
             "sft",
             "dpo",
+            "ftpo",
             "cpo",
             "orpo",
             "grpo",
@@ -397,6 +403,10 @@ def build_parser():
         help="Path to reference model weights. If None, uses the same model.",
         default=None,
     )
+    parser.add_argument("--lambda-mse-target", type=float, default=None)
+    parser.add_argument("--tau-mse-target", type=float, default=None)
+    parser.add_argument("--lambda-mse", type=float, default=None)
+    parser.add_argument("--clip-epsilon-logits", type=float, default=None)
     parser.add_argument(
         "--judge",
         type=str,
@@ -573,6 +583,32 @@ def train_model(
                 qat_mode=args.qat_mode,
                 qat_start_step=args.qat_start_step,
                 qat_interval=args.qat_interval,
+            ),
+            training_callback=training_callback,
+        )
+
+    elif args.train_mode == "ftpo":
+        train_ftpo(
+            model=model,
+            ref_model=reference_model,
+            optimizer=opt,
+            train_dataset=train_set,
+            val_dataset=valid_set,
+            args=FTPOTrainingArgs(
+                batch_size=args.batch_size,
+                iters=args.iters,
+                val_batches=args.val_batches,
+                steps_per_report=args.steps_per_report,
+                steps_per_eval=args.steps_per_eval,
+                steps_per_save=args.save_every,
+                adapter_file=adapter_file,
+                max_seq_length=args.max_seq_length,
+                grad_checkpoint=args.grad_checkpoint,
+                gradient_accumulation_steps=args.gradient_accumulation_steps,
+                lambda_mse_target=args.lambda_mse_target,
+                tau_mse_target=args.tau_mse_target,
+                lambda_mse=args.lambda_mse,
+                clip_epsilon_logits=args.clip_epsilon_logits,
             ),
             training_callback=training_callback,
         )
@@ -817,6 +853,25 @@ def evaluate_model(
             print(
                 f"  {Colors.WHITE}{metric_name}:{Colors.RESET} {float(metric_value):.3f}"
             )
+
+    elif args.train_mode == "ftpo":
+        test_loss, test_metrics = evaluate_ftpo(
+            model=model,
+            ref_model=reference_model,
+            dataset=test_set,
+            batch_size=args.batch_size,
+            num_batches=args.test_batches,
+            max_seq_length=args.max_seq_length,
+            args=FTPOTrainingArgs(
+                lambda_mse_target=args.lambda_mse_target,
+                tau_mse_target=args.tau_mse_target,
+                lambda_mse=args.lambda_mse,
+                clip_epsilon_logits=args.clip_epsilon_logits,
+            ),
+        )
+        print(f"{Colors.BOLD}FTPO Test loss:{Colors.RESET} {test_loss:.3f}")
+        for metric_name, metric_value in test_metrics.items():
+            print(f"  {Colors.WHITE}{metric_name}:{Colors.RESET} {float(metric_value):.3f}")
 
     elif args.train_mode == "dpo":
         test_loss, _, _, test_metrics = evaluate_dpo(
@@ -1099,7 +1154,7 @@ def run(args, training_callback: TrainingCallback = None):
     reference_model = (
         load_reference_model(args)
         if args.train_mode
-        in ["dpo", "grpo", "online_dpo", "ppo", "rlhf_reinforce", "xpo"]
+        in ["dpo", "ftpo", "grpo", "online_dpo", "ppo", "rlhf_reinforce", "xpo"]
         else None
     )
     judge_model, judge_tokenizer = (

@@ -224,6 +224,45 @@ class DPODataset:
         return d
 
 
+class FTPODataset:
+    """Tokenize Liquid AI Antidoom preference rows without truncating context."""
+
+    def __init__(self, data, tokenizer, max_seq_length=2048):
+        self._data = []
+        for row in data:
+            prompt_ids = tokenizer.encode(row["context_with_chat_template"])
+            rejected = tokenizer.encode(row["rejected_decoded"])
+            chosen = [
+                tokenizer.encode(surface)
+                for surface in row.get("multi_chosen_decoded", [])
+            ]
+            chosen_ids = list(dict.fromkeys(ids[0] for ids in chosen if len(ids) == 1))
+            if (
+                not prompt_ids
+                or len(prompt_ids) > max_seq_length
+                or len(rejected) != 1
+            ):
+                continue
+            chosen_ids = [token_id for token_id in chosen_ids if token_id != rejected[0]]
+            if chosen_ids:
+                self._data.append(
+                    {
+                        "prompt_ids": prompt_ids,
+                        "chosen_ids": chosen_ids,
+                        "rejected_token_id": rejected[0],
+                    }
+                )
+
+    def __getitem__(self, idx):
+        return self._data[idx]
+
+    def __len__(self):
+        return len(self._data)
+
+    def process(self, d):
+        return d
+
+
 class ORPODataset:
     def __init__(
         self,
@@ -559,6 +598,19 @@ def create_dataset(
             )
         else:
             raise ValueError("Unsupported data format for judge training.")
+    elif train_mode == "ftpo":
+        required = {
+            "context_with_chat_template",
+            "rejected_decoded",
+            "multi_chosen_decoded",
+        }
+        if required.issubset(sample):
+            return FTPODataset(
+                data=data,
+                tokenizer=tokenizer,
+                max_seq_length=getattr(config, "max_seq_length", 2048),
+            )
+        raise ValueError("Unsupported data format for FTPO training.")
     elif train_mode in ["dpo", "cpo"]:
         if chosen_feature in sample and rejected_feature in sample:
             return DPODataset(
