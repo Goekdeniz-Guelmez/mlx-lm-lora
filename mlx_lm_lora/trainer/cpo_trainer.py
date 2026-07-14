@@ -568,8 +568,8 @@ def train_cpo(
         if it % args.steps_per_save == 0:
             adapter_weights = dict(tree_flatten(model.trainable_parameters()))
             mx.save_safetensors(str(args.adapter_file), adapter_weights)
-            checkpoint = (
-                Path(args.adapter_file).parent / f"{it:07d}_adapters.safetensors"
+            checkpoint = Path(args.adapter_file).parent / (
+                f"{it:07d}_{Path(args.adapter_file).name}"
             )
             mx.save_safetensors(str(checkpoint), adapter_weights)
             print(

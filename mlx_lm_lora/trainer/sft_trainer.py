@@ -19,6 +19,7 @@ from mlx_lm.models.cache import (
 from mlx_lm.tuner.callbacks import TrainingCallback
 from tqdm import tqdm
 
+from .checkpointing import load_training_checkpoint, save_training_checkpoint
 from .datasets import CacheDataset
 
 _CHUNKED_NLL_CHUNK_SIZE = 256
@@ -123,7 +124,11 @@ class SFTTrainingArgs:
     )
     adapter_file: str = field(
         default="adapters.safetensors",
-        metadata={"help": "Save/load path for the trained adapter weights."},
+        metadata={"help": "Save/load path for the trained model or adapter weights."},
+    )
+    resume_checkpoint: Optional[str] = field(
+        default=None,
+        metadata={"help": "Resume from a full training checkpoint directory."},
     )
     grad_checkpoint: bool = field(
         default=False,
@@ -463,6 +468,16 @@ def train_sft(
     if efficient:
         cache = make_prompt_cache(model)
 
+    checkpoint_state = None
+    if args.resume_checkpoint is not None:
+        checkpoint_state = load_training_checkpoint(
+            args.resume_checkpoint, model=model, optimizer=optimizer
+        )
+        tqdm.write(
+            f"Resumed full training state from {args.resume_checkpoint} "
+            f"at iteration {checkpoint_state['iteration']}."
+        )
+
     state = [model.state, optimizer.state, mx.random.state]
 
     loss_value_and_grad = nn.value_and_grad(model, loss)
@@ -545,10 +560,30 @@ def train_sft(
     train_time = 0
     grad_accum = None
     opt_step = 0
+    start_iteration = 1
+    if checkpoint_state is not None:
+        start_iteration = checkpoint_state["iteration"] + 1
+        opt_step = checkpoint_state["optimizer_step"]
+        trained_tokens = checkpoint_state["trained_tokens"]
+        grad_accum = checkpoint_state["grad_accum"]
+
+    if args.qat_enable and opt_step >= args.qat_start_step:
+        _install_qat_hooks(model, args)
+        qat_installed = True
+
+    if start_iteration > args.iters:
+        tqdm.write(
+            f"Checkpoint is already at iteration {start_iteration - 1}, "
+            f"which meets the requested {args.iters} iterations."
+        )
 
     # Main training loop
-    pbar = tqdm(range(1, args.iters + 1), desc="Training", disable=rank != 0)
+    last_iteration = start_iteration - 1
+    pbar = tqdm(
+        range(start_iteration, args.iters + 1), desc="Training", disable=rank != 0
+    )
     for it in pbar:
+        last_iteration = it
         batch = next(
             iterate_batches(
                 dataset=train_dataset,
@@ -666,19 +701,44 @@ def train_sft(
             train_time = 0
 
         if it % args.steps_per_save == 0 and rank == 0:
-            adapter_weights = dict(tree_flatten(model.trainable_parameters()))
-            mx.save_safetensors(str(args.adapter_file), adapter_weights)
-            checkpoint = (
-                Path(args.adapter_file).parent / f"{it:07d}_adapters.safetensors"
+            trained_weights = dict(tree_flatten(model.trainable_parameters()))
+            mx.save_safetensors(str(args.adapter_file), trained_weights)
+            checkpoint = Path(args.adapter_file).parent / (
+                f"{it:07d}_{Path(args.adapter_file).name}"
             )
-            mx.save_safetensors(str(checkpoint), adapter_weights)
+            mx.save_safetensors(str(checkpoint), trained_weights)
+            training_checkpoint = (
+                Path(args.adapter_file).parent / f"{it:07d}_training_checkpoint"
+            )
+            save_training_checkpoint(
+                training_checkpoint,
+                model=model,
+                optimizer=optimizer,
+                iteration=it,
+                optimizer_step=opt_step,
+                grad_accum=grad_accum,
+                trained_tokens=trained_tokens,
+            )
             tqdm.write(
                 f"\n"
-                f"Iter {it}: Saved adapter weights to "
-                f"{args.adapter_file} and {checkpoint}."
+                f"Iter {it}: Saved trained weights to "
+                f"{args.adapter_file}, {checkpoint}, and {training_checkpoint}."
             )
 
     if rank == 0:
-        adapter_weights = dict(tree_flatten(model.trainable_parameters()))
-        mx.save_safetensors(str(args.adapter_file), adapter_weights)
-        tqdm.write(f"Saved final weights to {args.adapter_file}.")
+        trained_weights = dict(tree_flatten(model.trainable_parameters()))
+        mx.save_safetensors(str(args.adapter_file), trained_weights)
+        final_checkpoint = Path(args.adapter_file).parent / "final_training_checkpoint"
+        save_training_checkpoint(
+            final_checkpoint,
+            model=model,
+            optimizer=optimizer,
+            iteration=last_iteration,
+            optimizer_step=opt_step,
+            grad_accum=grad_accum,
+            trained_tokens=trained_tokens,
+        )
+        tqdm.write(
+            f"Saved final weights to {args.adapter_file} and full state to "
+            f"{final_checkpoint}."
+        )
