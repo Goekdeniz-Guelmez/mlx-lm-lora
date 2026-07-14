@@ -22,6 +22,9 @@ from tqdm import tqdm
 from .datasets import CacheDataset
 
 
+_CHUNKED_NLL_CHUNK_SIZE = 256
+
+
 def reset_prompt_cache(cache):
     if cache is None:
         return None
@@ -92,8 +95,8 @@ def grad_checkpoint(layer):
 @dataclass
 class SFTTrainingArgs:
     loss_type: str = field(
-        default="cross_entropy",
-        metadata={"help": "SFT loss type: 'cross_entropy' or 'dft'."},
+        default="nll",
+        metadata={"help": "SFT loss type: 'nll', 'chunked_nll', or 'dft'."},
     )
     batch_size: int = field(default=4, metadata={"help": "Minibatch size."})
     iters: int = field(default=100, metadata={"help": "Iterations to train for."})
@@ -261,6 +264,30 @@ def default_loss(model, batch, lengths, cache=None):
     return loss, ntoks
 
 
+def chunked_nll_loss(model, batch, lengths, cache=None):
+    """Compute masked next-token NLL in bounded sequence chunks."""
+    inputs = batch[:, :-1]
+    targets = batch[:, 1:]
+
+    offset = _find_cache_offset(cache)
+    offset = 0 if offset is None else offset
+    logits = model(inputs, cache=cache)
+
+    steps = mx.arange(1, targets.shape[1] + 1) + offset
+    mask = mx.logical_and(steps >= lengths[:, 0:1], steps <= lengths[:, 1:])
+    ntoks = mask.sum()
+
+    loss_sum = mx.array(0.0, dtype=mx.float32)
+    for start in range(0, targets.shape[1], _CHUNKED_NLL_CHUNK_SIZE):
+        end = min(start + _CHUNKED_NLL_CHUNK_SIZE, targets.shape[1])
+        chunk_loss = nn.losses.cross_entropy(
+            logits[:, start:end], targets[:, start:end]
+        )
+        loss_sum += (chunk_loss * mask[:, start:end]).astype(mx.float32).sum()
+
+    return loss_sum / ntoks, ntoks
+
+
 def dft_loss(model, batch, lengths, cache=None):
     """Dynamic fine-tuning loss with detached probability weighting."""
     inputs = batch[:, :-1]
@@ -283,12 +310,15 @@ def dft_loss(model, batch, lengths, cache=None):
 
 
 def get_sft_loss(loss_type: str):
-    if loss_type == "cross_entropy":
+    if loss_type == "nll":
         return default_loss
+    if loss_type == "chunked_nll":
+        return chunked_nll_loss
     if loss_type == "dft":
         return dft_loss
     raise ValueError(
-        f"Unknown SFT loss type: {loss_type!r}. Expected 'cross_entropy' or 'dft'."
+        f"Unknown SFT loss type: {loss_type!r}. "
+        "Expected 'nll', 'chunked_nll', or 'dft'."
     )
 
 
