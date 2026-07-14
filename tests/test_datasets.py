@@ -81,6 +81,24 @@ class DatasetAdaptersTest(unittest.TestCase):
         self.assertEqual(calls[0][1][-1]["content"], "yes")
         self.assertEqual(calls[1][1][-1]["content"], "no")
 
+    def test_ftpo_dataset_keeps_only_single_token_alternatives(self):
+        dataset = datasets.FTPODataset(
+            [{
+                "context_with_chat_template": "ctx",
+                "rejected_decoded": "x",
+                "multi_chosen_decoded": ["y", "zz", "x"],
+            }],
+            self.tokenizer,
+        )
+        self.assertEqual(
+            dataset[0],
+            {
+                "prompt_ids": [99, 116, 120],
+                "chosen_ids": [121],
+                "rejected_token_id": 120,
+            },
+        )
+
     def test_orpo_extracts_supported_content_shapes(self):
         dataset = datasets.ORPODataset([], self.tokenizer)
         self.assertEqual(dataset._extract_content("text"), "text")
