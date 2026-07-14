@@ -125,7 +125,7 @@ class SFTTrainingArgs:
     )
     adapter_file: str = field(
         default="adapters.safetensors",
-        metadata={"help": "Save/load path for the trained adapter weights."},
+        metadata={"help": "Save/load path for the trained model or adapter weights."},
     )
     resume_checkpoint: Optional[str] = field(
         default=None,
@@ -702,12 +702,12 @@ def train_sft(
             train_time = 0
 
         if it % args.steps_per_save == 0 and rank == 0:
-            adapter_weights = dict(tree_flatten(model.trainable_parameters()))
-            mx.save_safetensors(str(args.adapter_file), adapter_weights)
-            checkpoint = (
-                Path(args.adapter_file).parent / f"{it:07d}_adapters.safetensors"
+            trained_weights = dict(tree_flatten(model.trainable_parameters()))
+            mx.save_safetensors(str(args.adapter_file), trained_weights)
+            checkpoint = Path(args.adapter_file).parent / (
+                f"{it:07d}_{Path(args.adapter_file).name}"
             )
-            mx.save_safetensors(str(checkpoint), adapter_weights)
+            mx.save_safetensors(str(checkpoint), trained_weights)
             training_checkpoint = (
                 Path(args.adapter_file).parent / f"{it:07d}_training_checkpoint"
             )
@@ -722,13 +722,13 @@ def train_sft(
             )
             tqdm.write(
                 f"\n"
-                f"Iter {it}: Saved adapter weights to "
+                f"Iter {it}: Saved trained weights to "
                 f"{args.adapter_file}, {checkpoint}, and {training_checkpoint}."
             )
 
     if rank == 0:
-        adapter_weights = dict(tree_flatten(model.trainable_parameters()))
-        mx.save_safetensors(str(args.adapter_file), adapter_weights)
+        trained_weights = dict(tree_flatten(model.trainable_parameters()))
+        mx.save_safetensors(str(args.adapter_file), trained_weights)
         final_checkpoint = Path(args.adapter_file).parent / "final_training_checkpoint"
         save_training_checkpoint(
             final_checkpoint,

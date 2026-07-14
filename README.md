@@ -675,6 +675,11 @@ mlx_lm_lora.train --config config.yaml \
   --resume-checkpoint adapters/0000500_training_checkpoint --iters 1000
 ```
 
+With `--train-type full`, trained parameters are saved as `model.safetensors`
+with `config.json` and tokenizer files; no `adapters.safetensors` or
+`adapter_config.json` is created. Periodic weight snapshots use names such as
+`0000500_model.safetensors`. LoRA and DoRA runs retain the adapter filenames.
+
 ### Algorithm-Specific Parameters
 
 **Preference Optimization Methods:**

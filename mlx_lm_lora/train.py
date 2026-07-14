@@ -1183,7 +1183,12 @@ def run(args, training_callback: TrainingCallback = None):
 
     if args.test and not args.train:
         if args.adapter_path != "":
-            load_adapters(model, args.adapter_path)
+            if args.train_type == "full":
+                model.load_weights(
+                    str(Path(args.adapter_path) / "model.safetensors"), strict=True
+                )
+            else:
+                load_adapters(model, args.adapter_path)
     elif args.train:
         print_section("Training")
         train_model(
