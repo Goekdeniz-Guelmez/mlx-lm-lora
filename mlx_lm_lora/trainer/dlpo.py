@@ -4,6 +4,25 @@ import mlx.core as mx
 import mlx.nn as nn
 
 
+_LATENT_REPORT_LABELS = (
+    ("latent_loss", "latent_loss"),
+    ("latent_sim_loss", "sim_loss"),
+    ("latent_sim_margin", "sim_margin"),
+    ("latent_dir_loss", "dir_loss"),
+    ("latent_dir_margin", "dir_margin"),
+)
+
+
+def format_latent_metrics(metrics):
+    """Format the active DLPO metrics for terminal training reports."""
+    parts = [
+        f"{label} {float(metrics[key]):.3f}"
+        for key, label in _LATENT_REPORT_LABELS
+        if key in metrics
+    ]
+    return (", " + ", ".join(parts)) if parts else ""
+
+
 def forward_logits_and_hidden(model, tokens, layer_spec="final", cache=None):
     """Run a causal LM and retain the requested residual-stream representation."""
     if cache is not None or not hasattr(model, "model"):

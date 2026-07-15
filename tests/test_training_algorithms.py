@@ -168,6 +168,12 @@ class DPOTrainerTest(unittest.TestCase):
 
 
 class DLPOTest(unittest.TestCase):
+    def test_latent_reporting_includes_only_available_metrics(self):
+        report = dlpo.format_latent_metrics(
+            {"latent_loss": 0.5, "latent_sim_margin": 0.25}
+        )
+        self.assertEqual(report, ", latent_loss 0.500, sim_margin 0.250")
+
     def test_latent_loss_is_finite_and_reports_both_components(self):
         args = dpo_trainer.DPOTrainingArgs(loss_type="dlpo-dpo")
         chosen = mx.array([[[1.0, 0.0], [0.8, 0.2], [1.0, 1.0]],

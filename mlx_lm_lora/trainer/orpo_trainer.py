@@ -19,7 +19,11 @@ from .sft_trainer import (
     grad_checkpoint,
     reset_prompt_cache,
 )
-from .dlpo import forward_logits_and_hidden, latent_preference_loss
+from .dlpo import (
+    format_latent_metrics,
+    forward_logits_and_hidden,
+    latent_preference_loss,
+)
 
 
 @dataclass
@@ -592,13 +596,17 @@ def train_orpo(
             )
             val_time = time.perf_counter() - stop
             if rank == 0:
+                latent_report = (
+                    format_latent_metrics(val_metrics) if is_dlpo else ""
+                )
                 tqdm.write(
                     f"Iter {it}: "
                     f"Val loss {val_loss:.3f}, "
                     f"Val chosen reward {val_rewards[0]:.3f}, "
                     f"Val rejected reward {val_rewards[1]:.3f}, "
                     f"Val accuracy {val_metrics['accuracies']:.3f}, "
-                    f"Val margin {val_metrics['margins']:.3f}, "
+                    f"Val margin {val_metrics['margins']:.3f}"
+                    f"{latent_report}, "
                     f"Val took {val_time:.3f}s",
                 )
 
@@ -671,19 +679,24 @@ def train_orpo(
             peak_mem = mx.get_peak_memory() / 1e9
 
             if rank == 0:
-                pbar.set_postfix(
-                    {
-                        "loss": f"{train_loss:.3f}",
-                        "it/s": f"{it_sec:.3f}",
-                    }
+                latent_report = (
+                    format_latent_metrics(avg_metrics) if is_dlpo else ""
                 )
+                postfix = {
+                    "loss": f"{train_loss:.3f}",
+                    "it/s": f"{it_sec:.3f}",
+                }
+                if is_dlpo:
+                    postfix["latent"] = f"{float(avg_metrics['latent_loss']):.3f}"
+                pbar.set_postfix(postfix)
                 tqdm.write(
                     f"\nIter {it}: "
                     f"loss {train_loss:.3f}, "
                     f"chosen_r {train_rewards[0]:.3f}, "
                     f"rejected_r {train_rewards[1]:.3f}, "
                     f"acc {avg_metrics['accuracies']:.3f}, "
-                    f"margin {avg_metrics['margins']:.3f}, "
+                    f"margin {avg_metrics['margins']:.3f}"
+                    f"{latent_report}, "
                     f"lr {learning_rate:.3e}, "
                     f"it/s {it_sec:.3f}, "
                     f"tok/s {tokens_sec:.3f}, "
