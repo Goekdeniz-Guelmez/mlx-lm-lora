@@ -19,6 +19,7 @@ from .sft_trainer import (
     grad_checkpoint,
     reset_prompt_cache,
 )
+from .dlpo import forward_logits_and_hidden, latent_preference_loss
 
 
 @dataclass
@@ -39,12 +40,47 @@ class DPOTrainingArgs(SFTTrainingArgs):
             "help": "Path to reference model weights. If None, uses the same model."
         },
     )
+    latent_weight: float = field(
+        default=0.1,
+        metadata={"help": "Weight of the DLPO hidden-state regularizer."},
+    )
+    latent_margin: float = field(
+        default=0.05,
+        metadata={"help": "Target prompt-response cosine margin."},
+    )
+    latent_gamma: float = field(
+        default=10.0,
+        metadata={"help": "Sharpness of the DLPO soft-margin losses."},
+    )
+    latent_variant: str = field(
+        default="both",
+        metadata={"help": "DLPO component: 'similarity', 'direction', or 'both'."},
+    )
+    latent_pooling: str = field(
+        default="answer_mean",
+        metadata={
+            "help": (
+                "Hidden-state pooling: 'answer_mean', 'last_token', "
+                "'last_k_mean', or 'prompt_answer_mean'."
+            )
+        },
+    )
+    latent_layer: str = field(
+        default="late",
+        metadata={
+            "help": "Residual-stream anchor: 'final', 'middle', 'late', or an index."
+        },
+    )
 
 
-def get_token_scores(model, x, mask, cache=None):
+def get_token_scores(model, x, mask, cache=None, return_hidden=False, layer="final"):
     inputs, targets = x[:, :-1], x[:, 1:]
-    logits = model(inputs, cache=cache).astype(mx.float32)
-    return -nn.losses.cross_entropy(logits, targets) * mask[:, :-1]
+    if return_hidden:
+        logits, hidden = forward_logits_and_hidden(model, inputs, layer, cache)
+    else:
+        logits, hidden = model(inputs, cache=cache), None
+    scores = -nn.losses.cross_entropy(logits.astype(mx.float32), targets) * mask[:, 1:]
+    return (scores, hidden) if return_hidden else scores
 
 
 def compute_score(scores, mask, loss_type):
@@ -107,7 +143,9 @@ def dpo_loss(
     return mx.mean(losses), reward, num_tokens, metrics
 
 
-def iterate_dpo_batches(dataset, batch_size, max_seq_length, train=False):
+def iterate_dpo_batches(
+    dataset, batch_size, max_seq_length, train=False, include_prompt_masks=False
+):
     idx = sorted(range(len(dataset)), key=lambda idx: len(dataset[idx]["chosen"]))
 
     step = mx.distributed.init().size()
@@ -145,6 +183,8 @@ def iterate_dpo_batches(dataset, batch_size, max_seq_length, train=False):
             rejected_masks = np.zeros(
                 (batch_size // step, max_length_in_batch), np.float32
             )
+            chosen_prompt_masks = np.zeros_like(chosen_masks)
+            rejected_prompt_masks = np.zeros_like(rejected_masks)
 
             for j in range(batch_size // step):
                 chosen_length = min(chosen_lengths[j], max_seq_length)
@@ -158,9 +198,25 @@ def iterate_dpo_batches(dataset, batch_size, max_seq_length, train=False):
                 chosen_masks[j, :chosen_length] = 1.0
                 rejected_masks[j, :rejected_length] = 1.0
 
-            yield mx.array(chosen_arr), mx.array(rejected_arr), mx.array(
-                chosen_masks
-            ), mx.array(rejected_masks)
+                if include_prompt_masks:
+                    chosen_prompt_length = min(
+                        batch[j].get("chosen_prompt_length", 0), chosen_length
+                    )
+                    rejected_prompt_length = min(
+                        batch[j].get("rejected_prompt_length", 0), rejected_length
+                    )
+                    chosen_prompt_masks[j, :chosen_prompt_length] = 1.0
+                    rejected_prompt_masks[j, :rejected_prompt_length] = 1.0
+                    chosen_masks[j, :chosen_prompt_length] = 0.0
+                    rejected_masks[j, :rejected_prompt_length] = 0.0
+
+            result = (
+                mx.array(chosen_arr), mx.array(rejected_arr),
+                mx.array(chosen_masks), mx.array(rejected_masks),
+            )
+            if include_prompt_masks:
+                result += (mx.array(chosen_prompt_masks), mx.array(rejected_prompt_masks))
+            yield result
 
         if not train:
             break
@@ -177,6 +233,7 @@ def evaluate_dpo(
     max_seq_length,
     loss_type,
     loss_fn: callable = dpo_loss,
+    args=None,
 ):
     model.eval()
     all_losses = 0
@@ -186,18 +243,30 @@ def evaluate_dpo(
 
     index_iterator = iter(range(num_batches)) if num_batches != -1 else iter(int, 1)
 
+    is_dlpo = loss_type == "dlpo-dpo"
     for _, batch in zip(
         index_iterator,
         iterate_dpo_batches(
             dataset=dataset,
             batch_size=batch_size,
             max_seq_length=max_seq_length,
+            include_prompt_masks=is_dlpo,
         ),
     ):
-        chosen, rejected, chosen_masks, rejected_masks = batch
+        chosen, rejected, chosen_masks, rejected_masks, *prompt_masks = batch
 
-        policy_chosen_scores = get_token_scores(model, chosen, chosen_masks)
-        policy_rejected_scores = get_token_scores(model, rejected, rejected_masks)
+        if is_dlpo:
+            policy_chosen_scores, chosen_hidden = get_token_scores(
+                model, chosen, chosen_masks, return_hidden=True,
+                layer=args.latent_layer if args else "final",
+            )
+            policy_rejected_scores, rejected_hidden = get_token_scores(
+                model, rejected, rejected_masks, return_hidden=True,
+                layer=args.latent_layer if args else "final",
+            )
+        else:
+            policy_chosen_scores = get_token_scores(model, chosen, chosen_masks)
+            policy_rejected_scores = get_token_scores(model, rejected, rejected_masks)
 
         policy_chosen_score = compute_score(
             policy_chosen_scores, chosen_masks, loss_type
@@ -231,10 +300,20 @@ def evaluate_dpo(
             reference_rejected_score=reference_rejected_score,
             chosen_masks=chosen_masks,
             rejected_masks=rejected_masks,
-            loss_type=loss_type,
+            loss_type="sigmoid" if is_dlpo else loss_type,
             beta=beta,
             delta=delta,
         )
+        if is_dlpo:
+            if args is None:
+                args = DPOTrainingArgs(loss_type="dlpo-dpo")
+            latent_loss, latent_metrics = latent_preference_loss(
+                chosen_hidden, rejected_hidden,
+                chosen_masks[:, :-1], rejected_masks[:, :-1],
+                prompt_masks[0][:, :-1], prompt_masks[1][:, :-1], args,
+            )
+            loss_value += args.latent_weight * latent_loss
+            metrics.update(latent_metrics)
         all_losses += loss_value * toks
         all_rewards += reward
         ntokens += toks
@@ -267,7 +346,7 @@ def train_dpo(
     args: DPOTrainingArgs = DPOTrainingArgs(),
     loss_fn: callable = dpo_loss,
     training_callback: TrainingCallback = None,
-    loss_type="sigmoid",
+    loss_type=None,
 ):
     mx.set_wired_limit(mx.device_info()["max_recommended_working_set_size"])
     world = mx.distributed.init()
@@ -286,7 +365,11 @@ def train_dpo(
         raise ValueError("qat_start_step must be at least 1")
 
     qat_installed = False
+    loss_type = args.loss_type if loss_type is None else loss_type
+    is_dlpo = loss_type == "dlpo-dpo"
     efficient = True if args.seq_step_size is not None else False
+    if is_dlpo and efficient:
+        raise ValueError("dlpo-dpo does not support efficient_long_context")
     if efficient:
         cache = make_prompt_cache(model)
         seq_step_size = args.seq_step_size
@@ -294,9 +377,20 @@ def train_dpo(
 
     state = [model.state, optimizer.state, mx.random.state]
 
-    def loss_wrapper(chosen, rejected, chosen_masks, rejected_masks):
-        policy_chosen_scores = get_token_scores(model, chosen, chosen_masks)
-        policy_rejected_scores = get_token_scores(model, rejected, rejected_masks)
+    def loss_wrapper(
+        chosen, rejected, chosen_masks, rejected_masks,
+        chosen_prompt_masks=None, rejected_prompt_masks=None,
+    ):
+        if is_dlpo:
+            policy_chosen_scores, chosen_hidden = get_token_scores(
+                model, chosen, chosen_masks, return_hidden=True, layer=args.latent_layer
+            )
+            policy_rejected_scores, rejected_hidden = get_token_scores(
+                model, rejected, rejected_masks, return_hidden=True, layer=args.latent_layer
+            )
+        else:
+            policy_chosen_scores = get_token_scores(model, chosen, chosen_masks)
+            policy_rejected_scores = get_token_scores(model, rejected, rejected_masks)
 
         policy_chosen_score = compute_score(
             policy_chosen_scores, chosen_masks, loss_type
@@ -322,7 +416,8 @@ def train_dpo(
                 ref_rejected_scores, rejected_masks, loss_type
             )
 
-        return loss_fn(
+        base_loss_type = "sigmoid" if is_dlpo else loss_type
+        result = loss_fn(
             policy_chosen_score=policy_chosen_score,
             policy_rejected_score=policy_rejected_score,
             reference_chosen_score=reference_chosen_score,
@@ -331,17 +426,27 @@ def train_dpo(
             rejected_masks=rejected_masks,
             beta=args.beta,
             delta=args.delta,
-            loss_type=loss_type,
+            loss_type=base_loss_type,
         )
+        if not is_dlpo:
+            return result
+        loss_value, reward, toks, metrics = result
+        latent_loss, latent_metrics = latent_preference_loss(
+            chosen_hidden, rejected_hidden,
+            chosen_masks[:, :-1], rejected_masks[:, :-1],
+            chosen_prompt_masks[:, :-1], rejected_prompt_masks[:, :-1], args,
+        )
+        metrics.update(latent_metrics)
+        return loss_value + args.latent_weight * latent_loss, reward, toks, metrics
 
     loss_value_and_grad = nn.value_and_grad(model, loss_wrapper)
 
     @partial(mx.compile, inputs=state, outputs=state)
     def step(batch, prev_grad, do_update):
-        chosen, rejected, chosen_masks, rejected_masks = batch
+        chosen, rejected, chosen_masks, rejected_masks, *prompt_masks = batch
 
         (lvalue, reward, toks, metrics), grad = loss_value_and_grad(
-            chosen, rejected, chosen_masks, rejected_masks
+            chosen, rejected, chosen_masks, rejected_masks, *prompt_masks
         )
 
         if prev_grad is not None:
@@ -528,6 +633,7 @@ def train_dpo(
                 batch_size=args.batch_size,
                 max_seq_length=args.max_seq_length,
                 train=True,
+                include_prompt_masks=is_dlpo,
             )
         )
 
@@ -548,6 +654,7 @@ def train_dpo(
                 beta=args.beta,
                 delta=args.delta,
                 loss_type=loss_type,
+                args=args,
             )
             val_time = time.perf_counter() - stop
             if rank == 0:
@@ -605,7 +712,7 @@ def train_dpo(
         steps += 1
 
         for k, v in metrics.items():
-            accumulated_metrics[k] += v
+            accumulated_metrics[k] = accumulated_metrics.get(k, 0) + v
 
         _acc = [v for v in accumulated_metrics.values() if isinstance(v, mx.array)]
         mx.eval(state, losses, rewards, n_tokens, grad_accum, *_acc)
