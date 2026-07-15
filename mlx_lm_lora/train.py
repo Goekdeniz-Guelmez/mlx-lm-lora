@@ -90,11 +90,11 @@ CONFIG_DEFAULTS = {
     "data": "data/",
     "seed": 0,
     "num_layers": -1,
-    "batch_size": 4,
+    "batch_size": 1,
     "iters": None,
     "epochs": None,
     "gradient_accumulation_steps": 1,
-    "val_batches": 25,
+    "val_batches": 1,
     "learning_rate": 1e-5,
     "steps_per_report": 10,
     "steps_per_eval": 200,
@@ -554,10 +554,16 @@ def train_model(
 ):
     mx.random.seed(args.seed)
 
-    if args.iters is None and args.epochs is not None:
-        args.iters = calculate_iters(
-            train_set=train_set, batch_size=args.batch_size, epochs=args.epochs
-        )
+    if args.iters is None:
+        if args.epochs is not None:
+            args.iters = calculate_iters(
+                train_set=train_set, batch_size=args.batch_size, epochs=args.epochs
+            )
+        else:
+            args.iters = SFTTrainingArgs().iters
+            print_info(
+                f"Neither iters nor epochs was provided; defaulting to {args.iters} iterations."
+            )
 
     if args.resume_adapter_file is not None:
         print_warning(
