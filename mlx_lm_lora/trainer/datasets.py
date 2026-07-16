@@ -186,6 +186,7 @@ class DPODataset:
     ):
         self._chosen_data = []
         self._rejected_data = []
+        self._prompt_lengths = []
 
         for d in data:
             messages = (
@@ -213,9 +214,18 @@ class DPODataset:
                     rejected_messages, add_generation_prompt=True
                 )
             )
+            prompt_tokens = tokenizer.apply_chat_template(
+                base_messages, add_generation_prompt=True
+            )
+            self._prompt_lengths.append(len(prompt_tokens))
 
     def __getitem__(self, idx: int):
-        return {"chosen": self._chosen_data[idx], "rejected": self._rejected_data[idx]}
+        return {
+            "chosen": self._chosen_data[idx],
+            "rejected": self._rejected_data[idx],
+            "chosen_prompt_length": self._prompt_lengths[idx],
+            "rejected_prompt_length": self._prompt_lengths[idx],
+        }
 
     def __len__(self):
         return len(self._chosen_data)
@@ -275,6 +285,7 @@ class ORPODataset:
         self._chosen_data = []
         self._rejected_data = []
         self._scores = []
+        self._prompt_lengths = []
 
         for d in data:
             prompt_content = d.get(prompt_key, d.get("question", ""))
@@ -328,6 +339,10 @@ class ORPODataset:
                 rejected_text = tokenizer.apply_chat_template(
                     rejected_messages, add_generation_prompt=True
                 )
+                prompt_text = tokenizer.apply_chat_template(
+                    base_messages + [{"role": "user", "content": prompt_content}],
+                    add_generation_prompt=True,
+                )
 
             else:
                 chosen_content = self._extract_content(d[chosen_key])
@@ -345,9 +360,14 @@ class ORPODataset:
                         {"role": "assistant", "content": rejected_content},
                     ]
                 )
+                prompt_text = tokenizer.apply_chat_template(
+                    [{"role": "user", "content": prompt_content}],
+                    add_generation_prompt=True,
+                )
 
             self._chosen_data.append(chosen_text)
             self._rejected_data.append(rejected_text)
+            self._prompt_lengths.append(len(prompt_text))
 
             if preference_score_key in d:
                 self._scores.append(float(d[preference_score_key]))
@@ -384,6 +404,8 @@ class ORPODataset:
             "chosen": self._chosen_data[idx],
             "rejected": self._rejected_data[idx],
             "preference_score": self._scores[idx],
+            "chosen_prompt_length": self._prompt_lengths[idx],
+            "rejected_prompt_length": self._prompt_lengths[idx],
         }
 
 
@@ -571,7 +593,7 @@ def create_dataset(
 
     sample = data[0]
 
-    if train_mode == "orpo":
+    if train_mode in ["orpo", "dlpo-orpo"]:
         if chosen_feature in sample and rejected_feature in sample:
             return ORPODataset(
                 data=data,
@@ -609,7 +631,7 @@ def create_dataset(
                 max_seq_length=getattr(config, "max_seq_length", 2048),
             )
         raise ValueError("Unsupported data format for FTPO training.")
-    elif train_mode in ["dpo", "cpo"]:
+    elif train_mode in ["dpo", "dlpo-dpo", "cpo"]:
         if chosen_feature in sample and rejected_feature in sample:
             return DPODataset(
                 data=data,

@@ -5,6 +5,7 @@ import mlx.core as mx
 from mlx_lm_lora.trainer import (
     cpo_trainer,
     dpo_trainer,
+    dlpo,
     ftpo_trainer,
     grpo_trainer,
     online_dpo_trainer,
@@ -111,6 +112,8 @@ class DPOTrainerTest(unittest.TestCase):
         args = dpo_trainer.DPOTrainingArgs()
         self.assertEqual(args.loss_type, "sigmoid")
         self.assertEqual(args.beta, 0.1)
+        self.assertEqual(args.latent_weight, 0.1)
+        self.assertEqual(args.latent_pooling, "answer_mean")
 
     def test_dpo_all_loss_variants_are_finite(self):
         inputs = _preference_inputs()
@@ -148,6 +151,43 @@ class DPOTrainerTest(unittest.TestCase):
         self.assertEqual(rejected.shape, (2, 3))
         self.assertEqual(_scalar(chosen_mask.sum()), 5.0)
         self.assertEqual(_scalar(rejected_mask.sum()), 5.0)
+
+    def test_dlpo_batch_iterator_splits_prompt_and_response_masks(self):
+        data = [
+            {"chosen": [1, 2, 3, 4], "rejected": [5, 6, 7],
+             "chosen_prompt_length": 2, "rejected_prompt_length": 2},
+            {"chosen": [8, 9, 10], "rejected": [11, 12, 13, 14],
+             "chosen_prompt_length": 1, "rejected_prompt_length": 1},
+        ]
+        batch = next(dpo_trainer.iterate_dpo_batches(
+            data, 2, 4, include_prompt_masks=True
+        ))
+        self.assertEqual(len(batch), 6)
+        self.assertEqual(_scalar(batch[2].sum()), 4.0)
+        self.assertEqual(_scalar(batch[4].sum()), 3.0)
+
+
+class DLPOTest(unittest.TestCase):
+    def test_latent_reporting_includes_only_available_metrics(self):
+        report = dlpo.format_latent_metrics(
+            {"latent_loss": 0.5, "latent_sim_margin": 0.25}
+        )
+        self.assertEqual(report, ", latent_loss 0.500, sim_margin 0.250")
+
+    def test_latent_loss_is_finite_and_reports_both_components(self):
+        args = dpo_trainer.DPOTrainingArgs(loss_type="dlpo-dpo")
+        chosen = mx.array([[[1.0, 0.0], [0.8, 0.2], [1.0, 1.0]],
+                           [[0.0, 1.0], [0.2, 0.8], [1.0, 1.0]]])
+        rejected = mx.array([[[1.0, 0.0], [-0.8, 0.2], [1.0, 1.0]],
+                             [[0.0, 1.0], [-0.2, 0.8], [1.0, 1.0]]])
+        response = mx.array([[0.0, 1.0, 0.0], [0.0, 1.0, 0.0]])
+        prompt = mx.array([[1.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
+        loss, metrics = dlpo.latent_preference_loss(
+            chosen, rejected, response, response, prompt, prompt, args
+        )
+        self.assertTrue(mx.isfinite(loss).item())
+        self.assertIn("latent_sim_loss", metrics)
+        self.assertIn("latent_dir_loss", metrics)
 
 
 class FTPOTrainerTest(unittest.TestCase):
