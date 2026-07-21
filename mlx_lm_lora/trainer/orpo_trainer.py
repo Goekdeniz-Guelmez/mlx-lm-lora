@@ -43,12 +43,22 @@ def get_logps(model, tokens, mask, cache=None):
     mask = mask[:, :-1]
     seq_lengths = mask.sum(-1)
     logp_sum = (log_probs * mask).sum(-1)
-    safe_seq_lengths = mx.where(seq_lengths > 0, seq_lengths, mx.array(1.0))
-    logp_seq_avg = mx.where(seq_lengths > 0, logp_sum / safe_seq_lengths, mx.array(0.0))
+    safe_seq_lengths = mx.where(seq_lengths > 0, seq_lengths, 1.0)
+    logp_seq_avg = mx.where(seq_lengths > 0, logp_sum / safe_seq_lengths, 0.0)
     mask_sum = mask.sum()
-    safe_mask_sum = mx.where(mask_sum > 0, mask_sum, mx.array(1.0))
-    logits_mean = mx.where(mask_sum > 0, logits.sum() / safe_mask_sum, mx.array(0.0))
+    safe_mask_sum = mx.where(mask_sum > 0, mask_sum, 1.0)
+    logits_mean = mx.where(mask_sum > 0, logits.sum() / safe_mask_sum, 0.0)
     return logp_seq_avg, logits_mean
+
+
+def _log1mexp(log_probability):
+    """Compute log(1 - exp(x)) stably for log probabilities."""
+    log_probability = mx.minimum(log_probability, -1e-7)
+    return mx.where(
+        log_probability > -0.6931471805599453,
+        mx.log(-mx.expm1(log_probability)),
+        mx.log1p(-mx.exp(log_probability)),
+    )
 
 
 def orpo_loss(
@@ -61,16 +71,18 @@ def orpo_loss(
     preference_scores,
     beta: float = 0.1,
 ):
-    chosen_logps = chosen_logps * preference_scores
-
     # Stable log-odds computation
     # Ensure no NaN from inf - inf
     chosen_logps = mx.nan_to_num(chosen_logps, nan=0.0, posinf=0.0, neginf=-1000.0)
     rejected_logps = mx.nan_to_num(rejected_logps, nan=0.0, posinf=0.0, neginf=-1000.0)
 
-    log_odds = chosen_logps - rejected_logps
+    chosen_nll = -chosen_logps
+    chosen_logps = chosen_logps * preference_scores
+    log_odds = (chosen_logps - rejected_logps) - (
+        _log1mexp(chosen_logps) - _log1mexp(rejected_logps)
+    )
     ratio = nn.log_sigmoid(log_odds)
-    loss = -beta * ratio
+    loss = chosen_nll - beta * ratio
 
     # Reward estimation
     chosen_reward = beta * chosen_logps
@@ -90,6 +102,31 @@ def orpo_loss(
 
     mx.clear_cache()
     return mx.mean(loss), reward, num_tokens, metrics
+
+
+def orpo_loss_from_model(
+    model,
+    chosen,
+    rejected,
+    chosen_masks,
+    rejected_masks,
+    preference_scores,
+    loss=orpo_loss,
+    beta: float = 0.1,
+):
+    """Compute ORPO loss with model forwards in the differentiated function."""
+    chosen_logps, chosen_logits_mean = get_logps(model, chosen, chosen_masks)
+    rejected_logps, rejected_logits_mean = get_logps(model, rejected, rejected_masks)
+    return loss(
+        chosen_logps=chosen_logps,
+        chosen_logits_mean=chosen_logits_mean,
+        rejected_logps=rejected_logps,
+        rejected_logits_mean=rejected_logits_mean,
+        chosen_masks=chosen_masks,
+        rejected_masks=rejected_masks,
+        preference_scores=preference_scores,
+        beta=beta,
+    )
 
 
 def iterate_orpo_batches(dataset, batch_size, max_seq_length, train=False):
@@ -259,7 +296,7 @@ def train_orpo(
 
     state = [model.state, optimizer.state, mx.random.state]
 
-    def loss_wrapper(
+    def loss_from_logps(
         chosen_logps,
         chosen_logits_mean,
         rejected_logps,
@@ -279,22 +316,35 @@ def train_orpo(
             beta=args.beta,
         )
 
+    def loss_wrapper(
+        model,
+        chosen,
+        rejected,
+        chosen_masks,
+        rejected_masks,
+        preference_scores,
+    ):
+        return orpo_loss_from_model(
+            model,
+            chosen,
+            rejected,
+            chosen_masks,
+            rejected_masks,
+            preference_scores,
+            loss=loss,
+            beta=args.beta,
+        )
+
     loss_value_and_grad = nn.value_and_grad(model, loss_wrapper)
 
     @partial(mx.compile, inputs=state, outputs=state)
     def step(batch, prev_grad, do_update):
         chosen, rejected, chosen_masks, rejected_masks, preference_scores = batch
 
-        chosen_logps, chosen_logits_mean = get_logps(model, chosen, chosen_masks)
-        rejected_logps, rejected_logits_mean = get_logps(
-            model, rejected, rejected_masks
-        )
-
         (lvalue, reward, toks, metrics), grad = loss_value_and_grad(
-            chosen_logps,
-            chosen_logits_mean,
-            rejected_logps,
-            rejected_logits_mean,
+            model,
+            chosen,
+            rejected,
             chosen_masks,
             rejected_masks,
             preference_scores=preference_scores,
@@ -358,15 +408,15 @@ def train_orpo(
 
         c_lens = chosen_masks[:, :-1].sum(-1)
         r_lens = rejected_masks[:, :-1].sum(-1)
-        c_lens_safe = mx.where(c_lens > 0, c_lens, mx.array(1.0))
-        r_lens_safe = mx.where(r_lens > 0, r_lens, mx.array(1.0))
+        c_lens_safe = mx.where(c_lens > 0, c_lens, 1.0)
+        r_lens_safe = mx.where(r_lens > 0, r_lens, 1.0)
 
-        c_avg = mx.where(c_lens > 0, c_logp_sum / c_lens_safe, mx.array(0.0))
-        r_avg = mx.where(r_lens > 0, r_logp_sum / r_lens_safe, mx.array(0.0))
+        c_avg = mx.where(c_lens > 0, c_logp_sum / c_lens_safe, 0.0)
+        r_avg = mx.where(r_lens > 0, r_logp_sum / r_lens_safe, 0.0)
 
         # 2. Compute ORPO Gradients Weights
         def internal_loss_fn(c, r):
-            return loss_wrapper(
+            return loss_from_logps(
                 c,
                 c_logits_mean,
                 r,
@@ -377,7 +427,7 @@ def train_orpo(
             )[0]
 
         # Get full metrics for reporting
-        (lvalue, reward, toks, metrics) = loss_wrapper(
+        (lvalue, reward, toks, metrics) = loss_from_logps(
             c_avg,
             c_logits_mean,
             r_avg,
@@ -389,8 +439,8 @@ def train_orpo(
 
         (g_c_avg, g_r_avg) = mx.grad(internal_loss_fn, argnums=[0, 1])(c_avg, r_avg)
 
-        w_c = mx.where(c_lens > 0, g_c_avg / c_lens_safe, mx.array(0.0))
-        w_r = mx.where(r_lens > 0, g_r_avg / r_lens_safe, mx.array(0.0))
+        w_c = mx.where(c_lens > 0, g_c_avg / c_lens_safe, 0.0)
+        w_r = mx.where(r_lens > 0, g_r_avg / r_lens_safe, 0.0)
 
         # 3. Backward chunks
         seq_grad_accum = None
