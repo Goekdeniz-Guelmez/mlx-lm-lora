@@ -43,17 +43,17 @@ def get_logps(model, tokens, mask, cache=None):
     mask = mask[:, :-1]
     seq_lengths = mask.sum(-1)
     logp_sum = (log_probs * mask).sum(-1)
-    safe_seq_lengths = mx.where(seq_lengths > 0, seq_lengths, mx.array(1.0))
-    logp_seq_avg = mx.where(seq_lengths > 0, logp_sum / safe_seq_lengths, mx.array(0.0))
+    safe_seq_lengths = mx.where(seq_lengths > 0, seq_lengths, 1.0)
+    logp_seq_avg = mx.where(seq_lengths > 0, logp_sum / safe_seq_lengths, 0.0)
     mask_sum = mask.sum()
-    safe_mask_sum = mx.where(mask_sum > 0, mask_sum, mx.array(1.0))
-    logits_mean = mx.where(mask_sum > 0, logits.sum() / safe_mask_sum, mx.array(0.0))
+    safe_mask_sum = mx.where(mask_sum > 0, mask_sum, 1.0)
+    logits_mean = mx.where(mask_sum > 0, logits.sum() / safe_mask_sum, 0.0)
     return logp_seq_avg, logits_mean
 
 
 def _log1mexp(log_probability):
     """Compute log(1 - exp(x)) stably for log probabilities."""
-    log_probability = mx.minimum(log_probability, mx.array(-1e-7))
+    log_probability = mx.minimum(log_probability, -1e-7)
     return mx.where(
         log_probability > -0.6931471805599453,
         mx.log(-mx.expm1(log_probability)),
@@ -408,11 +408,11 @@ def train_orpo(
 
         c_lens = chosen_masks[:, :-1].sum(-1)
         r_lens = rejected_masks[:, :-1].sum(-1)
-        c_lens_safe = mx.where(c_lens > 0, c_lens, mx.array(1.0))
-        r_lens_safe = mx.where(r_lens > 0, r_lens, mx.array(1.0))
+        c_lens_safe = mx.where(c_lens > 0, c_lens, 1.0)
+        r_lens_safe = mx.where(r_lens > 0, r_lens, 1.0)
 
-        c_avg = mx.where(c_lens > 0, c_logp_sum / c_lens_safe, mx.array(0.0))
-        r_avg = mx.where(r_lens > 0, r_logp_sum / r_lens_safe, mx.array(0.0))
+        c_avg = mx.where(c_lens > 0, c_logp_sum / c_lens_safe, 0.0)
+        r_avg = mx.where(r_lens > 0, r_logp_sum / r_lens_safe, 0.0)
 
         # 2. Compute ORPO Gradients Weights
         def internal_loss_fn(c, r):
@@ -439,8 +439,8 @@ def train_orpo(
 
         (g_c_avg, g_r_avg) = mx.grad(internal_loss_fn, argnums=[0, 1])(c_avg, r_avg)
 
-        w_c = mx.where(c_lens > 0, g_c_avg / c_lens_safe, mx.array(0.0))
-        w_r = mx.where(r_lens > 0, g_r_avg / r_lens_safe, mx.array(0.0))
+        w_c = mx.where(c_lens > 0, g_c_avg / c_lens_safe, 0.0)
+        w_r = mx.where(r_lens > 0, g_r_avg / r_lens_safe, 0.0)
 
         # 3. Backward chunks
         seq_grad_accum = None
