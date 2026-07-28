@@ -260,14 +260,16 @@ def train_orpo(
     state = [model.state, optimizer.state, mx.random.state]
 
     def loss_wrapper(
-        chosen_logps,
-        chosen_logits_mean,
-        rejected_logps,
-        rejected_logits_mean,
+        chosen,
+        rejected,
         chosen_masks,
         rejected_masks,
         preference_scores,
     ):
+        chosen_logps, chosen_logits_mean = get_logps(model, chosen, chosen_masks)
+        rejected_logps, rejected_logits_mean = get_logps(
+            model, rejected, rejected_masks
+        )
         return loss(
             chosen_logps=chosen_logps,
             chosen_logits_mean=chosen_logits_mean,
@@ -285,18 +287,8 @@ def train_orpo(
     def step(batch, prev_grad, do_update):
         chosen, rejected, chosen_masks, rejected_masks, preference_scores = batch
 
-        chosen_logps, chosen_logits_mean = get_logps(model, chosen, chosen_masks)
-        rejected_logps, rejected_logits_mean = get_logps(
-            model, rejected, rejected_masks
-        )
-
         (lvalue, reward, toks, metrics), grad = loss_value_and_grad(
-            chosen_logps,
-            chosen_logits_mean,
-            rejected_logps,
-            rejected_logits_mean,
-            chosen_masks,
-            rejected_masks,
+            chosen, rejected, chosen_masks, rejected_masks,
             preference_scores=preference_scores,
         )
 
