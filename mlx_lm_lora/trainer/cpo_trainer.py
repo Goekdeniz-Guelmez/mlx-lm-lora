@@ -77,6 +77,35 @@ def cpo_loss(
     return mx.mean(losses), reward, num_tokens, metrics
 
 
+def cpo_loss_from_model(
+    model,
+    chosen,
+    rejected,
+    chosen_masks,
+    rejected_masks,
+    beta: float,
+    delta: float,
+    loss=cpo_loss,
+    loss_type: str = "sigmoid",
+):
+    """Compute CPO loss with model forwards in the differentiated function."""
+    policy_chosen_scores = get_token_scores(model, chosen, chosen_masks)
+    policy_rejected_scores = get_token_scores(model, rejected, rejected_masks)
+    policy_chosen_score = compute_score(policy_chosen_scores, chosen_masks, loss_type)
+    policy_rejected_score = compute_score(
+        policy_rejected_scores, rejected_masks, loss_type
+    )
+    return loss(
+        policy_chosen_score=policy_chosen_score,
+        policy_rejected_score=policy_rejected_score,
+        chosen_masks=chosen_masks,
+        rejected_masks=rejected_masks,
+        beta=beta,
+        delta=delta,
+        loss_type=loss_type,
+    )
+
+
 def iterate_cpo_batches(dataset, batch_size, max_seq_length, train=False):
     idx = sorted(range(len(dataset)), key=lambda idx: len(dataset[idx]["chosen"]))
 
@@ -241,19 +270,10 @@ def train_cpo(
     def step(batch, prev_grad, do_update):
         chosen, rejected, chosen_masks, rejected_masks = batch
 
-        policy_chosen_scores = get_token_scores(model, chosen, chosen_masks)
-        policy_rejected_scores = get_token_scores(model, rejected, rejected_masks)
-
-        policy_chosen_score = compute_score(
-            policy_chosen_scores, chosen_masks, args.loss_type
-        )
-        policy_rejected_score = compute_score(
-            policy_rejected_scores, rejected_masks, args.loss_type
-        )
-
         (lvalue, reward, toks, metrics), grad = loss_value_and_grad(
-            policy_chosen_score,
-            policy_rejected_score,
+            model,
+            chosen,
+            rejected,
             chosen_masks=chosen_masks,
             rejected_masks=rejected_masks,
         )
@@ -270,14 +290,14 @@ def train_cpo(
 
         return lvalue, reward, toks, metrics, grad
 
-    def loss_wrapper(
-        policy_chosen_score, policy_rejected_score, chosen_masks, rejected_masks
-    ):
-        return loss_fn(
-            policy_chosen_score=policy_chosen_score,
-            policy_rejected_score=policy_rejected_score,
-            chosen_masks=chosen_masks,
-            rejected_masks=rejected_masks,
+    def loss_wrapper(model, chosen, rejected, chosen_masks, rejected_masks):
+        return cpo_loss_from_model(
+            model,
+            chosen,
+            rejected,
+            chosen_masks,
+            rejected_masks,
+            loss=loss_fn,
             beta=args.beta,
             delta=args.delta,
             loss_type=args.loss_type,
