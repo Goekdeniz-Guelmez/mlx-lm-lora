@@ -15,6 +15,7 @@ from mlx_lm.tuner.callbacks import TrainingCallback
 from tqdm import tqdm
 from transformers import PreTrainedTokenizer
 
+from ..recurrent_patch import enable_memory_safe_recurrences, model_uses_recurrence
 from .dpo_trainer import get_token_scores
 from .judge import HumanPairwiseJudge, LLMPairwiseJudge
 from .sft_trainer import SFTTrainingArgs, grad_checkpoint
@@ -378,6 +379,8 @@ def train_online_dpo(
     loss_fn: callable = online_dpo_loss,
     training_callback: TrainingCallback = None,
 ):
+    if model_uses_recurrence(model):
+        enable_memory_safe_recurrences()
     mx.set_wired_limit(mx.device_info()["max_recommended_working_set_size"])
     world = mx.distributed.init()
     world_size = world.size()

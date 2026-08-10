@@ -8,7 +8,6 @@ within a block during backward rather than retaining the whole sequence.
 
 from __future__ import annotations
 
-
 _RECURRENT_MODEL_MODULES = frozenset(
     {
         "bailing_moe_linear",
@@ -80,7 +79,9 @@ def enable_memory_safe_recurrences(chunk_size: int = 64) -> None:
                     (batch, value_heads, value_dim, key_dim), dtype=mx.float32
                 )
             if value_heads % key_heads:
-                raise ValueError("gated-delta value heads must be divisible by key heads")
+                raise ValueError(
+                    "gated-delta value heads must be divisible by key heads"
+                )
             repeat_factor = value_heads // key_heads
             if repeat_factor > 1:
                 q = mx.repeat(q, repeat_factor, axis=-2)
@@ -112,6 +113,7 @@ def enable_memory_safe_recurrences(chunk_size: int = 64) -> None:
     if bailing_moe_linear is not None and not getattr(
         bailing_moe_linear, "_mlx_lm_lora_memory_safe", False
     ):
+
         def gla_chunk(q, k, v, state, decay):
             outputs = []
             for t in range(q.shape[2]):
@@ -152,6 +154,7 @@ def enable_memory_safe_recurrences(chunk_size: int = 64) -> None:
         mamba = None
 
     if mamba is not None and not getattr(mamba, "_mlx_lm_lora_memory_safe", False):
+
         def checkpointed_mamba_process(self, x, conv_cache, state_cache):
             _, length, _ = x.shape
             xz = self.in_proj(x)
