@@ -621,6 +621,7 @@ python -m mlx_lm_lora.train_judge \
 --optimizer adam                  # adam, adamw, qhadam, muon
 --lr-schedule cosine             # Learning rate schedule
 --grad-checkpoint                # Enable gradient checkpointing
+--memory-safe-recurrence         # Bound recurrent-training memory use
 
 # Quantization
 
@@ -880,6 +881,10 @@ mlx_lm_lora.train --model <model> --load-in-8bits --train
 
 # Enable gradient checkpointing
 --grad-checkpoint
+
+# For linear or hybrid recurrent models (Qwen3.5/Next, Kimi, Mamba, etc.)
+# uses checkpointed linear blocks and smaller shared-SSM blocks
+--memory-safe-recurrence
 
 # Reduce sequence length
 --max-seq-length 1024
