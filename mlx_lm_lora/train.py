@@ -48,6 +48,8 @@ from .trainer.sft_trainer import (
     train_sft,
 )
 from .trainer.xpo_trainer import XPOTrainingArgs, evaluate_xpo, train_xpo
+from .recurrent_patch import enable_memory_safe_recurrences, model_uses_recurrence
+from .ssm_patch import set_ssm_attention_chunk_size
 from .utils import from_pretrained, save_pretrained_merged, save_to_lmstudio_merged
 from .visuals import (
     Colors,
@@ -107,6 +109,8 @@ CONFIG_DEFAULTS = {
     "config": None,
     "grad_checkpoint": False,
     "efficient_long_context": False,
+    "memory_safe_recurrence": None,
+    "ssm_attention_chunk_size": None,
     "lr_schedule": None,
     "lora_parameters": {"rank": 8, "dropout": 0.0, "scale": 10.0},
     "mask_prompt": False,
@@ -361,6 +365,31 @@ def build_parser():
         action="store_true",
         help="Use efficient long context processing (Experimental, only supported in SFT, DPO, CPO, ORPO).",
         default=None,
+    )
+    parser.add_argument(
+        "--memory-safe-recurrence",
+        action="store_true",
+        help=(
+            "Use checkpointed recurrence blocks for linear and hybrid model "
+            "training to lower peak memory."
+        ),
+        default=None,
+    )
+    parser.add_argument(
+        "--no-memory-safe-recurrence",
+        action="store_false",
+        dest="memory_safe_recurrence",
+        help="Disable automatic recurrent-memory protection.",
+        default=None,
+    )
+    parser.add_argument(
+        "--ssm-attention-chunk-size",
+        type=int,
+        help=(
+            "Use smaller blocks in MLX-LM's multi-token SSM fallback. "
+            "Lowers peak memory roughly quadratically at a throughput cost; "
+            "try 64 or 32."
+        ),
     )
     parser.add_argument(
         "--wandb",
@@ -1153,6 +1182,11 @@ def run(args, training_callback: TrainingCallback = None):
         lora_config=build_lora_config(args),
         quantized_load=quantization_config,
     )
+    if args.train and args.memory_safe_recurrence is not False and model_uses_recurrence(
+        model
+    ):
+        enable_memory_safe_recurrences()
+        print_info("Memory-safe recurrences: enabled automatically")
     reference_model = (
         load_reference_model(args)
         if args.train_mode
@@ -1260,6 +1294,8 @@ def main(args=None):
         if getattr(args, k, None) is None:
             setattr(args, k, v)
 
+    if args.ssm_attention_chunk_size is not None:
+        set_ssm_attention_chunk_size(args.ssm_attention_chunk_size)
     print_section("Configuration Summary")
     print(f"{Colors.WHITE}Model:{Colors.RESET} {args.model}")
     print(f"{Colors.WHITE}Training Mode:{Colors.RESET} {args.train_mode.upper()}")
@@ -1267,6 +1303,11 @@ def main(args=None):
     print(f"{Colors.WHITE}Batch Size:{Colors.RESET} {args.batch_size}")
     print(f"{Colors.WHITE}Learning Rate:{Colors.RESET} {args.learning_rate}")
     print(f"{Colors.WHITE}Optimizer:{Colors.RESET} {args.optimizer}")
+    if args.ssm_attention_chunk_size is not None:
+        print(
+            f"{Colors.WHITE}SSM attention chunk:{Colors.RESET} "
+            f"{args.ssm_attention_chunk_size}"
+        )
     if args.train_mode == "sft" and args.qat_enable:
         print(
             f"{Colors.WHITE}QAT:{Colors.RESET} enabled "
