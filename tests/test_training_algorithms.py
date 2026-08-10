@@ -1,6 +1,7 @@
 import unittest
 
 import mlx.core as mx
+import mlx.nn as nn
 
 from mlx_lm_lora.trainer import (
     cpo_trainer,
@@ -258,6 +259,54 @@ class ORPOTrainerTest(unittest.TestCase):
         self.assertTrue(mx.all(mx.isfinite(reward)).item())
         self.assertEqual(_scalar(tokens), 10.0)
         self.assertIn("rejected_logits_mean", metrics)
+
+    def test_orpo_loss_matches_sft_plus_odds_ratio_objective(self):
+        chosen_logps = mx.array([-0.2])
+        rejected_logps = mx.array([-1.0])
+        beta = 0.1
+        loss, _, _, _ = orpo_trainer.orpo_loss(
+            chosen_logps=chosen_logps,
+            chosen_logits_mean=mx.array(0.0),
+            rejected_logps=rejected_logps,
+            rejected_logits_mean=mx.array(0.0),
+            chosen_masks=mx.ones((1, 2)),
+            rejected_masks=mx.ones((1, 2)),
+            preference_scores=mx.ones((1,)),
+            beta=beta,
+        )
+        log_odds = (chosen_logps - rejected_logps) - (
+            mx.log1p(-mx.exp(chosen_logps)) - mx.log1p(-mx.exp(rejected_logps))
+        )
+        expected = -chosen_logps - beta * nn.log_sigmoid(log_odds)
+        self.assertTrue(mx.allclose(loss, expected.mean()).item())
+
+    def test_orpo_model_forward_produces_nonzero_gradients(self):
+        class ToyModel(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.embedding = nn.Embedding(4, 4)
+
+            def __call__(self, tokens, cache=None):
+                del cache
+                return self.embedding(tokens)
+
+        model = ToyModel()
+        chosen = mx.array([[0, 1, 2]])
+        rejected = mx.array([[0, 2, 1]])
+        masks = mx.ones((1, 3))
+        loss_and_grad = nn.value_and_grad(model, orpo_trainer.orpo_loss_from_model)
+
+        _, gradients = loss_and_grad(
+            model,
+            chosen,
+            rejected,
+            masks,
+            masks,
+            mx.ones((1,)),
+        )
+
+        gradient = gradients["embedding"]["weight"]
+        self.assertGreater(_scalar(mx.sum(mx.abs(gradient))), 0.0)
 
     def test_orpo_batch_iterator_includes_preference_scores(self):
         data = [
