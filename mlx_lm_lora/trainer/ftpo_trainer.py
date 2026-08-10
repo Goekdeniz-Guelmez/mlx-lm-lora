@@ -14,6 +14,7 @@ from mlx.utils import tree_flatten, tree_map
 from mlx_lm.tuner.callbacks import TrainingCallback
 from tqdm import tqdm
 
+from ..recurrent_patch import enable_memory_safe_recurrences, model_uses_recurrence
 from .sft_trainer import SFTTrainingArgs, grad_checkpoint
 
 
@@ -189,6 +190,8 @@ def train_ftpo(
     args: FTPOTrainingArgs = FTPOTrainingArgs(),
     training_callback: TrainingCallback = None,
 ):
+    if model_uses_recurrence(model):
+        enable_memory_safe_recurrences()
     if ref_model is None:
         raise ValueError("FTPO requires a frozen reference model")
     if args.gradient_accumulation_steps < 1:
