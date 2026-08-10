@@ -9,6 +9,35 @@ within a block during backward rather than retaining the whole sequence.
 from __future__ import annotations
 
 
+_RECURRENT_MODEL_MODULES = frozenset(
+    {
+        "bailing_moe_linear",
+        "falcon_h1",
+        "granitemoehybrid",
+        "jamba",
+        "kimi_linear",
+        "mamba",
+        "mamba2",
+        "nemotron_h",
+        "plamo2",
+        "qwen3_5",
+        "qwen3_next",
+    }
+)
+
+
+def model_uses_recurrence(model) -> bool:
+    """Return whether a loaded model includes a supported recurrent layer."""
+    modules = getattr(model, "named_modules", None)
+    if not callable(modules):
+        return False
+    for _, module in modules():
+        module_name = type(module).__module__.rsplit(".", maxsplit=1)[-1]
+        if module_name in _RECURRENT_MODEL_MODULES:
+            return True
+    return False
+
+
 def enable_memory_safe_recurrences(chunk_size: int = 64) -> None:
     """Install checkpointed training fallbacks for supported recurrent layers.
 
