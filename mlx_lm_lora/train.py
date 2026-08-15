@@ -183,10 +183,11 @@ def load_reference_model(args):
 
 def load_judge_model(args, reference_model=None):
     """Load judge model, reusing reference model if paths match"""
-    if not args.judge:
-        print("Loading judge model (using default)")
-        model, tokenizer = load(args.judge)
-        return model.freeze(), tokenizer
+    if args.judge is None:
+        raise ValueError(
+            f"Training mode '{args.train_mode}' requires a judge model. "
+            "Set 'judge' in the YAML config or pass --judge."
+        )
 
     if args.judge == args.reference_model_path and reference_model is not None:
         print("Loading judge model (reusing reference model)")
@@ -252,7 +253,7 @@ def build_parser():
     parser.add_argument(
         "--train-mode",
         type=str,
-        default="sft",
+        default=None,
         choices=[
             "sft",
             "dpo",
@@ -379,7 +380,7 @@ def build_parser():
         "--beta",
         type=float,
         help="Temperature parameter for ORPO training.",
-        default=0.1,
+        default=None,
     )
     parser.add_argument(
         "--reward-scaling",
@@ -411,7 +412,7 @@ def build_parser():
         "--judge",
         type=str,
         help="Judge to use can be a model ID or 'human'.",
-        default="mlx-community/Josiefied-Qwen2.5-7B-Instruct-abliterated-v2-4-bit",
+        default=None,
     )
     parser.add_argument(
         "--alpha",
