@@ -20,6 +20,7 @@ from mlx_lm.tuner.callbacks import TrainingCallback
 from tqdm import tqdm
 
 from .checkpointing import load_training_checkpoint, save_training_checkpoint
+from ..recurrent_patch import enable_memory_safe_recurrences, model_uses_recurrence
 from .datasets import CacheDataset
 
 _CHUNKED_NLL_CHUNK_SIZE = 256
@@ -444,6 +445,11 @@ def train_sft(
     iterate_batches: callable = iterate_batches,
     training_callback: TrainingCallback = None,
 ):
+    # Direct API users (including the SFT notebook) bypass train.py, so apply
+    # the same automatic protection used by the command-line entry point.
+    if model_uses_recurrence(model):
+        enable_memory_safe_recurrences()
+
     mx.set_wired_limit(mx.device_info()["max_recommended_working_set_size"])
     world = mx.distributed.init()
     world_size = world.size()

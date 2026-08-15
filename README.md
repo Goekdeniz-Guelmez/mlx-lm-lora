@@ -898,6 +898,10 @@ mlx_lm_lora.train --model <model> --load-in-8bits --train
 # Enable gradient checkpointing
 --grad-checkpoint
 
+# Linear and hybrid recurrent models (Qwen3.5/Next, Kimi, Mamba, etc.) are
+# detected automatically and use checkpointed linear blocks and smaller SSM
+# blocks during training.
+
 # Reduce sequence length
 --max-seq-length 1024
 

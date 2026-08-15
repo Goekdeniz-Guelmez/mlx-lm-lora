@@ -13,6 +13,7 @@ from mlx_lm.sample_utils import make_sampler
 from mlx_lm.tuner.callbacks import TrainingCallback
 from tqdm import tqdm
 
+from ..recurrent_patch import enable_memory_safe_recurrences, model_uses_recurrence
 from .grpo_reward_functions import (
     RewardFunctions,
     r1_accuracy_reward_func,
@@ -776,6 +777,8 @@ def train_grpo(
     training_callback: TrainingCallback = None,
     end_answer_token: str = "</answer>",
 ):
+    if model_uses_recurrence(model):
+        enable_memory_safe_recurrences()
     mx.set_wired_limit(mx.device_info()["max_recommended_working_set_size"])
     world = mx.distributed.init()
     world_size = world.size()
