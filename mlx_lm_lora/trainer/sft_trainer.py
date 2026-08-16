@@ -136,6 +136,12 @@ class SFTTrainingArgs:
             "help": "The examples are processsed sequentially in seq_step_size chunks."
         },
     )
+    recurrence_chunk_size: Optional[int] = field(
+        default=64,
+        metadata={
+            "help": "Enables effitient training for linear /hybrid linear models, covers scalar and vector-gated delta (Qwen, Kimi, Ling, etc.), and recurrent GLA (Bailing MoE Linear).  Shared SSM models already use a chunked fallback; their temporary block is reduced to the same size."
+        },
+    )
     qat_enable: bool = field(
         default=False,
         metadata={
@@ -443,7 +449,7 @@ def train_sft(
     # Direct API users (including the SFT notebook) bypass train.py, so apply
     # the same automatic protection used by the command-line entry point.
     if model_uses_recurrence(model):
-        enable_memory_safe_recurrences()
+        enable_memory_safe_recurrences(chunk_size=args.recurrence_chunk_size)
 
     mx.set_wired_limit(mx.device_info()["max_recommended_working_set_size"])
     world = mx.distributed.init()

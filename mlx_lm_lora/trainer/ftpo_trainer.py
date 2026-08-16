@@ -191,7 +191,7 @@ def train_ftpo(
     training_callback: TrainingCallback = None,
 ):
     if model_uses_recurrence(model):
-        enable_memory_safe_recurrences()
+        enable_memory_safe_recurrences(chunk_size=args.recurrence_chunk_size)
     if ref_model is None:
         raise ValueError("FTPO requires a frozen reference model")
     if args.gradient_accumulation_steps < 1:
