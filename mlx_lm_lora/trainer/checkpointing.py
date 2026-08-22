@@ -33,6 +33,7 @@ def save_training_checkpoint(
     optimizer_step: int,
     grad_accum=None,
     trained_tokens: int = 0,
+    reporting_state: dict | None = None,
 ) -> Path:
     """Atomically save all state needed to continue a training loop."""
     path = Path(path)
@@ -66,6 +67,10 @@ def save_training_checkpoint(
         "optimizer_step": optimizer_step,
         "trained_tokens": int(trained_tokens),
         "has_grad_accum": grad_accum is not None,
+        # Metrics accumulated since the previous report do not affect model
+        # updates, but restoring them makes the next report continuous and
+        # keeps trained-token accounting correct after a mid-window resume.
+        "reporting_state": reporting_state or {},
         "numpy_random_state": {
             "algorithm": np_state[0],
             "keys": np_state[1].tolist(),

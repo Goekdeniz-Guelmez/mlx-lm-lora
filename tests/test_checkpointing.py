@@ -35,6 +35,7 @@ class CheckpointingTest(unittest.TestCase):
                 optimizer_step=1,
                 grad_accum=gradients,
                 trained_tokens=123,
+                reporting_state={"losses": 1.25, "n_tokens": 42.0, "steps": 3},
             )
 
             model.update({"weight": mx.zeros_like(model.weight)})
@@ -47,5 +48,9 @@ class CheckpointingTest(unittest.TestCase):
         self.assertEqual(restored["trained_tokens"], 123)
         self.assertEqual(optimizer.step.item(), 1)
         self.assertIsNotNone(restored["grad_accum"])
+        self.assertEqual(
+            restored["reporting_state"],
+            {"losses": 1.25, "n_tokens": 42.0, "steps": 3},
+        )
         for name, value in tree_flatten(model.trainable_parameters()):
             self.assertTrue(mx.array_equal(value, saved_weights[name]).item())

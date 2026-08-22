@@ -26,6 +26,11 @@ from .datasets import CacheDataset
 _CHUNKED_NLL_CHUNK_SIZE = 256
 
 
+def _checkpoint_scalar(value) -> float:
+    """Convert an already-evaluated MLX scalar (or Python number) for JSON."""
+    return float(value.item()) if hasattr(value, "item") else float(value)
+
+
 def reset_prompt_cache(cache):
     if cache is None:
         return None
@@ -572,6 +577,10 @@ def train_sft(
         opt_step = checkpoint_state["optimizer_step"]
         trained_tokens = checkpoint_state["trained_tokens"]
         grad_accum = checkpoint_state["grad_accum"]
+        reporting_state = checkpoint_state.get("reporting_state", {})
+        losses = reporting_state.get("losses", losses)
+        n_tokens = reporting_state.get("n_tokens", n_tokens)
+        steps = reporting_state.get("steps", steps)
 
     if args.qat_enable and opt_step >= args.qat_start_step:
         _install_qat_hooks(model, args)
@@ -668,7 +677,7 @@ def train_sft(
             train_loss /= steps * world_size
             n_tokens = mx.distributed.all_sum(n_tokens, stream=mx.cpu).item()
             learning_rate = optimizer.learning_rate.item()
-            it_sec = args.steps_per_report / train_time
+            it_sec = steps / train_time
             tokens_sec = float(n_tokens) / train_time
             trained_tokens += n_tokens
             peak_mem = mx.get_peak_memory() / 1e9
@@ -724,6 +733,11 @@ def train_sft(
                 optimizer_step=opt_step,
                 grad_accum=grad_accum,
                 trained_tokens=trained_tokens,
+                reporting_state={
+                    "losses": _checkpoint_scalar(losses),
+                    "n_tokens": _checkpoint_scalar(n_tokens),
+                    "steps": steps,
+                },
             )
             tqdm.write(
                 f"\n"
@@ -743,6 +757,11 @@ def train_sft(
             optimizer_step=opt_step,
             grad_accum=grad_accum,
             trained_tokens=trained_tokens,
+            reporting_state={
+                "losses": _checkpoint_scalar(losses),
+                "n_tokens": _checkpoint_scalar(n_tokens),
+                "steps": steps,
+            },
         )
         tqdm.write(
             f"Saved final weights to {args.adapter_file} and full state to "
