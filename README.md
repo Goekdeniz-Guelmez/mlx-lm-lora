@@ -660,8 +660,25 @@ See [QAT section above](#quantization-aware-training-qat) for usage examples.
 --adapter-path ./adapters        # Save/load path for adapters
 --save-every 100                 # Save frequency
 --resume-adapter-file <path>     # Resume from checkpoint
+--resume-checkpoint <directory>  # Resume full training state (SFT)
 --fuse                           # Fuse and save trained model
 ```
+
+SFT checkpoints are written every `--save-every` iterations as
+`NNNNNNN_training_checkpoint/`, plus `final_training_checkpoint/` at clean exit.
+They contain trainable model parameters, optimizer/scheduler state, MLX and NumPy
+random state, iteration counters, and partially accumulated gradients. Resume to
+the original total iteration target, for example:
+
+```bash
+mlx_lm_lora.train --config config.yaml \
+  --resume-checkpoint adapters/0000500_training_checkpoint --iters 1000
+```
+
+With `--train-type full`, trained parameters are saved as `model.safetensors`
+with `config.json` and tokenizer files; no `adapters.safetensors` or
+`adapter_config.json` is created. Periodic weight snapshots use names such as
+`0000500_model.safetensors`. LoRA and DoRA runs retain the adapter filenames.
 
 ### Algorithm-Specific Parameters
 
