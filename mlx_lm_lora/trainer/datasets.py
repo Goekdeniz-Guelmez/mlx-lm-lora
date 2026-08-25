@@ -205,12 +205,12 @@ class DPODataset:
 
             self._chosen_data.append(
                 tokenizer.apply_chat_template(
-                    chosen_messages, add_generation_prompt=True
+                    chosen_messages, add_generation_prompt=False
                 )
             )
             self._rejected_data.append(
                 tokenizer.apply_chat_template(
-                    rejected_messages, add_generation_prompt=True
+                    rejected_messages, add_generation_prompt=False
                 )
             )
 
