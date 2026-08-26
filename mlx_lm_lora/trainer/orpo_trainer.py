@@ -14,6 +14,7 @@ from mlx_lm.tuner.callbacks import TrainingCallback
 from tqdm import tqdm
 
 from ..recurrent_patch import enable_memory_safe_recurrences, model_uses_recurrence
+from .long_context import iter_cached_sft_chunks
 from .sft_trainer import (
     SFTTrainingArgs,
     _install_qat_hooks,
@@ -377,13 +378,9 @@ def train_orpo(
 
             reset_prompt_cache(cache)
 
-            for s in range(0, seq_length, seq_step_size):
-                end = min(s + seq_step_size, seq_length)
-                if 0 < (seq_length - end) < 2:
-                    end = seq_length
-
-                chunk = tokens[:, s:end]
-                chunk_mask = masks[:, s:end]
+            for start, end in iter_cached_sft_chunks(seq_length, seq_step_size):
+                chunk = tokens[:, start:end]
+                chunk_mask = masks[:, start:end]
 
                 chunk_avg, chunk_logits_mean = get_logps(
                     model, chunk, chunk_mask, cache
@@ -461,13 +458,9 @@ def train_orpo(
 
             chunk_value_and_grad = nn.value_and_grad(model, chunk_loss_fn)
 
-            for s in range(0, seq_length, seq_step_size):
-                end = min(s + seq_step_size, seq_length)
-                if 0 < (seq_length - end) < 2:
-                    end = seq_length
-
-                chunk = tokens[:, s:end]
-                chunk_mask = masks[:, s:end]
+            for start, end in iter_cached_sft_chunks(seq_length, seq_step_size):
+                chunk = tokens[:, start:end]
+                chunk_mask = masks[:, start:end]
 
                 _, grad = chunk_value_and_grad(chunk, chunk_mask, weights)
 

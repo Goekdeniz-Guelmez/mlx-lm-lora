@@ -21,6 +21,7 @@ from tqdm import tqdm
 
 from ..recurrent_patch import enable_memory_safe_recurrences, model_uses_recurrence
 from .datasets import CacheDataset
+from .long_context import iter_cached_sft_chunks
 
 _CHUNKED_NLL_CHUNK_SIZE = 256
 
@@ -404,12 +405,8 @@ def evaluate_sft(
     ):
         if efficient and cache is not None:
             seq_length = batch[0].shape[1]
-            for s in range(0, seq_length, seq_step_size):
-                end = min(s + seq_step_size, seq_length)
-                # If next chunk would have only 1 token, absorb it into this chunk
-                if 0 < (seq_length - end) < 2:
-                    end = seq_length
-                local_batch = (batch[0][:, s:end], batch[1])
+            for start, end in iter_cached_sft_chunks(seq_length, seq_step_size):
+                local_batch = (batch[0][:, start:end], batch[1])
                 losses, toks = loss(model, *local_batch, cache)
                 all_losses += losses * toks
                 ntokens += toks
@@ -499,21 +496,23 @@ def train_sft(
         seq_length = batch[0].shape[1]
         seq_grad_accum = None
 
-        for s in range(0, seq_length, seq_step_size):
-            end = min(s + seq_step_size, seq_length)
-            # If next chunk would have only 1 token, absorb it into this chunk
-            if 0 < (seq_length - end) < 2:
-                end = seq_length
-            local_batch = (batch[0][:, s:end], batch[1])
+        for start, end in iter_cached_sft_chunks(seq_length, seq_step_size):
+            local_batch = (batch[0][:, start:end], batch[1])
             (lvalue, toks), grad = loss_value_and_grad(model, *local_batch, cache)
+            prev_n_tokens = n_tokens
             losses += toks * lvalue
             n_tokens += toks
 
-            # Simple gradient summation (no weighted averaging)
             if seq_grad_accum is None:
                 seq_grad_accum = grad
             else:
-                seq_grad_accum = tree_map(lambda g, acc: g + acc, grad, seq_grad_accum)
+                scale_grad = toks / n_tokens
+                scale_accum = prev_n_tokens / n_tokens
+                seq_grad_accum = tree_map(
+                    lambda g, acc: scale_grad * g + scale_accum * acc,
+                    grad,
+                    seq_grad_accum,
+                )
 
             # Reset prompt cache before the last eval
             if end >= seq_length:
@@ -526,8 +525,7 @@ def train_sft(
 
         lvalue = losses / n_tokens
         toks = n_tokens
-        num_chunks = (seq_length + seq_step_size - 1) // seq_step_size
-        grad = tree_map(lambda g: g / num_chunks, seq_grad_accum)
+        grad = seq_grad_accum
 
         # Handle gradient accumulation across steps
         if prev_grad is not None:
