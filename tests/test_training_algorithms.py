@@ -15,6 +15,7 @@ from mlx_lm_lora.trainer import (
     sft_trainer,
     xpo_trainer,
 )
+from mlx_lm_lora.trainer.long_context import iter_cached_sft_chunks
 
 
 def _scalar(value):
@@ -88,6 +89,18 @@ class SFTTrainerTest(unittest.TestCase):
 
         self.assertEqual(sft_trainer._find_cache_offset([None, [Cache()]]), 7)
         self.assertIsNone(sft_trainer._find_cache_offset(None))
+
+    def test_sequence_chunks_preserve_every_next_token_target(self):
+        bounds = list(iter_cached_sft_chunks(2049, 512))
+        self.assertEqual(
+            bounds,
+            [(0, 512), (511, 1024), (1023, 1536), (1535, 2049)],
+        )
+
+        predicted_targets = [
+            target for start, end in bounds for target in range(start + 1, end)
+        ]
+        self.assertEqual(predicted_targets, list(range(1, 2049)))
 
     def test_reset_prompt_cache_calls_reset_protocol(self):
         class Cache:
