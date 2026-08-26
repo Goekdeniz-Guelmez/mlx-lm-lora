@@ -42,7 +42,10 @@ def get_logps(model, tokens, mask, cache=None):
     log_probs = -nn.losses.cross_entropy(logits, targets, reduction="none")
     log_probs = mx.clip(log_probs, -1000.0, 0.0)
 
-    mask = mask[:, :-1]
+    # A logit at position t predicts token t + 1.  Require both the input
+    # position and its next-token target to be valid, so right padding is not
+    # scored as part of a shorter sequence.
+    mask = mask[:, :-1] * mask[:, 1:]
     seq_lengths = mask.sum(-1)
     logp_sum = (log_probs * mask).sum(-1)
     safe_seq_lengths = mx.where(seq_lengths > 0, seq_lengths, 1.0)
