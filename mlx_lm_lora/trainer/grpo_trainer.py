@@ -745,7 +745,7 @@ def evaluate_grpo(
             for k, v in metrics.items():
                 all_metrics[k] += v * toks
 
-    mx.eval(all_losses, ntokens)
+        mx.eval(all_losses, ntokens, *all_metrics.values())
 
     all_losses = mx.distributed.all_sum(all_losses, stream=mx.cpu)
     ntokens = mx.distributed.all_sum(ntokens, stream=mx.cpu)

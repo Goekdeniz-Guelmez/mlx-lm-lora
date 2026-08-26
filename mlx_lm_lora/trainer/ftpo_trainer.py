@@ -174,10 +174,10 @@ def evaluate_ftpo(
             if totals is None
             else {k: totals[k] + v for k, v in metrics.items()}
         )
+        mx.eval(total_loss, *totals.values())
         count += 1
     if count == 0:
         raise ValueError("No FTPO evaluation batches available")
-    mx.eval(total_loss, *totals.values())
     return total_loss.item() / count, {k: v / count for k, v in totals.items()}
 
 
