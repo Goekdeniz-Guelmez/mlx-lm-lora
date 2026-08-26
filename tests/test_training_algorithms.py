@@ -285,7 +285,7 @@ class ORPOTrainerTest(unittest.TestCase):
         )
         self.assertTrue(mx.isfinite(loss).item())
         self.assertTrue(mx.all(mx.isfinite(reward)).item())
-        self.assertEqual(_scalar(tokens), 10.0)
+        self.assertEqual(_scalar(tokens), 6.0)
         self.assertIn("rejected_logits_mean", metrics)
 
     def test_orpo_loss_matches_sft_plus_odds_ratio_objective(self):
@@ -344,6 +344,37 @@ class ORPOTrainerTest(unittest.TestCase):
         batch = next(orpo_trainer.iterate_orpo_batches(data, 2, 8))
         self.assertEqual(batch[0].shape, (2, 8))
         self.assertTrue(mx.allclose(batch[4], mx.array([0.75, 0.25])).item())
+
+    def test_orpo_batch_iterator_masks_only_response_targets(self):
+        data = [
+            {
+                "chosen": [1, 2, 3],
+                "rejected": [1, 2, 4, 5],
+                "chosen_prompt_length": 2,
+                "rejected_prompt_length": 2,
+            },
+            {
+                "chosen": [6, 7, 8, 9],
+                "rejected": [6, 7, 10],
+                "chosen_prompt_length": 1,
+                "rejected_prompt_length": 1,
+            },
+        ]
+        _, _, chosen_masks, rejected_masks, _ = next(
+            orpo_trainer.iterate_orpo_batches(data, 2, 8)
+        )
+        self.assertTrue(
+            mx.array_equal(
+                chosen_masks,
+                mx.array([[0, 0, 1, 0, 0, 0, 0, 0], [0, 1, 1, 1, 0, 0, 0, 0]]),
+            ).item()
+        )
+        self.assertTrue(
+            mx.array_equal(
+                rejected_masks,
+                mx.array([[0, 0, 1, 1, 0, 0, 0, 0], [0, 1, 1, 0, 0, 0, 0, 0]]),
+            ).item()
+        )
 
 
 class PPOTrainerTest(unittest.TestCase):
