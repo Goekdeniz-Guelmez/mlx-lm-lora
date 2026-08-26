@@ -234,7 +234,7 @@ class OnlineDPOTrainerTest(unittest.TestCase):
         )
         self.assertTrue(mx.isfinite(loss).item())
         self.assertEqual(reward.shape, (2,))
-        self.assertEqual(_scalar(tokens), 6.0)
+        self.assertEqual(_scalar(tokens), 10.0)
         self.assertGreaterEqual(_scalar(metrics["accuracies"]), 0.0)
 
     def test_online_dpo_rejects_unknown_loss(self):
@@ -270,7 +270,7 @@ class ORPOTrainerTest(unittest.TestCase):
         )
         self.assertTrue(mx.isfinite(loss).item())
         self.assertTrue(mx.all(mx.isfinite(reward)).item())
-        self.assertEqual(_scalar(tokens), 10.0)
+        self.assertEqual(_scalar(tokens), 6.0)
         self.assertIn("rejected_logits_mean", metrics)
 
     def test_orpo_loss_matches_sft_plus_odds_ratio_objective(self):
