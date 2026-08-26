@@ -14,6 +14,7 @@ from tqdm import tqdm
 
 from ..recurrent_patch import enable_memory_safe_recurrences, model_uses_recurrence
 from .dpo_trainer import DPOTrainingArgs as CPOTrainingArgs
+from .long_context import iter_cached_sft_chunks
 from .sft_trainer import grad_checkpoint, reset_prompt_cache
 
 
@@ -318,14 +319,9 @@ def train_cpo(
             if curr_cache is not None:
                 reset_prompt_cache(curr_cache)
 
-            step_size = seq_step_size
-            for s in range(0, seq_length, step_size):
-                end = min(s + step_size, seq_length)
-                if 0 < (seq_length - end) < 2:
-                    end = seq_length
-
-                chunk = tokens[:, s:end]
-                chunk_mask = masks[:, s:end]
+            for start, end in iter_cached_sft_chunks(seq_length, seq_step_size):
+                chunk = tokens[:, start:end]
+                chunk_mask = masks[:, start:end]
 
                 chunk_scores = get_token_scores(
                     curr_model, chunk, chunk_mask, cache=curr_cache
@@ -391,14 +387,9 @@ def train_cpo(
             seq_length = tokens.shape[1]
             reset_prompt_cache(cache)
 
-            step_size = seq_step_size
-            for s in range(0, seq_length, step_size):
-                end = min(s + step_size, seq_length)
-                if 0 < (seq_length - end) < 2:
-                    end = seq_length
-
-                chunk = tokens[:, s:end]
-                chunk_mask = masks[:, s:end]
+            for start, end in iter_cached_sft_chunks(seq_length, seq_step_size):
+                chunk = tokens[:, start:end]
+                chunk_mask = masks[:, start:end]
 
                 def local_loss_fn(model):
                     local_sum = get_token_scores(
