@@ -257,6 +257,21 @@ class ORPOTrainerTest(unittest.TestCase):
         self.assertEqual(args.beta, 0.1)
         self.assertEqual(args.reward_scaling, 1.0)
 
+    def test_get_logps_excludes_right_padding_target(self):
+        class FixedLogitsModel:
+            def __call__(self, inputs, cache=None):
+                del cache
+                return mx.array([[[0.0, 0.0, 2.0], [2.0, 0.0, 0.0], [2.0, 0.0, 0.0]]])
+
+        tokens = mx.array([[1, 2, 0, 0]])
+        mask = mx.array([[1.0, 1.0, 0.0, 0.0]])
+        logps, _ = orpo_trainer.get_logps(FixedLogitsModel(), tokens, mask)
+
+        expected = -nn.losses.cross_entropy(
+            mx.array([[[0.0, 0.0, 2.0]]]), mx.array([[2]]), reduction="none"
+        )
+        self.assertTrue(mx.allclose(logps, expected[:, 0]).item())
+
     def test_orpo_loss_is_finite_with_nonfinite_inputs(self):
         loss, reward, tokens, metrics = orpo_trainer.orpo_loss(
             chosen_logps=mx.array([float("nan"), -1.0]),
