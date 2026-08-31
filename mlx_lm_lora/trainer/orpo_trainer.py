@@ -42,7 +42,11 @@ def get_logps(model, tokens, mask, cache=None):
     log_probs = -nn.losses.cross_entropy(logits, targets, reduction="none")
     log_probs = mx.clip(log_probs, -1000.0, 0.0)
 
-    mask = mask[:, :-1]
+    # A logit at position t predicts token t + 1.  Require both the input
+    # position and its next-token target to be valid, so right padding is not
+    # scored as part of a shorter sequence.
+    mask = mask[:, :-1] * mask[:, 1:]
+
     seq_lengths = mask.sum(-1)
     logp_sum = (log_probs * mask).sum(-1)
     safe_seq_lengths = mx.where(seq_lengths > 0, seq_lengths, 1.0)
@@ -91,7 +95,7 @@ def orpo_loss(
     rejected_reward = beta * rejected_logps
     reward = mx.stack([mx.mean(chosen_reward), mx.mean(rejected_reward)])
 
-    num_tokens = chosen_masks.sum() + rejected_masks.sum()
+    num_tokens = chosen_masks[:, 1:].sum() + rejected_masks[:, 1:].sum()
 
     metrics = {
         "accuracies": mx.mean((chosen_reward > rejected_reward).astype(mx.float32)),
@@ -188,11 +192,17 @@ def iterate_orpo_batches(dataset, batch_size, max_seq_length, train=False):
                 rejected_length = min(rejected_lengths[j], max_length_in_batch)
 
                 chosen_arr[j, :chosen_length] = batch[j]["chosen"][:chosen_length]
-                chosen_masks[j, :chosen_length] = 1.0
+                chosen_prompt_length = min(
+                    batch[j].get("chosen_prompt_length", 0), chosen_length
+                )
+                chosen_masks[j, chosen_prompt_length:chosen_length] = 1.0
                 rejected_arr[j, :rejected_length] = batch[j]["rejected"][
                     :rejected_length
                 ]
-                rejected_masks[j, :rejected_length] = 1.0
+                rejected_prompt_length = min(
+                    batch[j].get("rejected_prompt_length", 0), rejected_length
+                )
+                rejected_masks[j, rejected_prompt_length:rejected_length] = 1.0
 
             yield (
                 mx.array(chosen_arr),
@@ -251,7 +261,7 @@ def evaluate_orpo(
             for k, v in metrics.items():
                 all_metrics[k] += v * toks
 
-    mx.eval(all_losses, all_rewards, ntokens)
+        mx.eval(all_losses, all_rewards, ntokens, *all_metrics.values())
     all_losses = mx.distributed.all_sum(all_losses)
     all_rewards = mx.distributed.all_sum(all_rewards)
     ntokens = mx.distributed.all_sum(ntokens)
@@ -386,7 +396,7 @@ def train_orpo(
                     model, chunk, chunk_mask, cache
                 )
 
-                chunk_input_mask = chunk_mask[:, :-1]
+                chunk_input_mask = chunk_mask[:, 1:]
                 chunk_lens = chunk_input_mask.sum(-1)
 
                 logp_sum += chunk_avg * chunk_lens
@@ -406,8 +416,8 @@ def train_orpo(
         c_logp_sum, c_logits_mean = compute_logps_chunked(chosen, chosen_masks)
         r_logp_sum, r_logits_mean = compute_logps_chunked(rejected, rejected_masks)
 
-        c_lens = chosen_masks[:, :-1].sum(-1)
-        r_lens = rejected_masks[:, :-1].sum(-1)
+        c_lens = chosen_masks[:, 1:].sum(-1)
+        r_lens = rejected_masks[:, 1:].sum(-1)
         c_lens_safe = mx.where(c_lens > 0, c_lens, 1.0)
         r_lens_safe = mx.where(r_lens > 0, r_lens, 1.0)
 
@@ -452,7 +462,7 @@ def train_orpo(
 
             def chunk_loss_fn(chunk, chunk_mask, weights):
                 chunk_avg, _ = get_logps(model, chunk, chunk_mask, cache)
-                chunk_lens = chunk_mask[:, :-1].sum(-1)
+                chunk_lens = chunk_mask[:, 1:].sum(-1)
                 chunk_sum = chunk_avg * chunk_lens
                 return (chunk_sum * weights).sum()
 

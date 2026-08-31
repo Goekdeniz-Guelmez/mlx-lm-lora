@@ -317,7 +317,7 @@ def evaluate_xpo(
             for k, v in metrics.items():
                 all_metrics[k] += v * toks
 
-    mx.eval(all_losses, all_rewards, ntokens)
+        mx.eval(all_losses, all_rewards, ntokens, *all_metrics.values())
 
     # Distributed reduction
     all_losses = mx.distributed.all_sum(all_losses)
