@@ -376,13 +376,26 @@ Create a Python file with reward functions:
 
 ```python
 # my_rewards.py
-from mlx_lm_lora.reward_functions import register_reward_function
+from typing import Optional
+
+from mlx_lm_lora.trainer.grpo_reward_functions import register_reward_function
+
 
 @register_reward_function()
-def my_custom_reward(prompt, completion, reference_answer, **kwargs):
-    """Custom reward function"""
-    # Your logic here
-    return score  # float between 0 and 1
+def my_custom_reward(
+    prompts: list, completions: list, answer: list, types: Optional[list] = None
+) -> list[float]:
+    """Score a whole batch of completions.
+
+    Reward functions are called with keyword arguments
+    (`prompts=`, `completions=`, `answer=`, `types=`), so these parameter names
+    must match exactly -- note that `answer` is singular. Each call receives the
+    full batch and must return one float per entry in `completions`.
+    """
+    return [
+        1.0 if str(a).strip() and str(a).strip() in c else 0.0
+        for c, a in zip(completions, answer)
+    ]
 ```
 
 Then use: `--reward-functions-file ./my_rewards.py --reward-functions "my_custom_reward"`

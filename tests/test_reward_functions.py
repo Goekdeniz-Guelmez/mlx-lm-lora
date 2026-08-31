@@ -23,11 +23,30 @@ class RewardRegistryTest(unittest.TestCase):
         name = "test_custom_reward"
 
         @rewards.register_reward_function(name)
-        def custom(prompts, completions, answers, types=None):
+        def custom(prompts, completions, answer, types=None):
             return [1.0] * len(completions)
 
         self.assertIs(rewards.get_reward_function(name), custom)
         rewards.REWARD_REGISTRY.pop(name)
+
+    def test_registered_rewards_accept_the_trainer_keyword_contract(self):
+        """calculate_rewards_and_advantages passes every argument by keyword.
+
+        A reward function whose third parameter is named anything other than
+        `answer` therefore raises TypeError on the first training step rather
+        than at registration, which is a long way from where the mistake was
+        made. Pin the call shape here so a rename cannot pass the suite.
+        """
+        batch = {
+            "prompts": ["<answer>1</answer>"],
+            "completions": ["<reasoning>r</reasoning>\n<answer>1</answer>\n"],
+            "answer": ["1"],
+            "types": [None],
+        }
+        for name in rewards.list_available_reward_functions():
+            with self.subTest(reward=name):
+                scores = rewards.get_reward_function(name)(**batch)
+                self.assertEqual(len(scores), len(batch["completions"]))
 
     def test_default_rewards_are_in_expected_order(self):
         self.assertEqual(
