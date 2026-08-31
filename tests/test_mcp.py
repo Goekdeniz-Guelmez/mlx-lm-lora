@@ -24,6 +24,14 @@ class McpTenantTest(unittest.TestCase):
         with self.assertRaises(PermissionError):
             tenants.resolve_tenant("beta")
 
+    def test_pinned_tenant_rejects_other_authenticated_tenant(self):
+        settings = mcp.ServerSettings(
+            tenant_root=Path("/tmp/tenants"), tenant_id="acme"
+        )
+        tenants = mcp.TenantManager(settings)
+        with self.assertRaises(PermissionError):
+            tenants.resolve_tenant(None, "beta")
+
     def test_tenant_path_cannot_escape_workspace(self):
         with tempfile.TemporaryDirectory() as root:
             tenants = mcp.TenantManager(self.make_settings(root))
@@ -57,6 +65,21 @@ class McpTenantTest(unittest.TestCase):
                         "model": "org/model",
                         "data": "org/dataset",
                         "adapter_path": "../escape",
+                    },
+                    "acme",
+                    tenants,
+                    "a" * 32,
+                )
+
+    def test_training_config_rejects_invalid_cli_values(self):
+        with tempfile.TemporaryDirectory() as root:
+            tenants = mcp.TenantManager(self.make_settings(root))
+            with self.assertRaises(ValueError):
+                mcp.normalize_training_config(
+                    {
+                        "model": "org/model",
+                        "data": "org/dataset",
+                        "train_mode": "not-a-mode",
                     },
                     "acme",
                     tenants,

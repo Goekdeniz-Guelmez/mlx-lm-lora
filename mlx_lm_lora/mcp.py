@@ -21,11 +21,12 @@ import re
 import threading
 import traceback
 import uuid
+from collections.abc import Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, Mapping, Optional, Sequence, Tuple
+from typing import Any
 
 try:
     from mcp.server.fastmcp import FastMCP
@@ -158,13 +159,13 @@ def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
     os.replace(temporary_path, path)
 
 
-def _read_json(path: Path) -> Dict[str, Any]:
+def _read_json(path: Path) -> dict[str, Any]:
     """Read a JSON object from ``path``."""
 
     with path.open(encoding="utf-8") as input_file:
         value = json.load(input_file)
     if not isinstance(value, dict):
-        raise ValueError(f"Expected a JSON object in {path}")
+        raise TypeError(f"Expected a JSON object in {path}")
     return value
 
 
@@ -219,15 +220,15 @@ class ServerSettings:
     tenant_root: Path = field(
         default_factory=lambda: Path("~/.mlx-lm-lora/tenants").expanduser()
     )
-    tenant_id: Optional[str] = None
-    allowed_tenants: Optional[frozenset] = None
-    shared_root: Optional[Path] = None
+    tenant_id: str | None = None
+    allowed_tenants: frozenset | None = None
+    shared_root: Path | None = None
     transport: str = "stdio"
     host: str = "127.0.0.1"
     port: int = 8000
     auth_tokens: Mapping[str, str] = field(default_factory=dict)
-    auth_issuer_url: Optional[str] = None
-    auth_resource_url: Optional[str] = None
+    auth_issuer_url: str | None = None
+    auth_resource_url: str | None = None
     stateless_http: bool = True
     json_response: bool = True
 
@@ -253,7 +254,7 @@ class ServerSettings:
             validate_tenant_id(token_tenant)
 
     @classmethod
-    def from_environment(cls) -> "ServerSettings":
+    def from_environment(cls) -> ServerSettings:
         """Build settings from environment variables.
 
         Environment variables are used instead of putting tenant roots or
@@ -271,7 +272,7 @@ class ServerSettings:
             )
 
         tokens_value = os.environ.get("MLX_LM_LORA_AUTH_TOKENS_JSON", "")
-        auth_tokens: Dict[str, str] = {}
+        auth_tokens: dict[str, str] = {}
         if tokens_value:
             try:
                 decoded_tokens = json.loads(tokens_value)
@@ -288,7 +289,7 @@ class ServerSettings:
                         "Authentication token keys must be non-empty strings"
                     )
                 if not isinstance(token_tenant, str):
-                    raise ValueError("Authentication token tenant IDs must be strings")
+                    raise TypeError("Authentication token tenant IDs must be strings")
                 auth_tokens[token] = validate_tenant_id(token_tenant)
 
         tenant_id = os.environ.get("MLX_LM_LORA_TENANT_ID")
@@ -326,8 +327,8 @@ class TenantManager:
 
     def resolve_tenant(
         self,
-        requested_tenant_id: Optional[str],
-        authenticated_tenant_id: Optional[str] = None,
+        requested_tenant_id: str | None,
+        authenticated_tenant_id: str | None = None,
     ) -> str:
         """Resolve a requested tenant and enforce process/authentication pinning."""
 
@@ -345,6 +346,10 @@ class TenantManager:
 
         if configured and requested and configured != requested:
             raise PermissionError("The MCP process is pinned to another tenant")
+        if configured and authenticated and configured != authenticated:
+            raise PermissionError(
+                "The authenticated principal cannot access this tenant"
+            )
         if authenticated and requested and authenticated != requested:
             raise PermissionError(
                 "The authenticated principal cannot access this tenant"
@@ -357,7 +362,7 @@ class TenantManager:
                 "single-tenant agent or pass tenant_id for a shared server"
             )
         if (
-            self.settings.allowed_tenants
+            self.settings.allowed_tenants is not None
             and resolved not in self.settings.allowed_tenants
         ):
             raise PermissionError("Tenant is not allowed by the server policy")
@@ -390,7 +395,7 @@ class TenantManager:
             raise TenantError("Tenant paths must contain a relative path")
         return _resolve_inside(workspace, workspace / relative_value)
 
-    def approved_input_roots(self, tenant_id: str) -> Tuple[Path, ...]:
+    def approved_input_roots(self, tenant_id: str) -> tuple[Path, ...]:
         """Return roots allowed for local model/dataset inputs."""
 
         roots = [self.workspace(tenant_id, create=False)]
@@ -404,26 +409,20 @@ def _is_local_reference(value: str) -> bool:
 
     path = Path(value).expanduser()
     return (
-        value.startswith("tenant://")
+        value.startswith(("tenant://", "./", "../"))
         or path.is_absolute()
-        or value.startswith("./")
-        or value.startswith("../")
         or path.exists()
     )
 
 
 def _normalize_local_reference(
-    value: Any, label: str, tenant_id: str, tenants: TenantManager
+    value: Any, tenant_id: str, tenants: TenantManager
 ) -> Any:
     """Normalize an explicit local input without changing Hub identifiers."""
 
     if not isinstance(value, str) or not _is_local_reference(value):
         return value
-    if (
-        value.startswith("tenant://")
-        or value.startswith("./")
-        or value.startswith("../")
-    ):
+    if value.startswith(("tenant://", "./", "../")):
         return str(tenants.tenant_path(tenant_id, value))
     return str(_resolve_in_roots(value, tenants.approved_input_roots(tenant_id)))
 
@@ -433,7 +432,7 @@ def normalize_training_config(
     tenant_id: str,
     tenants: TenantManager,
     job_id: str,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Validate and normalize a training request for one tenant.
 
     The returned mapping can be passed directly to ``mlx_lm_lora.train.main``.
@@ -443,7 +442,7 @@ def normalize_training_config(
     """
 
     if not isinstance(config, Mapping):
-        raise ValueError("config must be a JSON object")
+        raise TypeError("config must be a JSON object")
     config_keys = set(config)
     unsupported_keys = sorted(config_keys - TRAINING_CONFIG_KEYS)
     if unsupported_keys:
@@ -465,13 +464,63 @@ def normalize_training_config(
         raise ValueError("config.data is required")
 
     tenants.workspace(tenant_id, create=True)
-    normalized["model"] = _normalize_local_reference(model, "model", tenant_id, tenants)
-    normalized["data"] = _normalize_local_reference(data, "data", tenant_id, tenants)
+    normalized["model"] = _normalize_local_reference(model, tenant_id, tenants)
+    normalized["data"] = _normalize_local_reference(data, tenant_id, tenants)
+
+    choice_fields = {
+        "train_mode": TRAINING_MODES,
+        "train_type": TRAINING_TYPES,
+        "optimizer": ("adam", "adamw", "muon"),
+        "sft_loss_type": ("nll", "chunked_nll", "dft"),
+        "dpo_cpo_loss_type": ("sigmoid", "hinge", "ipo", "dpop"),
+        "grpo_loss_type": ("grpo", "bnpo", "dr_grpo"),
+        "importance_sampling_level": ("token", "sequence"),
+        "qat_mode": ("affine",),
+    }
+    for key, choices in choice_fields.items():
+        if (
+            key in normalized
+            and normalized[key] is not None
+            and normalized[key] not in choices
+        ):
+            raise ValueError(f"{key} must be one of {', '.join(choices)}")
+    for key in (
+        "batch_size",
+        "gradient_accumulation_steps",
+        "steps_per_report",
+        "steps_per_eval",
+        "save_every",
+        "max_seq_length",
+        "group_size",
+        "max_completion_length",
+        "qat_bits",
+        "qat_group_size",
+        "qat_start_step",
+        "qat_interval",
+    ):
+        value = normalized.get(key)
+        if value is not None and (
+            isinstance(value, bool) or not isinstance(value, int) or value < 1
+        ):
+            raise ValueError(f"{key} must be a positive integer")
+    for key in ("iters", "epochs"):
+        value = normalized.get(key)
+        if value is not None and (
+            isinstance(value, bool) or not isinstance(value, int) or value < 1
+        ):
+            raise ValueError(f"{key} must be a positive integer")
+    learning_rate = normalized.get("learning_rate")
+    if learning_rate is not None and (
+        isinstance(learning_rate, bool)
+        or not isinstance(learning_rate, (int, float))
+        or learning_rate <= 0
+    ):
+        raise ValueError("learning_rate must be a positive number")
 
     for key in ("reference_model_path", "judge"):
         if key in normalized and normalized[key] is not None:
             normalized[key] = _normalize_local_reference(
-                normalized[key], key, tenant_id, tenants
+                normalized[key], tenant_id, tenants
             )
     for key in ("resume_adapter_file", "reward_functions_file"):
         if key in normalized and normalized[key] is not None:
@@ -494,11 +543,16 @@ def normalize_training_config(
     else:
         if not isinstance(adapter_path, str):
             raise ValueError("adapter_path must be a path string")
-        normalized["adapter_path"] = str(
-            _resolve_inside(workspace, workspace / adapter_path)
-            if not Path(adapter_path).expanduser().is_absolute()
-            else _resolve_inside(workspace, Path(adapter_path))
-        )
+        if adapter_path.startswith("tenant://"):
+            normalized["adapter_path"] = str(
+                tenants.tenant_path(tenant_id, adapter_path)
+            )
+        else:
+            normalized["adapter_path"] = str(
+                _resolve_inside(workspace, workspace / adapter_path)
+                if not Path(adapter_path).expanduser().is_absolute()
+                else _resolve_inside(workspace, Path(adapter_path))
+            )
 
     if normalized.get("lm_studio_name"):
         raise ValueError(
@@ -519,11 +573,11 @@ class JobRecord:
     submitted_at: str
     run_dir: str
     adapter_path: str
-    started_at: Optional[str] = None
-    completed_at: Optional[str] = None
-    error: Optional[str] = None
+    started_at: str | None = None
+    completed_at: str | None = None
+    error: str | None = None
 
-    def as_dict(self) -> Dict[str, Any]:
+    def as_dict(self) -> dict[str, Any]:
         """Return a JSON-serializable job record."""
 
         return asdict(self)
@@ -537,7 +591,7 @@ class TrainingJobManager:
         self._executor = ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="mlx-train"
         )
-        self._futures: Dict[Tuple[str, str], Future] = {}
+        self._futures: dict[tuple[str, str], Future] = {}
         self._lock = threading.RLock()
 
     def start(self, tenant_id: str, config: Mapping[str, Any]) -> JobRecord:
@@ -577,13 +631,16 @@ class TrainingJobManager:
         self._persist(record)
         log_path = Path(record.run_dir) / "training.log"
         try:
-            with log_path.open("w", encoding="utf-8") as log_file:
-                with contextlib.redirect_stdout(log_file), contextlib.redirect_stderr(
-                    log_file
-                ):
-                    from . import train
+            with log_path.open(
+                "w", encoding="utf-8"
+            ) as log_file, contextlib.redirect_stdout(
+                log_file
+            ), contextlib.redirect_stderr(
+                log_file
+            ):
+                from . import train
 
-                    train.main(dict(config))
+                train.main(dict(config))
         except Exception as exc:  # The worker boundary must persist failures.
             record.status = "failed"
             record.error = f"{type(exc).__name__}: {exc}"
@@ -665,7 +722,7 @@ class TrainingJobManager:
             return record
 
 
-def _authenticated_tenant_id() -> Optional[str]:
+def _authenticated_tenant_id() -> str | None:
     """Return the tenant claim attached by the MCP HTTP auth middleware."""
 
     try:
@@ -709,7 +766,7 @@ class StaticTokenVerifier:
         )
 
 
-def _build_auth_options(settings: ServerSettings) -> Dict[str, Any]:
+def _build_auth_options(settings: ServerSettings) -> dict[str, Any]:
     """Build official MCP SDK HTTP auth options for static bearer tokens."""
 
     if not settings.auth_tokens:
@@ -736,7 +793,7 @@ def _build_auth_options(settings: ServerSettings) -> Dict[str, Any]:
     }
 
 
-def create_server(settings: Optional[ServerSettings] = None) -> Any:
+def create_server(settings: ServerSettings | None = None) -> Any:
     """Create and register the MLX-LM-LoRA MCP server.
 
     Keeping construction in a function avoids importing the MCP SDK or
@@ -761,13 +818,13 @@ def create_server(settings: Optional[ServerSettings] = None) -> Any:
         **_build_auth_options(settings),
     )
 
-    def resolve_tenant(tenant_id: Optional[str]) -> str:
+    def resolve_tenant(tenant_id: str | None) -> str:
         """Resolve the tenant for an MCP tool call."""
 
         return tenants.resolve_tenant(tenant_id, _authenticated_tenant_id())
 
     @server.tool()
-    def mlx_lm_lora_get_capabilities() -> Dict[str, Any]:
+    def mlx_lm_lora_get_capabilities() -> dict[str, Any]:
         """Describe supported training modes and MCP tenant behavior."""
 
         return {
@@ -785,8 +842,8 @@ def create_server(settings: Optional[ServerSettings] = None) -> Any:
 
     @server.tool()
     def mlx_lm_lora_validate_training_config(
-        config: Dict[str, Any], tenant_id: Optional[str] = None
-    ) -> Dict[str, Any]:
+        config: dict[str, Any], tenant_id: str | None = None
+    ) -> dict[str, Any]:
         """Validate a training config without starting a job."""
 
         selected_tenant = resolve_tenant(tenant_id)
@@ -808,8 +865,8 @@ def create_server(settings: Optional[ServerSettings] = None) -> Any:
 
     @server.tool()
     def mlx_lm_lora_start_training(
-        config: Dict[str, Any], tenant_id: Optional[str] = None
-    ) -> Dict[str, Any]:
+        config: dict[str, Any], tenant_id: str | None = None
+    ) -> dict[str, Any]:
         """Queue a tenant-scoped MLX-LM-LoRA training job."""
 
         selected_tenant = resolve_tenant(tenant_id)
@@ -818,8 +875,8 @@ def create_server(settings: Optional[ServerSettings] = None) -> Any:
 
     @server.tool()
     def mlx_lm_lora_get_training_status(
-        job_id: str, tenant_id: Optional[str] = None
-    ) -> Dict[str, Any]:
+        job_id: str, tenant_id: str | None = None
+    ) -> dict[str, Any]:
         """Get status and artifact locations for one tenant's training job."""
 
         selected_tenant = resolve_tenant(tenant_id)
@@ -827,8 +884,8 @@ def create_server(settings: Optional[ServerSettings] = None) -> Any:
 
     @server.tool()
     def mlx_lm_lora_list_training_runs(
-        tenant_id: Optional[str] = None, limit: int = 20
-    ) -> Sequence[Dict[str, Any]]:
+        tenant_id: str | None = None, limit: int = 20
+    ) -> Sequence[dict[str, Any]]:
         """List recent training jobs for one tenant."""
 
         selected_tenant = resolve_tenant(tenant_id)
@@ -836,8 +893,8 @@ def create_server(settings: Optional[ServerSettings] = None) -> Any:
 
     @server.tool()
     def mlx_lm_lora_get_training_log(
-        job_id: str, tenant_id: Optional[str] = None, max_chars: int = 12000
-    ) -> Dict[str, Any]:
+        job_id: str, tenant_id: str | None = None, max_chars: int = 12000
+    ) -> dict[str, Any]:
         """Read a bounded tail of one tenant's training log."""
 
         selected_tenant = resolve_tenant(tenant_id)
@@ -849,8 +906,8 @@ def create_server(settings: Optional[ServerSettings] = None) -> Any:
 
     @server.tool()
     def mlx_lm_lora_cancel_training(
-        job_id: str, tenant_id: Optional[str] = None
-    ) -> Dict[str, Any]:
+        job_id: str, tenant_id: str | None = None
+    ) -> dict[str, Any]:
         """Cancel a queued job before MLX training begins."""
 
         selected_tenant = resolve_tenant(tenant_id)
@@ -887,7 +944,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Allow HTTP on a non-loopback host without bearer-token auth (development only).",
     )
     parser.add_argument("--stateful-http", action="store_true")
-    parser.add_argument("--sse-json-response", action="store_true")
+    parser.add_argument("--json-response", action="store_true")
     parser.add_argument("--log-level", default="INFO")
     return parser
 
@@ -921,7 +978,7 @@ def _settings_from_args(args: argparse.Namespace) -> ServerSettings:
         stateless_http=(
             False if args.stateful_http else environment_settings.stateless_http
         ),
-        json_response=args.sse_json_response or environment_settings.json_response,
+        json_response=args.json_response or environment_settings.json_response,
     )
     if (
         settings.transport == "streamable-http"
@@ -936,7 +993,7 @@ def _settings_from_args(args: argparse.Namespace) -> ServerSettings:
     return settings
 
 
-def main(argv: Optional[Sequence[str]] = None) -> None:
+def main(argv: Sequence[str] | None = None) -> None:
     """Run the MCP server from the terminal."""
 
     args = build_parser().parse_args(argv)

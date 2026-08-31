@@ -235,8 +235,10 @@ Example tool input for SFT:
 
 The agent should call `mlx_lm_lora_validate_training_config` before
 `mlx_lm_lora_start_training`, then poll
-`mlx_lm_lora_get_training_status`. Training jobs are serialized because MLX
-jobs share Apple Silicon unified memory. Training output is redirected to the
+`mlx_lm_lora_get_training_status`. Training jobs are serialized within one
+server process because MLX jobs share Apple Silicon unified memory. Run one
+training worker per Apple host, or add an external queue/lock before scaling
+the HTTP service across processes. Training output is redirected to the
 tenant's `training.log`, so stdio MCP protocol messages remain clean.
 
 ### Streamable HTTP
