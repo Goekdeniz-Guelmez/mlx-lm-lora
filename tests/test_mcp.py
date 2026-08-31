@@ -1,4 +1,3 @@
-import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -18,7 +17,9 @@ class McpTenantTest(unittest.TestCase):
             mcp.validate_tenant_id("../other-tenant")
 
     def test_pinned_tenant_cannot_be_overridden(self):
-        settings = mcp.ServerSettings(tenant_root=Path("/tmp/tenants"), tenant_id="acme")
+        settings = mcp.ServerSettings(
+            tenant_root=Path("/tmp/tenants"), tenant_id="acme"
+        )
         tenants = mcp.TenantManager(settings)
         with self.assertRaises(PermissionError):
             tenants.resolve_tenant("beta")
@@ -52,13 +53,17 @@ class McpTenantTest(unittest.TestCase):
             tenants = mcp.TenantManager(self.make_settings(root))
             with self.assertRaises(mcp.TenantError):
                 mcp.normalize_training_config(
-                    {"model": "org/model", "data": "org/dataset", "adapter_path": "../escape"},
+                    {
+                        "model": "org/model",
+                        "data": "org/dataset",
+                        "adapter_path": "../escape",
+                    },
                     "acme",
                     tenants,
                     "a" * 32,
                 )
 
-    def test_settings_parse_auth_tokens_without_exposing_token_values(self):
+    def test_http_auth_settings_are_tenant_validated(self):
         with tempfile.TemporaryDirectory() as root:
             settings = mcp.ServerSettings(
                 tenant_root=Path(root),
@@ -68,7 +73,6 @@ class McpTenantTest(unittest.TestCase):
                 auth_resource_url="https://mcp.example/mcp",
             )
             self.assertEqual(settings.auth_tokens["secret-token"], "acme")
-            self.assertEqual(json.dumps(settings.auth_tokens), '{"secret-token": "acme"}')
 
 
 if __name__ == "__main__":

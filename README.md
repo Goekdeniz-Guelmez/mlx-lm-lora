@@ -80,6 +80,7 @@ With MLX-LM-LoRA you can, train Large Language Models locally on Apple Silicon u
 
 - [Install](#install)
 - [Quick Start](#quick-start)
+- [MCP Server](#mcp-server)
 - [Training Methods](#training-methods)
   - [Supervised Fine-Tuning (SFT)](#supervised-fine-tuning-sft)
   - [Direct Preference Optimization (DPO)](#direct-preference-optimization-dpo)
@@ -135,6 +136,153 @@ mlx_lm_lora.train --config /path/to/config.yaml
 ```
 
 Command-line flags will override corresponding values in the config file.
+
+---
+
+## MCP Server
+
+MLX-LM-LoRA includes an optional [Model Context Protocol (MCP)](https://modelcontextprotocol.io/)
+server. It lets an MCP-capable agent validate training requests, start training
+jobs, and inspect status and logs using natural language.
+
+Install the MCP extra:
+
+```shell
+pip install -U "mlx-lm-lora[mcp]"
+```
+
+Start the local `stdio` server (the default):
+
+```shell
+mlx_lm_lora.mcp
+```
+
+The equivalent module command is:
+
+```shell
+python -m mlx_lm_lora mcp
+```
+
+### Configure an agent
+
+For a local agent, configure the MCP host to launch the command as a stdio
+server. The following shape is used by many MCP clients; adapt the enclosing
+JSON to the agent you use:
+
+```json
+{
+  "mcpServers": {
+    "mlx-lm-lora": {
+      "command": "mlx_lm_lora.mcp",
+      "env": {
+        "MLX_LM_LORA_TENANT_ID": "alice",
+        "MLX_LM_LORA_TENANT_ROOT": "/Users/alice/.mlx-lm-lora/tenants"
+      }
+    }
+  }
+}
+```
+
+The process-level `MLX_LM_LORA_TENANT_ID` is recommended for a local agent. It
+means the agent does not need to choose a tenant in every tool call and cannot
+switch to another tenant through model-generated arguments.
+
+### Multi-tenant workspaces
+
+Every tenant is isolated below `MLX_LM_LORA_TENANT_ROOT` (default:
+`~/.mlx-lm-lora/tenants`):
+
+```text
+<tenant-root>/<tenant-id>/
+├── inputs/       # tenant-local datasets and reward functions
+├── runs/         # request.json, status.json, and training.log per job
+└── artifacts/    # adapters and fused models
+```
+
+Tenant IDs are restricted to 1–64 letters, numbers, `.`, `_`, and `-`. Local
+files supplied to MCP tools should use `tenant://`, for example
+`tenant://inputs/train.jsonl`. Hugging Face model and dataset IDs such as
+`org/model` and `org/dataset` are passed through unchanged. An optional
+`MLX_LM_LORA_SHARED_ROOT` can expose preloaded read-only model or dataset files
+to all tenants.
+
+The server exposes these tools:
+
+- `mlx_lm_lora_get_capabilities` — supported training modes and server behavior.
+- `mlx_lm_lora_validate_training_config` — validate a config without training.
+- `mlx_lm_lora_start_training` — queue a training job and return its `job_id`.
+- `mlx_lm_lora_get_training_status` — inspect a tenant's job status and artifact path.
+- `mlx_lm_lora_list_training_runs` — list recent jobs for one tenant.
+- `mlx_lm_lora_get_training_log` — read a bounded log tail for one job.
+- `mlx_lm_lora_cancel_training` — cancel a job that has not started yet.
+
+Example tool input for SFT:
+
+```json
+{
+  "tenant_id": "alice",
+  "config": {
+    "model": "mlx-community/Qwen2.5-0.5B-Instruct-4bit",
+    "data": "tenant://inputs/train.jsonl",
+    "train_mode": "sft",
+    "train_type": "lora",
+    "iters": 100,
+    "batch_size": 2,
+    "learning_rate": 0.00001
+  }
+}
+```
+
+The agent should call `mlx_lm_lora_validate_training_config` before
+`mlx_lm_lora_start_training`, then poll
+`mlx_lm_lora_get_training_status`. Training jobs are serialized because MLX
+jobs share Apple Silicon unified memory. Training output is redirected to the
+tenant's `training.log`, so stdio MCP protocol messages remain clean.
+
+### Streamable HTTP
+
+Use Streamable HTTP when multiple agents need to connect to one service:
+
+```shell
+export MLX_LM_LORA_MCP_TRANSPORT=streamable-http
+export MLX_LM_LORA_MCP_HOST=127.0.0.1
+export MLX_LM_LORA_MCP_PORT=8000
+export MLX_LM_LORA_TENANT_ROOT=/srv/mlx-lm-lora/tenants
+mlx_lm_lora.mcp
+```
+
+For a shared HTTP server, configure the built-in bearer-token mapping. The
+token values must stay in the server environment and must never be sent as MCP
+tool arguments:
+
+```shell
+export MLX_LM_LORA_AUTH_TOKENS_JSON='{"token-for-alice":"alice","token-for-bob":"bob"}'
+export MLX_LM_LORA_AUTH_ISSUER_URL=https://auth.example.com/
+export MLX_LM_LORA_AUTH_RESOURCE_URL=https://mlx.example.com/mcp
+mlx_lm_lora.mcp --transport streamable-http --host 127.0.0.1 --port 8000
+```
+
+The authenticated token is bound to its configured tenant, so a caller cannot
+use Alice's token with Bob's `tenant_id`. For production deployments, use
+short-lived tokens and a real identity provider or replace the example static
+verifier with your organization's JWT/introspection verifier. Do not expose an
+unauthenticated HTTP server on a non-loopback host; the CLI refuses that by
+default. `--insecure-http` exists only for local development.
+
+Useful environment variables:
+
+| Variable | Purpose |
+|---|---|
+| `MLX_LM_LORA_TENANT_ROOT` | Root directory containing tenant workspaces. |
+| `MLX_LM_LORA_TENANT_ID` | Pin a stdio server process to one tenant. |
+| `MLX_LM_LORA_ALLOWED_TENANTS` | Optional comma-separated tenant allow-list. |
+| `MLX_LM_LORA_SHARED_ROOT` | Optional read-only root for shared local inputs. |
+| `MLX_LM_LORA_AUTH_TOKENS_JSON` | JSON mapping of HTTP bearer tokens to tenant IDs. |
+| `MLX_LM_LORA_AUTH_ISSUER_URL` | OAuth issuer metadata URL for HTTP auth. |
+| `MLX_LM_LORA_AUTH_RESOURCE_URL` | Public MCP resource URL for HTTP auth. |
+
+The MCP extra is optional; the existing `mlx_lm_lora.train` command and
+training APIs do not require it.
 
 ---
 

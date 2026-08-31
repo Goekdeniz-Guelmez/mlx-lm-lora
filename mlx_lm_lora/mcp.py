@@ -29,9 +29,16 @@ from typing import Any, Dict, Iterable, Mapping, Optional, Sequence, Tuple
 
 try:
     from mcp.server.fastmcp import FastMCP
-except ImportError as exc:  # pragma: no cover - exercised in an installation check
-    FastMCP = None  # type: ignore[assignment,misc]
-    _MCP_IMPORT_ERROR = exc
+except ImportError as first_import_error:  # pragma: no cover - version dependent
+    try:
+        # MCP SDK 2.x renamed FastMCP to MCPServer. Keep the compatibility
+        # import here so the user-facing package extra tracks both SDK eras.
+        from mcp.server.mcpserver import MCPServer as FastMCP
+    except ImportError as second_import_error:
+        FastMCP = None  # type: ignore[assignment,misc]
+        _MCP_IMPORT_ERROR = second_import_error
+    else:
+        _MCP_IMPORT_ERROR = first_import_error
 else:
     _MCP_IMPORT_ERROR = None
 
@@ -53,6 +60,76 @@ TRAINING_MODES = (
     "ppo",
 )
 TRAINING_TYPES = ("lora", "dora", "full")
+TRAINING_CONFIG_KEYS = frozenset(
+    {
+        "model",
+        "lm_studio_name",
+        "load_in_4bits",
+        "load_in_6bits",
+        "load_in_8bits",
+        "load_in_mxfp4",
+        "train",
+        "data",
+        "train_type",
+        "train_mode",
+        "optimizer",
+        "sft_loss_type",
+        "mask_prompt",
+        "num_layers",
+        "batch_size",
+        "iters",
+        "epochs",
+        "gradient_accumulation_steps",
+        "val_batches",
+        "learning_rate",
+        "steps_per_report",
+        "steps_per_eval",
+        "resume_adapter_file",
+        "adapter_path",
+        "save_every",
+        "test",
+        "test_batches",
+        "max_seq_length",
+        "config",
+        "grad_checkpoint",
+        "efficient_long_context",
+        "wandb",
+        "seed",
+        "fuse",
+        "beta",
+        "reward_scaling",
+        "dpo_cpo_loss_type",
+        "delta",
+        "reference_model_path",
+        "lambda_mse_target",
+        "tau_mse_target",
+        "lambda_mse",
+        "clip_epsilon_logits",
+        "judge",
+        "judge_config",
+        "alpha",
+        "group_size",
+        "max_completion_length",
+        "epsilon",
+        "temperature",
+        "reward_weights",
+        "reward_functions",
+        "reward_functions_file",
+        "list_reward_functions",
+        "grpo_loss_type",
+        "epsilon_high",
+        "importance_sampling_level",
+        "qat_enable",
+        "qat_bits",
+        "qat_group_size",
+        "qat_mode",
+        "qat_start_step",
+        "qat_interval",
+        "optimizer_config",
+        "lora_parameters",
+        "lr_schedule",
+    }
+)
 
 
 class TenantError(ValueError):
@@ -207,7 +284,9 @@ class ServerSettings:
                 raise ValueError("MLX_LM_LORA_AUTH_TOKENS_JSON must be a JSON object")
             for token, token_tenant in decoded_tokens.items():
                 if not isinstance(token, str) or not token:
-                    raise ValueError("Authentication token keys must be non-empty strings")
+                    raise ValueError(
+                        "Authentication token keys must be non-empty strings"
+                    )
                 if not isinstance(token_tenant, str):
                     raise ValueError("Authentication token tenant IDs must be strings")
                 auth_tokens[token] = validate_tenant_id(token_tenant)
@@ -216,9 +295,7 @@ class ServerSettings:
         shared_root = os.environ.get("MLX_LM_LORA_SHARED_ROOT")
         return cls(
             tenant_root=Path(
-                os.environ.get(
-                    "MLX_LM_LORA_TENANT_ROOT", "~/.mlx-lm-lora/tenants"
-                )
+                os.environ.get("MLX_LM_LORA_TENANT_ROOT", "~/.mlx-lm-lora/tenants")
             ).expanduser(),
             tenant_id=validate_tenant_id(tenant_id) if tenant_id else None,
             allowed_tenants=allowed_tenants,
@@ -269,7 +346,9 @@ class TenantManager:
         if configured and requested and configured != requested:
             raise PermissionError("The MCP process is pinned to another tenant")
         if authenticated and requested and authenticated != requested:
-            raise PermissionError("The authenticated principal cannot access this tenant")
+            raise PermissionError(
+                "The authenticated principal cannot access this tenant"
+            )
 
         resolved = configured or authenticated or requested
         if resolved is None:
@@ -277,7 +356,10 @@ class TenantManager:
                 "tenant_id is required; configure MLX_LM_LORA_TENANT_ID for a "
                 "single-tenant agent or pass tenant_id for a shared server"
             )
-        if self.settings.allowed_tenants and resolved not in self.settings.allowed_tenants:
+        if (
+            self.settings.allowed_tenants
+            and resolved not in self.settings.allowed_tenants
+        ):
             raise PermissionError("Tenant is not allowed by the server policy")
         return resolved
 
@@ -337,21 +419,13 @@ def _normalize_local_reference(
 
     if not isinstance(value, str) or not _is_local_reference(value):
         return value
-    if value.startswith("tenant://") or value.startswith("./") or value.startswith("../"):
+    if (
+        value.startswith("tenant://")
+        or value.startswith("./")
+        or value.startswith("../")
+    ):
         return str(tenants.tenant_path(tenant_id, value))
     return str(_resolve_in_roots(value, tenants.approved_input_roots(tenant_id)))
-
-
-def _training_config_keys() -> frozenset:
-    """Return config keys supported by the existing training entry point."""
-
-    from . import train
-
-    parser = train.build_parser()
-    parser_keys = {
-        action.dest for action in parser._actions if action.dest != "help"  # pylint: disable=protected-access
-    }
-    return frozenset(parser_keys | set(train.CONFIG_DEFAULTS))
 
 
 def normalize_training_config(
@@ -371,7 +445,7 @@ def normalize_training_config(
     if not isinstance(config, Mapping):
         raise ValueError("config must be a JSON object")
     config_keys = set(config)
-    unsupported_keys = sorted(config_keys - set(_training_config_keys()))
+    unsupported_keys = sorted(config_keys - TRAINING_CONFIG_KEYS)
     if unsupported_keys:
         raise ValueError(
             "Unsupported training config keys: " + ", ".join(unsupported_keys)
@@ -391,9 +465,7 @@ def normalize_training_config(
         raise ValueError("config.data is required")
 
     tenants.workspace(tenant_id, create=True)
-    normalized["model"] = _normalize_local_reference(
-        model, "model", tenant_id, tenants
-    )
+    normalized["model"] = _normalize_local_reference(model, "model", tenant_id, tenants)
     normalized["data"] = _normalize_local_reference(data, "data", tenant_id, tenants)
 
     for key in ("reference_model_path", "judge"):
@@ -462,7 +534,9 @@ class TrainingJobManager:
 
     def __init__(self, tenants: TenantManager) -> None:
         self.tenants = tenants
-        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mlx-train")
+        self._executor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="mlx-train"
+        )
         self._futures: Dict[Tuple[str, str], Future] = {}
         self._lock = threading.RLock()
 
@@ -504,7 +578,9 @@ class TrainingJobManager:
         log_path = Path(record.run_dir) / "training.log"
         try:
             with log_path.open("w", encoding="utf-8") as log_file:
-                with contextlib.redirect_stdout(log_file), contextlib.redirect_stderr(log_file):
+                with contextlib.redirect_stdout(log_file), contextlib.redirect_stderr(
+                    log_file
+                ):
                     from . import train
 
                     train.main(dict(config))
@@ -563,7 +639,9 @@ class TrainingJobManager:
         if not 1 <= max_chars <= 50000:
             raise ValueError("max_chars must be between 1 and 50000")
         record = self.get(tenant_id, job_id)
-        log_path = _resolve_inside(Path(record.run_dir), Path(record.run_dir) / "training.log")
+        log_path = _resolve_inside(
+            Path(record.run_dir), Path(record.run_dir) / "training.log"
+        )
         if not log_path.is_file():
             return ""
         return log_path.read_text(encoding="utf-8", errors="replace")[-max_chars:]
@@ -840,7 +918,9 @@ def _settings_from_args(args: argparse.Namespace) -> ServerSettings:
         auth_tokens=environment_settings.auth_tokens,
         auth_issuer_url=environment_settings.auth_issuer_url,
         auth_resource_url=environment_settings.auth_resource_url,
-        stateless_http=not args.stateful_http,
+        stateless_http=(
+            False if args.stateful_http else environment_settings.stateless_http
+        ),
         json_response=args.sse_json_response or environment_settings.json_response,
     )
     if (
