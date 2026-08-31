@@ -24,9 +24,13 @@ setup(
     install_requires=requirements,
     packages=["mlx_lm_lora", "mlx_lm_lora.trainer"],
     python_requires=">=3.8",
+    extras_require={
+        "mcp": ["mcp[cli]>=1.13.0"],
+    },
     entry_points={
         "console_scripts": [
             "mlx_lm_lora.train = mlx_lm_lora.train:main",
+            "mlx_lm_lora.mcp = mlx_lm_lora.mcp:main",
         ]
     },
 )
