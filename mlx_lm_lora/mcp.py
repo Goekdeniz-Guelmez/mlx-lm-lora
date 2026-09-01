@@ -1103,6 +1103,19 @@ def main(argv: Sequence[str] | None = None) -> None:
     if settings.transport == "stdio":
         server.run(transport="stdio")
         return
+    # FastMCP mounts Streamable HTTP at /mcp.  Uvicorn only reports the bind
+    # address, which is not itself an MCP endpoint and leads clients such as
+    # LM Studio to fail with a 404 during initialization when users copy it.
+    # Emit the complete URL on stderr through logging (never stdout, which is
+    # reserved for protocol messages when stdio is used).
+    display_host = (
+        "127.0.0.1" if settings.host in {"0.0.0.0", "::"} else settings.host
+    )
+    LOGGER.info(
+        "MCP Streamable HTTP endpoint: http://%s:%d/mcp",
+        display_host,
+        settings.port,
+    )
     server.run(
         transport="streamable-http",
         host=settings.host,

@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from mlx_lm_lora import mcp
 
@@ -156,6 +157,34 @@ class McpTenantTest(unittest.TestCase):
     def test_parser_accepts_skill_install_target(self):
         args = mcp.build_parser().parse_args(["--install-skill", "codex"])
         self.assertEqual(args.install_skill, "codex")
+
+    @mock.patch.object(mcp, "create_server")
+    def test_http_startup_logs_complete_mcp_endpoint(self, create_server):
+        with self.assertLogs(mcp.LOGGER, level="INFO") as logs:
+            mcp.main(
+                [
+                    "--transport",
+                    "streamable-http",
+                    "--host",
+                    "127.0.0.1",
+                    "--port",
+                    "8765",
+                    "--tenant-id",
+                    "test",
+                ]
+            )
+
+        create_server.return_value.run.assert_called_once_with(
+            transport="streamable-http",
+            host="127.0.0.1",
+            port=8765,
+            stateless_http=True,
+            json_response=mock.ANY,
+        )
+        self.assertIn(
+            "MCP Streamable HTTP endpoint: http://127.0.0.1:8765/mcp",
+            "\n".join(logs.output),
+        )
 
 
 if __name__ == "__main__":

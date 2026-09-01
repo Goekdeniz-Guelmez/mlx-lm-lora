@@ -187,6 +187,10 @@ The process-level `MLX_LM_LORA_TENANT_ID` is recommended for a local agent. It
 means the agent does not need to choose a tenant in every tool call and cannot
 switch to another tenant through model-generated arguments.
 
+For LM Studio, open **Program > Install > Edit mcp.json** and add the same
+stdio server entry. If LM Studio cannot find the executable on its application
+PATH, use the absolute path printed by `which mlx_lm_lora.mcp` as `command`.
+
 ### Natural-language training skill
 
 The package includes the `mlx_lm_lora` skill for Codex, Claude Code, and Hermes.
@@ -314,6 +318,29 @@ export MLX_LM_LORA_MCP_PORT=8000
 export MLX_LM_LORA_TENANT_ROOT=/srv/mlx-lm-lora/tenants
 mlx_lm_lora.mcp
 ```
+
+Connect the MCP client to the complete Streamable HTTP endpoint (including
+`/mcp`):
+
+```text
+http://127.0.0.1:8000/mcp
+```
+
+For example, LM Studio's `mcp.json` entry for the running HTTP service is:
+
+```json
+{
+  "mcpServers": {
+    "mlx-lm-lora": {
+      "url": "http://127.0.0.1:8000/mcp"
+    }
+  }
+}
+```
+
+The bind address shown by Uvicorn (`http://127.0.0.1:8000`) is not the MCP
+endpoint; connecting to it returns HTTP 404. The server also logs the complete
+endpoint when it starts.
 
 For a shared HTTP server, configure the built-in bearer-token mapping. The
 token values must stay in the server environment and must never be sent as MCP
