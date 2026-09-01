@@ -28,8 +28,11 @@ setup(
         "skills",
         "skills.mlx_lm_lora",
     ],
-    python_requires=">=3.8",
+    python_requires=">=3.10",
     extras_require={
+        # Keep the historical extra as a compatibility alias. MCP is now a
+        # core dependency through requirements.txt, so new installs do not
+        # need to request this extra.
         "mcp": ["mcp[cli]>=1.13.0"],
     },
     package_data={

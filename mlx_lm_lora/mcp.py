@@ -1,8 +1,9 @@
 """MCP server for agent-driven, tenant-scoped MLX-LM-LoRA training.
 
-The MCP SDK is an optional dependency. Install it with::
+The MCP SDK is installed as part of the base package. Install MLX-LM-LoRA
+normally with::
 
-    pip install -U "mlx-lm-lora[mcp]"
+    pip install -U mlx-lm-lora
 
 The default transport is ``stdio`` so an MCP host can launch this module as a
 subprocess. Streamable HTTP is also available for a shared service deployment.
@@ -34,7 +35,7 @@ try:
 except ImportError as first_import_error:  # pragma: no cover - version dependent
     try:
         # MCP SDK 2.x renamed FastMCP to MCPServer. Keep the compatibility
-        # import here so the user-facing package extra tracks both SDK eras.
+        # import here so the package supports both SDK eras.
         from mcp.server.mcpserver import MCPServer as FastMCP
     except ImportError as second_import_error:
         FastMCP = None  # type: ignore[assignment,misc]
@@ -866,7 +867,7 @@ def _build_auth_options(settings: ServerSettings) -> dict[str, Any]:
     except ImportError as exc:  # pragma: no cover - depends on installed SDK version
         raise RuntimeError(
             "The installed MCP SDK does not provide HTTP auth support; upgrade "
-            "the optional dependency with pip install -U 'mlx-lm-lora[mcp]'"
+            "the package with pip install -U mlx-lm-lora"
         ) from exc
     return {
         "auth": AuthSettings(
@@ -888,7 +889,7 @@ def create_server(settings: ServerSettings | None = None) -> Any:
     if FastMCP is None:
         raise RuntimeError(
             "MCP support is not installed. Install it with "
-            "pip install -U 'mlx-lm-lora[mcp]'"
+            "pip install -U mlx-lm-lora"
         ) from _MCP_IMPORT_ERROR
     settings = settings or ServerSettings.from_environment()
     tenants = TenantManager(settings)

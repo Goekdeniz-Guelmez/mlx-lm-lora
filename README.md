@@ -141,14 +141,14 @@ Command-line flags will override corresponding values in the config file.
 
 ## MCP Server
 
-MLX-LM-LoRA includes an optional [Model Context Protocol (MCP)](https://modelcontextprotocol.io/)
+MLX-LM-LoRA includes [Model Context Protocol (MCP)](https://modelcontextprotocol.io/)
 server. It lets an MCP-capable agent validate training requests, start training
 jobs, and inspect status and logs using natural language.
 
-Install the MCP extra:
+MCP is installed automatically with the base package:
 
 ```shell
-pip install -U "mlx-lm-lora[mcp]"
+pip install -U mlx-lm-lora
 ```
 
 Start the local `stdio` server (the default):
@@ -345,8 +345,9 @@ Useful environment variables:
 | `MLX_LM_LORA_AUTH_ISSUER_URL` | OAuth issuer metadata URL for HTTP auth. |
 | `MLX_LM_LORA_AUTH_RESOURCE_URL` | Public MCP resource URL for HTTP auth. |
 
-The MCP extra is optional; the existing `mlx_lm_lora.train` command and
-training APIs do not require it.
+MCP is a core dependency of the package. The existing `mlx_lm_lora.train`
+command and training APIs remain available independently of whether you use
+the MCP server.
 
 ---
 
