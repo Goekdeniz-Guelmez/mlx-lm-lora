@@ -189,21 +189,39 @@ switch to another tenant through model-generated arguments.
 
 ### Natural-language training skill
 
-The repository also includes an optional harness skill at
-`skills/mlx_lm_lora/SKILL.md`. The skill routes to its mode-specific files under
-`skills/mlx_lm_lora/references/` and teaches the agent to translate requests
-such as:
+The package includes the `mlx_lm_lora` skill for Codex, Claude Code, and Hermes.
+It teaches the harness how to:
 
-You can install it directly into a global skills directory:
+- Translate natural-language fine-tuning requests into MLX-LM-LoRA configs.
+- Select the appropriate training mode and options from the reference guides.
+- Validate configs through MCP, start jobs, and poll their status and logs.
+
+The source files are in `skills/mlx_lm_lora/`, including the main
+`SKILL.md` and the mode-specific guides under `skills/mlx_lm_lora/references/`.
+
+Install the skill into the global skills directory for your harness:
 
 ```shell
+# Codex
 mlx_lm_lora.mcp --install-skill codex
+
+# Claude Code
 mlx_lm_lora.mcp --install-skill claude
+
+# Hermes
 mlx_lm_lora.mcp --install-skill hermes
 ```
 
-These commands install to `~/.codex/skills/mlx_lm_lora`,
-`~/.claude/skills/mlx_lm_lora`, or `~/.hermes/skills/mlx_lm_lora`.
+The equivalent module command is:
+
+```shell
+python -m mlx_lm_lora mcp --install-skill codex
+```
+
+Replace `codex` with `claude` or `hermes` as needed. The destinations are
+`~/.codex/skills/mlx_lm_lora`, `~/.claude/skills/mlx_lm_lora`, and
+`~/.hermes/skills/mlx_lm_lora`. Existing files for this skill are updated in
+place, while other installed skills are preserved.
 
 ```text
 Train Qwen/Qwen3.5-0.8B on LoRA and 4bit using SFT with
