@@ -2,7 +2,7 @@ const methods = {
   sft: {
     label: "Supervised fine-tuning",
     title: "Teach the model a sharper way to speak.",
-    description: "Use prompt–completion pairs or chat messages to turn a capable base model into one that understands your task, tone, and format.",
+    description: "Use prompt and completion pairs or chat messages to turn a capable base model into one that understands your task, tone, and format.",
     command: "mlx_lm_lora.train \\\n+  --model <model> \\\n+  --train-mode sft \\\n+  --data <dataset>",
     link: "https://github.com/Goekdeniz-Guelmez/mlx-lm-lora#supervised-fine-tuning-sft"
   },
@@ -41,7 +41,7 @@ const methodLabel = document.querySelector("#method-label");
 const methodTitle = document.querySelector("#method-title");
 const methodDescription = document.querySelector("#method-description");
 const methodCommand = document.querySelector("#method-command");
-const methodPill = document.querySelector("#method-pill");
+const methodStatus = document.querySelector("#method-status");
 const methodLink = document.querySelector("#method-link");
 
 function selectMethod(key) {
@@ -58,7 +58,7 @@ function selectMethod(key) {
   methodTitle.textContent = method.title;
   methodDescription.textContent = method.description;
   methodCommand.textContent = method.command;
-  methodPill.textContent = key === "online" ? "ONLINE DPO" : key.toUpperCase();
+  methodStatus.textContent = key === "online" ? "ONLINE DPO" : key.toUpperCase();
   methodLink.href = method.link;
 }
 

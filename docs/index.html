@@ -5,11 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#0b0b0a" />
     <meta name="description" content="MLX-LM-LoRA is a native Apple Silicon toolkit for local LLM fine-tuning, preference optimization, and quantization-aware training." />
-    <meta property="og:title" content="MLX-LM-LoRA — The local edge for model shaping" />
+    <meta property="og:title" content="MLX-LM-LoRA | The local edge for model shaping" />
     <meta property="og:description" content="Fine-tune LLMs locally on Apple Silicon with MLX, adapters, preference optimization, and QAT." />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://goekdeniz-guelmez.github.io/mlx-lm-lora/" />
-    <title>MLX-LM-LoRA — The local edge for model shaping</title>
+    <title>MLX-LM-LoRA | The local edge for model shaping</title>
     <link rel="stylesheet" href="./styles.css" />
     <script defer src="./script.js"></script>
   </head>
@@ -21,13 +21,10 @@
     <header class="site-header">
       <a class="brand" href="#top" aria-label="MLX-LM-LoRA home">
         <span class="brand-mark" aria-hidden="true">
-          <span class="mark-orb"></span>
-          <span class="mark-bar mark-bar--one"></span>
-          <span class="mark-bar mark-bar--two"></span>
-          <span class="mark-bar mark-bar--three"></span>
+          <span class="mark-word">MLX</span>
         </span>
         <span class="brand-copy">
-          <span class="brand-name">MLX<span>—</span>LM<span>—</span>LoRA</span>
+          <span class="brand-name">MLX LM LoRA</span>
           <span class="brand-subtitle">native model training</span>
         </span>
       </a>
@@ -59,10 +56,10 @@
         <div class="hero-copy reveal">
           <div class="eyebrow"><span class="status-dot"></span> Open source · Apple Silicon</div>
           <h1>Shape the model.<br /><em>Keep the control.</em></h1>
-          <p class="hero-lede">A native MLX toolkit for fine-tuning language models locally — with adapters, preference optimization, and quantization-aware training built into one calm, capable workflow.</p>
+          <p class="hero-lede">A native MLX toolkit for fine-tuning language models locally, with adapters, preference optimization, and quantization-aware training built into one calm, capable workflow.</p>
           <div class="hero-actions">
             <a class="button button--primary" href="#quick-start">Start training <span aria-hidden="true">↓</span></a>
-            <a class="button button--quiet" href="https://github.com/Goekdeniz-Guelmez/mlx-lm-lora-example-notebooks" target="_blank" rel="noreferrer">Explore notebooks <span aria-hidden="true">↗</span></a>
+            <a class="button button--quiet" href="https://github.com/Goekdeniz-Guelmez/mlx-lm-lora-example-notebooks" target="_blank" rel="noreferrer">Advanced notebooks <span aria-hidden="true">↗</span></a>
           </div>
           <div class="hero-note"><span class="note-line"></span> Runs on the machine in front of you.</div>
         </div>
@@ -94,7 +91,7 @@
 
       <section class="signal-row section-shell reveal" aria-label="Project highlights">
         <div class="signal"><strong>12<span>+</span></strong><span>training algorithms</span></div>
-        <div class="signal"><strong>4–16<span>bit</span></strong><span>QAT precision range</span></div>
+        <div class="signal"><strong>4 to 16<span>bit</span></strong><span>QAT precision range</span></div>
         <div class="signal"><strong>1</strong><span>local command surface</span></div>
         <div class="signal signal--wide"><strong>MLX</strong><span>native on Apple Silicon</span></div>
       </section>
@@ -120,7 +117,7 @@
             <div class="feature-icon icon-layers" aria-hidden="true"><span></span><span></span><span></span></div>
             <span class="card-index">02</span>
             <h3>Preference-native</h3>
-            <p>DPO, CPO, ORPO, GRPO, online DPO, and more — train toward the behavior you actually want.</p>
+            <p>DPO, CPO, ORPO, GRPO, online DPO, and more. Train toward the behavior you actually want.</p>
           </article>
           <article class="feature-card reveal reveal--delay-short">
             <div class="feature-icon icon-diamond" aria-hidden="true"></div>
@@ -135,7 +132,6 @@
               <h3>Bring your own signal</h3>
               <p>Register custom reward functions and shape GRPO around the signal that matters to your domain.</p>
             </div>
-            <span class="feature-tag">extensible / by default</span>
           </article>
         </div>
       </section>
@@ -147,21 +143,21 @@
         </div>
         <div class="methods-workbench reveal reveal--delay">
           <div class="method-tabs" role="tablist" aria-label="Training methods">
-            <button class="method-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="method-panel" data-method="sft">SFT <span>supervised</span></button>
-            <button class="method-tab" type="button" role="tab" aria-selected="false" aria-controls="method-panel" data-method="dpo">DPO <span>preference</span></button>
-            <button class="method-tab" type="button" role="tab" aria-selected="false" aria-controls="method-panel" data-method="grpo">GRPO <span>policy</span></button>
-            <button class="method-tab" type="button" role="tab" aria-selected="false" aria-controls="method-panel" data-method="orpo">ORPO <span>monolithic</span></button>
-            <button class="method-tab" type="button" role="tab" aria-selected="false" aria-controls="method-panel" data-method="online">Online DPO <span>real-time</span></button>
+            <button class="method-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="method-panel" data-method="sft">SFT</button>
+            <button class="method-tab" type="button" role="tab" aria-selected="false" aria-controls="method-panel" data-method="dpo">DPO</button>
+            <button class="method-tab" type="button" role="tab" aria-selected="false" aria-controls="method-panel" data-method="grpo">GRPO</button>
+            <button class="method-tab" type="button" role="tab" aria-selected="false" aria-controls="method-panel" data-method="orpo">ORPO</button>
+            <button class="method-tab" type="button" role="tab" aria-selected="false" aria-controls="method-panel" data-method="online">Online DPO</button>
           </div>
           <div class="method-panel" id="method-panel" role="tabpanel" tabindex="0">
             <div class="method-panel-copy">
               <span class="method-label" id="method-label">Supervised fine-tuning</span>
               <h3 id="method-title">Teach the model a sharper way to speak.</h3>
-              <p id="method-description">Use prompt–completion pairs or chat messages to turn a capable base model into one that understands your task, tone, and format.</p>
+              <p id="method-description">Use prompt and completion pairs or chat messages to turn a capable base model into one that understands your task, tone, and format.</p>
               <a class="text-link" id="method-link" href="https://github.com/Goekdeniz-Guelmez/mlx-lm-lora#supervised-fine-tuning-sft" target="_blank" rel="noreferrer">Read the method notes <span aria-hidden="true">↗</span></a>
             </div>
             <div class="method-terminal">
-              <div class="terminal-header"><span>run recipe</span><span class="terminal-pill" id="method-pill">SFT</span></div>
+              <div class="terminal-header"><span>run recipe</span><span id="method-status">SFT</span></div>
               <code id="method-command">mlx_lm_lora.train \
   --model &lt;model&gt; \
   --train-mode sft \
@@ -178,6 +174,11 @@
             <div class="eyebrow">03 / Quick start</div>
             <h2>Make the first run<br /><span>feel close.</span></h2>
             <p>Install the package, point it at a model and dataset, then keep iterating where your weights live: locally.</p>
+            <a class="notebook-callout" href="https://github.com/Goekdeniz-Guelmez/mlx-lm-lora-example-notebooks" target="_blank" rel="noreferrer">
+              <span class="notebook-callout-icon" aria-hidden="true">↗</span>
+              <span class="notebook-callout-copy"><strong>Advanced notebook runs</strong><small>Step-by-step examples for fine-tuning, preference learning, and RL.</small></span>
+              <span class="notebook-callout-arrow" aria-hidden="true">→</span>
+            </a>
             <div class="quick-start-links">
               <a class="button button--primary" href="https://github.com/Goekdeniz-Guelmez/mlx-lm-lora#install" target="_blank" rel="noreferrer">Read the docs <span aria-hidden="true">↗</span></a>
               <a class="button button--quiet" href="https://pypi.org/project/mlx-lm-lora/" target="_blank" rel="noreferrer">PyPI package <span aria-hidden="true">↗</span></a>
@@ -208,9 +209,9 @@ mlx_lm_lora.train \
     </main>
 
     <footer class="site-footer section-shell">
-      <div class="footer-brand"><span class="footer-mark" aria-hidden="true"><span></span><span></span><span></span></span><span>MLX-LM-LoRA</span></div>
+      <div class="footer-brand"><span class="footer-mark" aria-hidden="true">MLX</span><span>MLX LM LoRA</span></div>
       <p>Native training infrastructure for Apple Silicon.</p>
-      <div class="footer-links"><a href="https://github.com/Goekdeniz-Guelmez/mlx-lm-lora" target="_blank" rel="noreferrer">GitHub ↗</a><a href="https://pypi.org/project/mlx-lm-lora/" target="_blank" rel="noreferrer">PyPI ↗</a><a href="https://github.com/Goekdeniz-Guelmez/mlx-lm-lora-example-notebooks" target="_blank" rel="noreferrer">Notebooks ↗</a></div>
+      <div class="footer-links"><a href="https://github.com/Goekdeniz-Guelmez/mlx-lm-lora" target="_blank" rel="noreferrer">GitHub ↗</a><a href="https://pypi.org/project/mlx-lm-lora/" target="_blank" rel="noreferrer">PyPI ↗</a><a href="https://github.com/Goekdeniz-Guelmez/mlx-lm-lora-example-notebooks" target="_blank" rel="noreferrer">Advanced notebooks ↗</a></div>
       <span class="footer-meta">MIT · 2026</span>
     </footer>
   </body>
