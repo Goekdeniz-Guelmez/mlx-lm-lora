@@ -190,10 +190,20 @@ switch to another tenant through model-generated arguments.
 ### Natural-language training skill
 
 The repository also includes an optional harness skill at
-`skills/mlx_lm_lora/SKILL.md`. Install or copy the complete `skills/mlx_lm_lora`
-directory into the harness's skills directory. The skill routes to its
-mode-specific files under `skills/mlx_lm_lora/references/` and teaches the
-agent to translate requests such as:
+`skills/mlx_lm_lora/SKILL.md`. The skill routes to its mode-specific files under
+`skills/mlx_lm_lora/references/` and teaches the agent to translate requests
+such as:
+
+You can install it directly into a global skills directory:
+
+```shell
+mlx_lm_lora.mcp --install-skill codex
+mlx_lm_lora.mcp --install-skill claude
+mlx_lm_lora.mcp --install-skill hermes
+```
+
+These commands install to `~/.codex/skills/mlx_lm_lora`,
+`~/.claude/skills/mlx_lm_lora`, or `~/.hermes/skills/mlx_lm_lora`.
 
 ```text
 Train Qwen/Qwen3.5-0.8B on LoRA and 4bit using SFT with

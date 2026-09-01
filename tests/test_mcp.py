@@ -117,6 +117,46 @@ class McpTenantTest(unittest.TestCase):
             )
             self.assertEqual(settings.auth_tokens["secret-token"], "acme")
 
+    def test_install_skill_copies_complete_skill_for_each_target(self):
+        with tempfile.TemporaryDirectory() as root:
+            home = Path(root)
+            for target in ("codex", "claude", "hermes"):
+                with self.subTest(target=target):
+                    destination = mcp.install_skill(target, home_dir=home)
+                    self.assertEqual(
+                        destination,
+                        home / f".{target}" / "skills" / "mlx_lm_lora",
+                    )
+                    self.assertTrue((destination / "SKILL.md").is_file())
+                    self.assertTrue(
+                        (destination / "references" / "config.md").is_file()
+                    )
+
+    def test_install_skill_updates_existing_files_without_removing_other_skills(self):
+        with tempfile.TemporaryDirectory() as root:
+            home = Path(root)
+            destination = home / ".codex" / "skills" / "mlx_lm_lora"
+            destination.mkdir(parents=True)
+            (destination / "old-file.md").write_text("keep", encoding="utf-8")
+            (home / ".codex" / "skills" / "other-skill").mkdir(parents=True)
+
+            installed = mcp.install_skill("codex", home_dir=home)
+
+            self.assertEqual(installed, destination)
+            self.assertEqual(
+                (destination / "old-file.md").read_text(encoding="utf-8"), "keep"
+            )
+            self.assertTrue((home / ".codex" / "skills" / "other-skill").is_dir())
+
+    def test_install_skill_rejects_unknown_target(self):
+        with tempfile.TemporaryDirectory() as root:
+            with self.assertRaises(ValueError):
+                mcp.install_skill("unknown", home_dir=Path(root))
+
+    def test_parser_accepts_skill_install_target(self):
+        args = mcp.build_parser().parse_args(["--install-skill", "codex"])
+        self.assertEqual(args.install_skill, "codex")
+
 
 if __name__ == "__main__":
     unittest.main()

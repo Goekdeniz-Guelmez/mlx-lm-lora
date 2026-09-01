@@ -22,10 +22,18 @@ setup(
     url="https://github.com/Goekdeniz-Guelmez/mlx-lm-lora",
     license="MIT",
     install_requires=requirements,
-    packages=["mlx_lm_lora", "mlx_lm_lora.trainer"],
+    packages=[
+        "mlx_lm_lora",
+        "mlx_lm_lora.trainer",
+        "skills",
+        "skills.mlx_lm_lora",
+    ],
     python_requires=">=3.8",
     extras_require={
         "mcp": ["mcp[cli]>=1.13.0"],
+    },
+    package_data={
+        "skills.mlx_lm_lora": ["SKILL.md", "references/*.md"],
     },
     entry_points={
         "console_scripts": [

@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import threading
 import traceback
 import uuid
@@ -51,6 +52,12 @@ HF_DATASET_ID_PATTERN = re.compile(
 )
 JOB_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 JOB_STATES = frozenset({"queued", "running", "succeeded", "failed", "cancelled"})
+SKILL_NAME = "mlx_lm_lora"
+SKILL_TARGETS = {
+    "codex": Path(".codex") / "skills",
+    "claude": Path(".claude") / "skills",
+    "hermes": Path(".hermes") / "skills",
+}
 TRAINING_MODES = (
     "sft",
     "dpo",
@@ -134,6 +141,62 @@ TRAINING_CONFIG_KEYS = frozenset(
         "lr_schedule",
     }
 )
+
+
+def _skill_source_dir() -> Path:
+    """Return the packaged harness skill directory."""
+
+    source_dir = Path(__file__).resolve().parent.parent / "skills" / SKILL_NAME
+    if not source_dir.is_dir() or not (source_dir / "SKILL.md").is_file():
+        raise FileNotFoundError(
+            "The packaged mlx_lm_lora skill is missing from the installation: "
+            f"{source_dir}"
+        )
+    return source_dir
+
+
+def install_skill(
+    target: str,
+    *,
+    home_dir: Path | None = None,
+    source_dir: Path | None = None,
+) -> Path:
+    """Install the bundled harness skill for one supported agent.
+
+    Args:
+        target: Harness name: ``codex``, ``claude``, or ``hermes``.
+        home_dir: Optional home directory override, primarily for testing.
+        source_dir: Optional skill source override, primarily for testing.
+
+    Returns:
+        The installed skill directory.
+
+    Raises:
+        ValueError: If ``target`` is not supported.
+        FileNotFoundError: If the bundled skill is unavailable.
+        FileExistsError: If the destination is not a directory.
+    """
+
+    if target not in SKILL_TARGETS:
+        supported_targets = ", ".join(sorted(SKILL_TARGETS))
+        raise ValueError(f"target must be one of: {supported_targets}")
+
+    source = (source_dir or _skill_source_dir()).expanduser().resolve()
+    if not source.is_dir() or not (source / "SKILL.md").is_file():
+        raise FileNotFoundError(f"Skill source directory is invalid: {source}")
+
+    home = (home_dir or Path.home()).expanduser()
+    destination = home / SKILL_TARGETS[target] / SKILL_NAME
+    if source == destination.resolve(strict=False):
+        return destination
+    if destination.is_symlink():
+        raise FileExistsError(
+            f"Refusing to install through a symbolic-link destination: {destination}"
+        )
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(source, destination, dirs_exist_ok=True)
+    return destination
 
 
 class TenantError(ValueError):
@@ -950,6 +1013,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Transport used by the MCP host (default: MLX_LM_LORA_MCP_TRANSPORT or stdio).",
     )
+    parser.add_argument(
+        "--install-skill",
+        choices=sorted(SKILL_TARGETS),
+        metavar="TARGET",
+        help=(
+            "Copy the bundled mlx_lm_lora skill to TARGET's global skills "
+            "directory (codex, claude, or hermes), then exit."
+        ),
+    )
     parser.add_argument("--host", default=None, help="HTTP bind host.")
     parser.add_argument("--port", type=int, default=None, help="HTTP bind port.")
     parser.add_argument("--tenant-root", type=Path, default=None)
@@ -1019,6 +1091,11 @@ def main(argv: Sequence[str] | None = None) -> None:
     """Run the MCP server from the terminal."""
 
     args = build_parser().parse_args(argv)
+    if args.install_skill:
+        destination = install_skill(args.install_skill)
+        print(f"Installed {SKILL_NAME} skill to {destination}")
+        return
+
     settings = _settings_from_args(args)
     logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO))
     server = create_server(settings)
