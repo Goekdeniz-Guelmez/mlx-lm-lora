@@ -151,7 +151,8 @@ MCP is installed automatically with the base package:
 pip install -U mlx-lm-lora
 ```
 
-Start the local `stdio` server (the default):
+Start the local Streamable HTTP server on its defaults
+(`http://127.0.0.1:8008/mcp`, INFO logging, streaming responses):
 
 ```shell
 mlx_lm_lora.mcp
@@ -161,6 +162,13 @@ The equivalent module command is:
 
 ```shell
 python -m mlx_lm_lora mcp
+```
+
+For a host that launches the server as a local subprocess, select `stdio`
+explicitly:
+
+```shell
+mlx_lm_lora.mcp --transport stdio
 ```
 
 ### Configure an agent
@@ -174,6 +182,7 @@ JSON to the agent you use:
   "mcpServers": {
     "mlx-lm-lora": {
       "command": "mlx_lm_lora.mcp",
+      "args": ["--transport", "stdio"],
       "env": {
         "MLX_LM_LORA_TENANT_ID": "alice",
         "MLX_LM_LORA_TENANT_ROOT": "/Users/alice/.mlx-lm-lora/tenants"
@@ -314,7 +323,7 @@ Use Streamable HTTP when multiple agents need to connect to one service:
 ```shell
 export MLX_LM_LORA_MCP_TRANSPORT=streamable-http
 export MLX_LM_LORA_MCP_HOST=127.0.0.1
-export MLX_LM_LORA_MCP_PORT=8000
+export MLX_LM_LORA_MCP_PORT=8008
 export MLX_LM_LORA_TENANT_ROOT=/srv/mlx-lm-lora/tenants
 mlx_lm_lora.mcp
 ```
@@ -323,7 +332,7 @@ Connect the MCP client to the complete Streamable HTTP endpoint (including
 `/mcp`):
 
 ```text
-http://127.0.0.1:8000/mcp
+http://127.0.0.1:8008/mcp
 ```
 
 For example, LM Studio's `mcp.json` entry for the running HTTP service is:
@@ -332,13 +341,13 @@ For example, LM Studio's `mcp.json` entry for the running HTTP service is:
 {
   "mcpServers": {
     "mlx-lm-lora": {
-      "url": "http://127.0.0.1:8000/mcp"
+      "url": "http://127.0.0.1:8008/mcp"
     }
   }
 }
 ```
 
-The bind address shown by Uvicorn (`http://127.0.0.1:8000`) is not the MCP
+The bind address shown by Uvicorn (`http://127.0.0.1:8008`) is not the MCP
 endpoint; connecting to it returns HTTP 404. The server also logs the complete
 endpoint when it starts.
 
@@ -350,7 +359,7 @@ tool arguments:
 export MLX_LM_LORA_AUTH_TOKENS_JSON='{"token-for-alice":"alice","token-for-bob":"bob"}'
 export MLX_LM_LORA_AUTH_ISSUER_URL=https://auth.example.com/
 export MLX_LM_LORA_AUTH_RESOURCE_URL=https://mlx.example.com/mcp
-mlx_lm_lora.mcp --transport streamable-http --host 127.0.0.1 --port 8000
+mlx_lm_lora.mcp --transport streamable-http --host 127.0.0.1 --port 8008
 ```
 
 The authenticated token is bound to its configured tenant, so a caller cannot

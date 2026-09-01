@@ -158,6 +158,15 @@ class McpTenantTest(unittest.TestCase):
         args = mcp.build_parser().parse_args(["--install-skill", "codex"])
         self.assertEqual(args.install_skill, "codex")
 
+    def test_server_defaults_to_streaming_http_on_port_8008(self):
+        with mock.patch.dict("os.environ", {}, clear=True):
+            settings = mcp.ServerSettings.from_environment()
+
+        self.assertEqual(settings.transport, "streamable-http")
+        self.assertEqual(settings.host, "127.0.0.1")
+        self.assertEqual(settings.port, 8008)
+        self.assertFalse(settings.json_response)
+
     @mock.patch.object(mcp, "create_server")
     def test_http_startup_logs_complete_mcp_endpoint(self, create_server):
         with self.assertLogs(mcp.LOGGER, level="INFO") as logs:

@@ -5,8 +5,9 @@ normally with::
 
     pip install -U mlx-lm-lora
 
-The default transport is ``stdio`` so an MCP host can launch this module as a
-subprocess. Streamable HTTP is also available for a shared service deployment.
+The default transport is Streamable HTTP on ``127.0.0.1:8008``. The ``stdio``
+transport remains available for an MCP host that launches this module as a
+subprocess.
 Training jobs are intentionally serialized because MLX training jobs compete
 for the same Apple Silicon memory and GPU resources.
 """
@@ -290,14 +291,14 @@ class ServerSettings:
     tenant_id: str | None = None
     allowed_tenants: frozenset | None = None
     shared_root: Path | None = None
-    transport: str = "stdio"
+    transport: str = "streamable-http"
     host: str = "127.0.0.1"
-    port: int = 8000
+    port: int = 8008
     auth_tokens: Mapping[str, str] = field(default_factory=dict)
     auth_issuer_url: str | None = None
     auth_resource_url: str | None = None
     stateless_http: bool = True
-    json_response: bool = True
+    json_response: bool = False
 
     def __post_init__(self) -> None:
         """Validate settings at the process boundary."""
@@ -368,9 +369,11 @@ class ServerSettings:
             tenant_id=validate_tenant_id(tenant_id) if tenant_id else None,
             allowed_tenants=allowed_tenants,
             shared_root=Path(shared_root).expanduser() if shared_root else None,
-            transport=os.environ.get("MLX_LM_LORA_MCP_TRANSPORT", "stdio"),
+            transport=os.environ.get(
+                "MLX_LM_LORA_MCP_TRANSPORT", "streamable-http"
+            ),
             host=os.environ.get("MLX_LM_LORA_MCP_HOST", "127.0.0.1"),
-            port=int(os.environ.get("MLX_LM_LORA_MCP_PORT", "8000")),
+            port=int(os.environ.get("MLX_LM_LORA_MCP_PORT", "8008")),
             auth_tokens=auth_tokens,
             auth_issuer_url=os.environ.get("MLX_LM_LORA_AUTH_ISSUER_URL"),
             auth_resource_url=os.environ.get("MLX_LM_LORA_AUTH_RESOURCE_URL"),
@@ -379,7 +382,7 @@ class ServerSettings:
             ).lower()
             in {"1", "true", "yes"},
             json_response=os.environ.get(
-                "MLX_LM_LORA_MCP_JSON_RESPONSE", "true"
+                "MLX_LM_LORA_MCP_JSON_RESPONSE", "false"
             ).lower()
             in {"1", "true", "yes"},
         )
@@ -1012,7 +1015,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--transport",
         choices=["stdio", "streamable-http"],
         default=None,
-        help="Transport used by the MCP host (default: MLX_LM_LORA_MCP_TRANSPORT or stdio).",
+        help=(
+            "Transport used by the MCP host (default: "
+            "MLX_LM_LORA_MCP_TRANSPORT or streamable-http)."
+        ),
     )
     parser.add_argument(
         "--install-skill",
