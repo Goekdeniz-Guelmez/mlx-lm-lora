@@ -10,12 +10,12 @@
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://goekdeniz-guelmez.github.io/mlx-lm-lora/" />
     <title>MLX-LM-LoRA | The local edge for model shaping</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/locomotive-scroll@5.0.1/bundled/locomotive-scroll.css" />
     <link rel="stylesheet" href="./styles.css" />
+    <script defer src="https://cdn.jsdelivr.net/npm/locomotive-scroll@5.0.1/bundled/locomotive-scroll.min.js"></script>
     <script defer src="./script.js"></script>
   </head>
   <body>
-    <div class="ambient ambient--one" aria-hidden="true"></div>
-    <div class="ambient ambient--two" aria-hidden="true"></div>
     <div class="grain" aria-hidden="true"></div>
 
     <header class="site-header">
@@ -53,8 +53,8 @@
 
     <main id="top">
       <section class="hero section-shell">
-        <div class="hero-copy reveal">
-          <div class="eyebrow"><span class="status-dot"></span> Open source · Apple Silicon</div>
+        <div class="hero-copy reveal" data-scroll data-scroll-speed="0.06">
+          <div class="eyebrow">Open source · Apple Silicon</div>
           <h1>Shape the model.<br /><em>Keep the control.</em></h1>
           <p class="hero-lede">A native MLX toolkit for fine-tuning language models locally, with adapters, preference optimization, and quantization-aware training built into one calm, capable workflow.</p>
           <div class="hero-actions">
@@ -64,12 +64,10 @@
           <div class="hero-note"><span class="note-line"></span> Runs on the machine in front of you.</div>
         </div>
 
-        <div class="hero-console reveal reveal--delay" aria-label="Example MLX-LM-LoRA training run">
-          <div class="console-glow" aria-hidden="true"></div>
+        <div class="hero-console reveal reveal--delay" data-scroll data-scroll-speed="-0.04" aria-label="Example MLX-LM-LoRA training run">
           <div class="console-topbar">
             <div class="window-controls" aria-hidden="true"><span></span><span></span><span></span></div>
             <span class="console-path">mlx_lm_lora / train</span>
-            <span class="console-state"><span class="status-dot"></span> ready</span>
           </div>
           <div class="console-heading">
             <span class="console-kicker">current surface</span>
@@ -89,7 +87,7 @@
         </div>
       </section>
 
-      <section class="signal-row section-shell reveal" aria-label="Project highlights">
+      <section class="signal-row section-shell reveal" data-scroll data-scroll-speed="0.025" aria-label="Project highlights">
         <div class="signal"><strong>12<span>+</span></strong><span>training algorithms</span></div>
         <div class="signal"><strong>4 to 16<span>bit</span></strong><span>QAT precision range</span></div>
         <div class="signal"><strong>1</strong><span>local command surface</span></div>
@@ -97,14 +95,14 @@
       </section>
 
       <section class="content-section section-shell" id="capabilities">
-        <div class="section-intro reveal">
+        <div class="section-intro reveal" data-scroll>
           <div class="eyebrow">01 / Capability map</div>
           <h2>Everything you need to<br /><span>move a model forward.</span></h2>
           <p>Keep the loop close to the work. MLX-LM-LoRA puts efficient adaptation, preference learning, and evaluation in the same local toolkit.</p>
         </div>
 
         <div class="feature-grid">
-          <article class="feature-card feature-card--large reveal">
+          <article class="feature-card feature-card--large reveal" data-scroll data-scroll-speed="0.03">
             <div class="feature-icon icon-terminal" aria-hidden="true"><span>›_</span></div>
             <div class="feature-card-copy">
               <span class="card-index">01</span>
@@ -113,19 +111,19 @@
             </div>
             <div class="feature-code"><span>mlx_lm_lora.train</span><span class="feature-code-dot">●</span></div>
           </article>
-          <article class="feature-card reveal reveal--delay-short">
+          <article class="feature-card reveal reveal--delay-short" data-scroll data-scroll-speed="0.015">
             <div class="feature-icon icon-layers" aria-hidden="true"><span></span><span></span><span></span></div>
             <span class="card-index">02</span>
             <h3>Preference-native</h3>
             <p>DPO, CPO, ORPO, GRPO, online DPO, and more. Train toward the behavior you actually want.</p>
           </article>
-          <article class="feature-card reveal reveal--delay-short">
+          <article class="feature-card reveal reveal--delay-short" data-scroll data-scroll-speed="0.02">
             <div class="feature-icon icon-diamond" aria-hidden="true"></div>
             <span class="card-index">03</span>
             <h3>Quantized by design</h3>
             <p>Use QLoRA and QAT to keep memory practical while preserving a direct path to better models.</p>
           </article>
-          <article class="feature-card feature-card--wide reveal">
+          <article class="feature-card feature-card--wide reveal" data-scroll data-scroll-speed="0.02">
             <div class="feature-icon icon-spark" aria-hidden="true">✦</div>
             <div>
               <span class="card-index">04</span>
@@ -137,11 +135,11 @@
       </section>
 
       <section class="methods-section section-shell" id="methods">
-        <div class="methods-heading reveal">
+        <div class="methods-heading reveal" data-scroll>
           <div class="eyebrow">02 / Method library</div>
           <h2>Choose the pressure.<br /><span>Keep the surface simple.</span></h2>
         </div>
-        <div class="methods-workbench reveal reveal--delay">
+        <div class="methods-workbench reveal reveal--delay" data-scroll data-scroll-speed="0.02">
           <div class="method-tabs" role="tablist" aria-label="Training methods">
             <button class="method-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="method-panel" data-method="sft">SFT</button>
             <button class="method-tab" type="button" role="tab" aria-selected="false" aria-controls="method-panel" data-method="dpo">DPO</button>
@@ -169,16 +167,23 @@
       </section>
 
       <section class="quick-start section-shell" id="quick-start">
-        <div class="quick-start-card reveal">
+        <div class="quick-start-card reveal" data-scroll data-scroll-speed="0.025">
           <div class="quick-start-copy">
             <div class="eyebrow">03 / Quick start</div>
             <h2>Make the first run<br /><span>feel close.</span></h2>
             <p>Install the package, point it at a model and dataset, then keep iterating where your weights live: locally.</p>
-            <a class="notebook-callout" href="https://github.com/Goekdeniz-Guelmez/mlx-lm-lora-example-notebooks" target="_blank" rel="noreferrer">
-              <span class="notebook-callout-icon" aria-hidden="true">↗</span>
-              <span class="notebook-callout-copy"><strong>Advanced notebook runs</strong><small>Step-by-step examples for fine-tuning, preference learning, and RL.</small></span>
-              <span class="notebook-callout-arrow" aria-hidden="true">→</span>
-            </a>
+            <div class="quick-resources">
+              <a class="quick-resource" href="https://github.com/Goekdeniz-Guelmez/mlx-lm-lora-example-notebooks" target="_blank" rel="noreferrer">
+                <span class="quick-resource-icon" aria-hidden="true">↗</span>
+                <span class="quick-resource-copy"><strong>Advanced notebook runs</strong><small>Step-by-step examples for fine-tuning, preference learning, and RL.</small></span>
+                <span class="quick-resource-arrow" aria-hidden="true">→</span>
+              </a>
+              <a class="quick-resource" href="https://huggingface.co/mlx-community/datasets" target="_blank" rel="noreferrer">
+                <span class="quick-resource-icon quick-resource-icon--hf" aria-hidden="true">HF</span>
+                <span class="quick-resource-copy"><strong>MLX Community datasets</strong><small>Datasets formatted for direct use with MLX-LM-LoRA.</small></span>
+                <span class="quick-resource-arrow" aria-hidden="true">→</span>
+              </a>
+            </div>
             <div class="quick-start-links">
               <a class="button button--primary" href="https://github.com/Goekdeniz-Guelmez/mlx-lm-lora#install" target="_blank" rel="noreferrer">Read the docs <span aria-hidden="true">↗</span></a>
               <a class="button button--quiet" href="https://pypi.org/project/mlx-lm-lora/" target="_blank" rel="noreferrer">PyPI package <span aria-hidden="true">↗</span></a>
@@ -198,7 +203,7 @@ mlx_lm_lora.train \
         </div>
       </section>
 
-      <section class="closing-section section-shell reveal">
+      <section class="closing-section section-shell reveal" data-scroll data-scroll-speed="0.025">
         <div class="closing-orb" aria-hidden="true"><span></span></div>
         <div>
           <div class="eyebrow">The local edge</div>

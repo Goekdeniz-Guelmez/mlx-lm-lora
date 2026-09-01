@@ -3,38 +3,68 @@ const methods = {
     label: "Supervised fine-tuning",
     title: "Teach the model a sharper way to speak.",
     description: "Use prompt and completion pairs or chat messages to turn a capable base model into one that understands your task, tone, and format.",
-    command: "mlx_lm_lora.train \\\n+  --model <model> \\\n+  --train-mode sft \\\n+  --data <dataset>",
+    command: `mlx_lm_lora.train \\
+  --model <model> \\
+  --train-mode sft \\
+  --data <dataset>`,
     link: "https://github.com/Goekdeniz-Guelmez/mlx-lm-lora#supervised-fine-tuning-sft"
   },
   dpo: {
     label: "Direct preference optimization",
     title: "Pull behavior toward the better answer.",
     description: "Train directly on chosen and rejected responses, so preference data becomes a clear, efficient signal for the model.",
-    command: "mlx_lm_lora.train \\\n+  --model <model> \\\n+  --train-mode dpo \\\n+  --data <dataset>",
+    command: `mlx_lm_lora.train \\
+  --model <model> \\
+  --train-mode dpo \\
+  --data <dataset>`,
     link: "https://github.com/Goekdeniz-Guelmez/mlx-lm-lora#direct-preference-optimization-dpo"
   },
   grpo: {
     label: "Group relative policy optimization",
     title: "Let the reward shape the next move.",
     description: "Use grouped generations and a custom reward function to optimize policy behavior without a separate critic model.",
-    command: "mlx_lm_lora.train \\\n+  --model <model> \\\n+  --train-mode grpo \\\n+  --data <dataset>",
+    command: `mlx_lm_lora.train \\
+  --model <model> \\
+  --train-mode grpo \\
+  --data <dataset>`,
     link: "https://github.com/Goekdeniz-Guelmez/mlx-lm-lora#group-relative-policy-optimization-grpo"
   },
   orpo: {
     label: "Odds ratio preference optimization",
     title: "Prefer the right answer in one pass.",
     description: "A monolithic preference objective that combines supervised learning and preference alignment without a reference model.",
-    command: "mlx_lm_lora.train \\\n+  --model <model> \\\n+  --train-mode orpo \\\n+  --data <dataset>",
+    command: `mlx_lm_lora.train \\
+  --model <model> \\
+  --train-mode orpo \\
+  --data <dataset>`,
     link: "https://github.com/Goekdeniz-Guelmez/mlx-lm-lora#odds-ratio-preference-optimization-orpo"
   },
   online: {
     label: "Online direct preference optimization",
     title: "Keep the feedback loop alive.",
     description: "Generate, judge, and update in an online preference workflow when the best data is the data you collect as you go.",
-    command: "mlx_lm_lora.train \\\n+  --model <model> \\\n+  --train-mode online_dpo \\\n+  --data <dataset>",
+    command: `mlx_lm_lora.train \\
+  --model <model> \\
+  --train-mode online_dpo \\
+  --data <dataset>`,
     link: "https://github.com/Goekdeniz-Guelmez/mlx-lm-lora#online-dpo"
   }
 };
+
+function initLocomotiveScroll() {
+  if (typeof window.LocomotiveScroll !== "function") return;
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+
+  window.mlxLocoScroll = new window.LocomotiveScroll({
+    lenisOptions: {
+      lerp: 0.12,
+      smoothWheel: true,
+      smoothTouch: false,
+      wheelMultiplier: 0.9,
+      touchMultiplier: 1.4
+    }
+  });
+}
 
 const methodTabs = document.querySelectorAll(".method-tab");
 const methodLabel = document.querySelector("#method-label");
@@ -43,6 +73,8 @@ const methodDescription = document.querySelector("#method-description");
 const methodCommand = document.querySelector("#method-command");
 const methodStatus = document.querySelector("#method-status");
 const methodLink = document.querySelector("#method-link");
+
+initLocomotiveScroll();
 
 function selectMethod(key) {
   const method = methods[key];
