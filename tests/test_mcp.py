@@ -71,6 +71,26 @@ class McpTenantTest(unittest.TestCase):
                     "a" * 32,
                 )
 
+    def test_training_config_requires_hugging_face_dataset_repo(self):
+        with tempfile.TemporaryDirectory() as root:
+            tenants = mcp.TenantManager(self.make_settings(root))
+            for dataset in (
+                "tenant://inputs/train.jsonl",
+                "./train.jsonl",
+                "https://huggingface.co/datasets/org/dataset",
+            ):
+                with self.subTest(dataset=dataset), self.assertRaises(ValueError):
+                    mcp.normalize_training_config(
+                        {
+                            "model": "org/model",
+                            "data": dataset,
+                            "train_mode": "sft",
+                        },
+                        "acme",
+                        tenants,
+                        "a" * 32,
+                    )
+
     def test_training_config_rejects_invalid_cli_values(self):
         with tempfile.TemporaryDirectory() as root:
             tenants = mcp.TenantManager(self.make_settings(root))

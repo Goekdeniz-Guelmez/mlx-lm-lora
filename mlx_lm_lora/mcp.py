@@ -46,6 +46,9 @@ else:
 
 LOGGER = logging.getLogger(__name__)
 TENANT_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+HF_DATASET_ID_PATTERN = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9._-]{0,95}(?:/[A-Za-z0-9][A-Za-z0-9._-]{0,95})?$"
+)
 JOB_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 JOB_STATES = frozenset({"queued", "running", "succeeded", "failed", "cancelled"})
 TRAINING_MODES = (
@@ -396,7 +399,7 @@ class TenantManager:
         return _resolve_inside(workspace, workspace / relative_value)
 
     def approved_input_roots(self, tenant_id: str) -> tuple[Path, ...]:
-        """Return roots allowed for local model/dataset inputs."""
+        """Return roots allowed for local model and auxiliary inputs."""
 
         roots = [self.workspace(tenant_id, create=False)]
         if self.settings.shared_root is not None:
@@ -427,6 +430,24 @@ def _normalize_local_reference(
     return str(_resolve_in_roots(value, tenants.approved_input_roots(tenant_id)))
 
 
+def _validate_hf_dataset_id(value: Any) -> str:
+    """Validate that a dataset value is a Hugging Face repository ID."""
+
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("config.data must be a non-empty Hugging Face dataset ID")
+    if value != value.strip() or not HF_DATASET_ID_PATTERN.fullmatch(value):
+        raise ValueError(
+            "config.data must be a Hugging Face dataset repository ID such as "
+            "'org/dataset', not a local file path or URL"
+        )
+    if _is_local_reference(value):
+        raise ValueError(
+            "config.data must be a Hugging Face dataset repository ID, not a "
+            "local file or directory"
+        )
+    return value
+
+
 def normalize_training_config(
     config: Mapping[str, Any],
     tenant_id: str,
@@ -437,8 +458,9 @@ def normalize_training_config(
 
     The returned mapping can be passed directly to ``mlx_lm_lora.train.main``.
     Output paths are always absolute paths under the selected tenant workspace.
-    Model and dataset Hub identifiers remain unchanged; explicit local inputs
-    must be under the tenant workspace or the optional shared read-only root.
+    Model and dataset Hub identifiers remain unchanged. Dataset identifiers
+    must refer to Hugging Face repositories; explicit local model and auxiliary
+    inputs must be under the tenant workspace or optional shared read-only root.
     """
 
     if not isinstance(config, Mapping):
@@ -465,7 +487,7 @@ def normalize_training_config(
 
     tenants.workspace(tenant_id, create=True)
     normalized["model"] = _normalize_local_reference(model, tenant_id, tenants)
-    normalized["data"] = _normalize_local_reference(data, tenant_id, tenants)
+    normalized["data"] = _validate_hf_dataset_id(data)
 
     choice_fields = {
         "train_mode": TRAINING_MODES,

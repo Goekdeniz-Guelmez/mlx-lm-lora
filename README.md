@@ -187,6 +187,38 @@ The process-level `MLX_LM_LORA_TENANT_ID` is recommended for a local agent. It
 means the agent does not need to choose a tenant in every tool call and cannot
 switch to another tenant through model-generated arguments.
 
+### Natural-language training skill
+
+The repository also includes an optional harness skill at
+`skills/mlx_lm_lora/SKILL.md`. Install or copy the complete `skills/mlx_lm_lora`
+directory into the harness's skills directory. The skill routes to its
+mode-specific files under `skills/mlx_lm_lora/references/` and teaches the
+agent to translate requests such as:
+
+```text
+Train Qwen/Qwen3.5-0.8B on LoRA and 4bit using SFT with
+mlx-community/wikisql. Use 1 step and max context length 512.
+```
+
+into the MCP configuration below, then validate and start the job:
+
+```json
+{
+  "model": "Qwen/Qwen3.5-0.8B",
+  "data": "mlx-community/wikisql",
+  "train": true,
+  "train_type": "lora",
+  "train_mode": "sft",
+  "load_in_4bits": true,
+  "iters": 1,
+  "max_seq_length": 512
+}
+```
+
+The skill does not replace the MCP server: it handles intent-to-config
+translation, while the server validates the request, enforces the tenant
+boundary, queues training, and reports status.
+
 ### Multi-tenant workspaces
 
 Every tenant is isolated below `MLX_LM_LORA_TENANT_ROOT` (default:
@@ -194,14 +226,16 @@ Every tenant is isolated below `MLX_LM_LORA_TENANT_ROOT` (default:
 
 ```text
 <tenant-root>/<tenant-id>/
-├── inputs/       # tenant-local datasets and reward functions
+├── inputs/       # tenant-local auxiliary files, such as rewards or adapters
 ├── runs/         # request.json, status.json, and training.log per job
 └── artifacts/    # adapters and fused models
 ```
 
-Tenant IDs are restricted to 1–64 letters, numbers, `.`, `_`, and `-`. Local
-files supplied to MCP tools should use `tenant://`, for example
-`tenant://inputs/train.jsonl`. Hugging Face model and dataset IDs such as
+Tenant IDs are restricted to 1–64 letters, numbers, `.`, `_`, and `-`. The
+`data` field must be a Hugging Face dataset repository ID such as
+`mlx-community/wikisql`; local JSONL/CSV paths are not accepted for datasets.
+Supported auxiliary local files should use `tenant://`, for example
+`tenant://inputs/reward.py`. Hugging Face model and dataset IDs such as
 `org/model` and `org/dataset` are passed through unchanged. An optional
 `MLX_LM_LORA_SHARED_ROOT` can expose preloaded read-only model or dataset files
 to all tenants.
@@ -223,7 +257,7 @@ Example tool input for SFT:
   "tenant_id": "alice",
   "config": {
     "model": "mlx-community/Qwen2.5-0.5B-Instruct-4bit",
-    "data": "tenant://inputs/train.jsonl",
+    "data": "org/preference-dataset",
     "train_mode": "sft",
     "train_type": "lora",
     "iters": 100,
