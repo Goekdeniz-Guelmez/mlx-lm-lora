@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0b0b0a" />
+    <meta name="description" content="MLX-LM-LoRA is a native Apple Silicon toolkit for local LLM fine-tuning, preference optimization, and quantization-aware training." />
+    <meta property="og:title" content="MLX-LM-LoRA — The local edge for model shaping" />
+    <meta property="og:description" content="Fine-tune LLMs locally on Apple Silicon with MLX, adapters, preference optimization, and QAT." />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://goekdeniz-guelmez.github.io/mlx-lm-lora/" />
+    <title>MLX-LM-LoRA — The local edge for model shaping</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <script defer src="./script.js"></script>
+  </head>
+  <body>
+    <div class="ambient ambient--one" aria-hidden="true"></div>
+    <div class="ambient ambient--two" aria-hidden="true"></div>
+    <div class="grain" aria-hidden="true"></div>
+
+    <header class="site-header">
+      <a class="brand" href="#top" aria-label="MLX-LM-LoRA home">
+        <span class="brand-mark" aria-hidden="true">
+          <span class="mark-orb"></span>
+          <span class="mark-bar mark-bar--one"></span>
+          <span class="mark-bar mark-bar--two"></span>
+          <span class="mark-bar mark-bar--three"></span>
+        </span>
+        <span class="brand-copy">
+          <span class="brand-name">MLX<span>—</span>LM<span>—</span>LoRA</span>
+          <span class="brand-subtitle">native model training</span>
+        </span>
+      </a>
+
+      <nav class="desktop-nav" aria-label="Primary navigation">
+        <a href="#capabilities">Capabilities</a>
+        <a href="#methods">Methods</a>
+        <a href="#quick-start">Quick start</a>
+      </nav>
+
+      <a class="header-action" href="https://github.com/Goekdeniz-Guelmez/mlx-lm-lora" target="_blank" rel="noreferrer">
+        <span>View on GitHub</span>
+        <span class="arrow" aria-hidden="true">↗</span>
+      </a>
+      <button class="menu-toggle" type="button" aria-expanded="false" aria-controls="mobile-nav" aria-label="Open navigation">
+        <span></span><span></span>
+      </button>
+    </header>
+
+    <nav class="mobile-nav" id="mobile-nav" aria-label="Mobile navigation">
+      <a href="#capabilities">Capabilities</a>
+      <a href="#methods">Methods</a>
+      <a href="#quick-start">Quick start</a>
+      <a href="https://github.com/Goekdeniz-Guelmez/mlx-lm-lora" target="_blank" rel="noreferrer">GitHub <span>↗</span></a>
+    </nav>
+
+    <main id="top">
+      <section class="hero section-shell">
+        <div class="hero-copy reveal">
+          <div class="eyebrow"><span class="status-dot"></span> Open source · Apple Silicon</div>
+          <h1>Shape the model.<br /><em>Keep the control.</em></h1>
+          <p class="hero-lede">A native MLX toolkit for fine-tuning language models locally — with adapters, preference optimization, and quantization-aware training built into one calm, capable workflow.</p>
+          <div class="hero-actions">
+            <a class="button button--primary" href="#quick-start">Start training <span aria-hidden="true">↓</span></a>
+            <a class="button button--quiet" href="https://github.com/Goekdeniz-Guelmez/mlx-lm-lora-example-notebooks" target="_blank" rel="noreferrer">Explore notebooks <span aria-hidden="true">↗</span></a>
+          </div>
+          <div class="hero-note"><span class="note-line"></span> Runs on the machine in front of you.</div>
+        </div>
+
+        <div class="hero-console reveal reveal--delay" aria-label="Example MLX-LM-LoRA training run">
+          <div class="console-glow" aria-hidden="true"></div>
+          <div class="console-topbar">
+            <div class="window-controls" aria-hidden="true"><span></span><span></span><span></span></div>
+            <span class="console-path">mlx_lm_lora / train</span>
+            <span class="console-state"><span class="status-dot"></span> ready</span>
+          </div>
+          <div class="console-heading">
+            <span class="console-kicker">current surface</span>
+            <strong>Fine-tune with intent.</strong>
+          </div>
+          <div class="console-code">
+            <div><span class="line-number">01</span><span class="syntax-key">model</span><span class="syntax-muted"> = </span><span class="syntax-value">Qwen3-8B</span></div>
+            <div><span class="line-number">02</span><span class="syntax-key">train_mode</span><span class="syntax-muted"> = </span><span class="syntax-value">sft</span></div>
+            <div><span class="line-number">03</span><span class="syntax-key">train_type</span><span class="syntax-muted"> = </span><span class="syntax-value">lora</span></div>
+            <div><span class="line-number">04</span><span class="syntax-key">quantization</span><span class="syntax-muted"> = </span><span class="syntax-value syntax-value--amber">qat · 4-bit</span></div>
+          </div>
+          <div class="console-footer">
+            <div class="run-metric"><span>adapter rank</span><strong>16</strong></div>
+            <div class="run-metric"><span>device</span><strong>mps / native</strong></div>
+            <div class="run-play" aria-hidden="true">⌁</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="signal-row section-shell reveal" aria-label="Project highlights">
+        <div class="signal"><strong>12<span>+</span></strong><span>training algorithms</span></div>
+        <div class="signal"><strong>4–16<span>bit</span></strong><span>QAT precision range</span></div>
+        <div class="signal"><strong>1</strong><span>local command surface</span></div>
+        <div class="signal signal--wide"><strong>MLX</strong><span>native on Apple Silicon</span></div>
+      </section>
+
+      <section class="content-section section-shell" id="capabilities">
+        <div class="section-intro reveal">
+          <div class="eyebrow">01 / Capability map</div>
+          <h2>Everything you need to<br /><span>move a model forward.</span></h2>
+          <p>Keep the loop close to the work. MLX-LM-LoRA puts efficient adaptation, preference learning, and evaluation in the same local toolkit.</p>
+        </div>
+
+        <div class="feature-grid">
+          <article class="feature-card feature-card--large reveal">
+            <div class="feature-icon icon-terminal" aria-hidden="true"><span>›_</span></div>
+            <div class="feature-card-copy">
+              <span class="card-index">01</span>
+              <h3>One local command</h3>
+              <p>Move from a base model to a focused training run without leaving your terminal or your machine.</p>
+            </div>
+            <div class="feature-code"><span>mlx_lm_lora.train</span><span class="feature-code-dot">●</span></div>
+          </article>
+          <article class="feature-card reveal reveal--delay-short">
+            <div class="feature-icon icon-layers" aria-hidden="true"><span></span><span></span><span></span></div>
+            <span class="card-index">02</span>
+            <h3>Preference-native</h3>
+            <p>DPO, CPO, ORPO, GRPO, online DPO, and more — train toward the behavior you actually want.</p>
+          </article>
+          <article class="feature-card reveal reveal--delay-short">
+            <div class="feature-icon icon-diamond" aria-hidden="true"></div>
+            <span class="card-index">03</span>
+            <h3>Quantized by design</h3>
+            <p>Use QLoRA and QAT to keep memory practical while preserving a direct path to better models.</p>
+          </article>
+          <article class="feature-card feature-card--wide reveal">
+            <div class="feature-icon icon-spark" aria-hidden="true">✦</div>
+            <div>
+              <span class="card-index">04</span>
+              <h3>Bring your own signal</h3>
+              <p>Register custom reward functions and shape GRPO around the signal that matters to your domain.</p>
+            </div>
+            <span class="feature-tag">extensible / by default</span>
+          </article>
+        </div>
+      </section>
+
+      <section class="methods-section section-shell" id="methods">
+        <div class="methods-heading reveal">
+          <div class="eyebrow">02 / Method library</div>
+          <h2>Choose the pressure.<br /><span>Keep the surface simple.</span></h2>
+        </div>
+        <div class="methods-workbench reveal reveal--delay">
+          <div class="method-tabs" role="tablist" aria-label="Training methods">
+            <button class="method-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="method-panel" data-method="sft">SFT <span>supervised</span></button>
+            <button class="method-tab" type="button" role="tab" aria-selected="false" aria-controls="method-panel" data-method="dpo">DPO <span>preference</span></button>
+            <button class="method-tab" type="button" role="tab" aria-selected="false" aria-controls="method-panel" data-method="grpo">GRPO <span>policy</span></button>
+            <button class="method-tab" type="button" role="tab" aria-selected="false" aria-controls="method-panel" data-method="orpo">ORPO <span>monolithic</span></button>
+            <button class="method-tab" type="button" role="tab" aria-selected="false" aria-controls="method-panel" data-method="online">Online DPO <span>real-time</span></button>
+          </div>
+          <div class="method-panel" id="method-panel" role="tabpanel" tabindex="0">
+            <div class="method-panel-copy">
+              <span class="method-label" id="method-label">Supervised fine-tuning</span>
+              <h3 id="method-title">Teach the model a sharper way to speak.</h3>
+              <p id="method-description">Use prompt–completion pairs or chat messages to turn a capable base model into one that understands your task, tone, and format.</p>
+              <a class="text-link" id="method-link" href="https://github.com/Goekdeniz-Guelmez/mlx-lm-lora#supervised-fine-tuning-sft" target="_blank" rel="noreferrer">Read the method notes <span aria-hidden="true">↗</span></a>
+            </div>
+            <div class="method-terminal">
+              <div class="terminal-header"><span>run recipe</span><span class="terminal-pill" id="method-pill">SFT</span></div>
+              <code id="method-command">mlx_lm_lora.train \
+  --model &lt;model&gt; \
+  --train-mode sft \
+  --data &lt;dataset&gt;</code>
+              <div class="terminal-footer"><span class="terminal-cursor"></span><span>ready for your data</span></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="quick-start section-shell" id="quick-start">
+        <div class="quick-start-card reveal">
+          <div class="quick-start-copy">
+            <div class="eyebrow">03 / Quick start</div>
+            <h2>Make the first run<br /><span>feel close.</span></h2>
+            <p>Install the package, point it at a model and dataset, then keep iterating where your weights live: locally.</p>
+            <div class="quick-start-links">
+              <a class="button button--primary" href="https://github.com/Goekdeniz-Guelmez/mlx-lm-lora#install" target="_blank" rel="noreferrer">Read the docs <span aria-hidden="true">↗</span></a>
+              <a class="button button--quiet" href="https://pypi.org/project/mlx-lm-lora/" target="_blank" rel="noreferrer">PyPI package <span aria-hidden="true">↗</span></a>
+            </div>
+          </div>
+          <div class="quick-start-terminal">
+            <div class="terminal-header"><span>terminal / zsh</span><button class="copy-button" type="button" data-copy-target="quickstart-code"><span class="copy-icon" aria-hidden="true">□</span> Copy</button></div>
+            <pre><code id="quickstart-code">pip install -U mlx-lm-lora
+
+mlx_lm_lora.train \
+  --model &lt;model&gt; \
+  --train \
+  --data &lt;dataset&gt; \
+  --iters 600</code></pre>
+            <div class="terminal-footer"><span class="terminal-cursor"></span><span>local · private · yours</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="closing-section section-shell reveal">
+        <div class="closing-orb" aria-hidden="true"><span></span></div>
+        <div>
+          <div class="eyebrow">The local edge</div>
+          <h2>Better models begin<br /><em>with closer loops.</em></h2>
+        </div>
+        <a class="button button--primary" href="https://github.com/Goekdeniz-Guelmez/mlx-lm-lora" target="_blank" rel="noreferrer">Build with MLX-LM-LoRA <span aria-hidden="true">↗</span></a>
+      </section>
+    </main>
+
+    <footer class="site-footer section-shell">
+      <div class="footer-brand"><span class="footer-mark" aria-hidden="true"><span></span><span></span><span></span></span><span>MLX-LM-LoRA</span></div>
+      <p>Native training infrastructure for Apple Silicon.</p>
+      <div class="footer-links"><a href="https://github.com/Goekdeniz-Guelmez/mlx-lm-lora" target="_blank" rel="noreferrer">GitHub ↗</a><a href="https://pypi.org/project/mlx-lm-lora/" target="_blank" rel="noreferrer">PyPI ↗</a><a href="https://github.com/Goekdeniz-Guelmez/mlx-lm-lora-example-notebooks" target="_blank" rel="noreferrer">Notebooks ↗</a></div>
+      <span class="footer-meta">MIT · 2026</span>
+    </footer>
+  </body>
+</html>
