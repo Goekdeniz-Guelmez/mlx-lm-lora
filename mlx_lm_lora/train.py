@@ -830,8 +830,6 @@ def evaluate_model(
     print_section(f"Evaluating {args.train_mode.upper()} Model")
 
     if args.train_mode == "orpo":
-        efficient = args.seq_step_size is not None
-        seq_step_size = args.seq_step_size or args.max_seq_length
         test_loss, test_rewards, _, test_metrics = evaluate_orpo(
             model=model,
             dataset=test_set,
@@ -839,8 +837,6 @@ def evaluate_model(
             num_batches=args.test_batches,
             max_seq_length=args.max_seq_length,
             beta=args.beta,
-            efficient=efficient,
-            seq_step_size=seq_step_size,
         )
         test_ppl = math.exp(test_loss)
         print(
