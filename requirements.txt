@@ -7,3 +7,4 @@ pyyaml
 jinja2
 tqdm
 datasets
+mcp[cli]>=1.13.0
