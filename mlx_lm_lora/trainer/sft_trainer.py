@@ -143,12 +143,6 @@ class SFTTrainingArgs:
             "help": "Chunk size used by memory-safe recurrent training fallbacks."
         },
     )
-    recurrence_chunk_size: int = field(
-        default=64,
-        metadata={
-            "help": "Chunk size used by memory-safe recurrent training fallbacks."
-        },
-    )
     qat_enable: bool = field(
         default=False,
         metadata={

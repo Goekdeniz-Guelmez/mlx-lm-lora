@@ -72,6 +72,7 @@ CONFIG_DEFAULTS = {
     "max_seq_length": 2048,
     "config": None,
     "grad_checkpoint": False,
+    "recurrence_chunk_size": 64,
     "lr_schedule": None,
     "lora_parameters": {"rank": 8, "dropout": 0.0, "scale": 10.0},
     "mask_prompt": False,
@@ -239,6 +240,12 @@ def build_parser():
         default=None,
     )
     parser.add_argument(
+        "--recurrence-chunk-size",
+        type=int,
+        help="Chunk size for memory-safe recurrent training fallbacks.",
+        default=None,
+    )
+    parser.add_argument(
         "--wandb",
         type=str,
         default=None,
@@ -329,6 +336,7 @@ def train_model(
         adapter_file=adapter_file,
         max_seq_length=args.max_seq_length,
         grad_checkpoint=args.grad_checkpoint,
+        recurrence_chunk_size=args.recurrence_chunk_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
     )
 
@@ -349,6 +357,7 @@ def evaluate_model(args, model: nn.Module, tokenizer, test_set):
         batch_size=args.batch_size,
         num_batches=args.test_batches,
         max_seq_length=args.max_seq_length,
+        recurrence_chunk_size=args.recurrence_chunk_size,
     )
 
     test_ppl = math.exp(test_loss)
