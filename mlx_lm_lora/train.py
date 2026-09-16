@@ -107,6 +107,7 @@ CONFIG_DEFAULTS = {
     "config": None,
     "grad_checkpoint": False,
     "efficient_long_context": False,
+    "recurrence_chunk_size": 64,
     "lr_schedule": None,
     "lora_parameters": {"rank": 8, "dropout": 0.0, "scale": 10.0},
     "mask_prompt": False,
@@ -364,6 +365,12 @@ def build_parser():
         default=None,
     )
     parser.add_argument(
+        "--recurrence-chunk-size",
+        type=int,
+        help="Chunk size for memory-safe recurrent training fallbacks.",
+        default=None,
+    )
+    parser.add_argument(
         "--wandb",
         type=str,
         default=None,
@@ -574,6 +581,7 @@ def train_model(
                 adapter_file=adapter_file,
                 max_seq_length=args.max_seq_length,
                 grad_checkpoint=args.grad_checkpoint,
+                recurrence_chunk_size=args.recurrence_chunk_size,
                 beta=args.beta,
                 seq_step_size=512 if args.efficient_long_context else None,
                 reward_scaling=args.reward_scaling,
@@ -605,6 +613,7 @@ def train_model(
                 adapter_file=adapter_file,
                 max_seq_length=args.max_seq_length,
                 grad_checkpoint=args.grad_checkpoint,
+                recurrence_chunk_size=args.recurrence_chunk_size,
                 gradient_accumulation_steps=args.gradient_accumulation_steps,
                 lambda_mse_target=args.lambda_mse_target,
                 tau_mse_target=args.tau_mse_target,
@@ -631,6 +640,7 @@ def train_model(
                 adapter_file=adapter_file,
                 max_seq_length=args.max_seq_length,
                 grad_checkpoint=args.grad_checkpoint,
+                recurrence_chunk_size=args.recurrence_chunk_size,
                 beta=args.beta,
                 loss_type=args.dpo_cpo_loss_type,
                 delta=args.delta,
@@ -665,6 +675,7 @@ def train_model(
             "adapter_file": adapter_file,
             "max_seq_length": args.max_seq_length,
             "grad_checkpoint": args.grad_checkpoint,
+            "recurrence_chunk_size": args.recurrence_chunk_size,
             "beta": args.beta,
             "reference_model_path": args.reference_model_path,
             "gradient_accumulation_steps": args.gradient_accumulation_steps,
@@ -720,6 +731,7 @@ def train_model(
                 adapter_file=adapter_file,
                 max_seq_length=args.max_seq_length,
                 grad_checkpoint=args.grad_checkpoint,
+                recurrence_chunk_size=args.recurrence_chunk_size,
                 beta=args.beta,
                 loss_type=args.dpo_cpo_loss_type,
                 delta=args.delta,
@@ -766,6 +778,7 @@ def train_model(
                 max_seq_length=args.max_seq_length,
                 max_completion_length=args.max_completion_length,
                 grad_checkpoint=args.grad_checkpoint,
+                recurrence_chunk_size=args.recurrence_chunk_size,
                 beta=args.beta,
                 group_size=args.group_size,
                 epsilon=args.epsilon,
@@ -800,6 +813,7 @@ def train_model(
                 grad_checkpoint=args.grad_checkpoint,
                 gradient_accumulation_steps=args.gradient_accumulation_steps,
                 seq_step_size=512 if args.efficient_long_context else None,
+                recurrence_chunk_size=args.recurrence_chunk_size,
                 qat_enable=args.qat_enable,
                 qat_bits=args.qat_bits,
                 qat_group_size=args.qat_group_size,
@@ -1098,6 +1112,7 @@ def evaluate_model(
             num_batches=args.test_batches,
             max_seq_length=args.max_seq_length,
             loss=get_sft_loss(args.sft_loss_type),
+            recurrence_chunk_size=args.recurrence_chunk_size,
         )
         test_ppl = math.exp(test_loss)
         print(

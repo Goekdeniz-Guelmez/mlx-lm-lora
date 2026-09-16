@@ -778,7 +778,7 @@ def train_grpo(
     end_answer_token: str = "</answer>",
 ):
     if model_uses_recurrence(model):
-        enable_memory_safe_recurrences()
+        enable_memory_safe_recurrences(chunk_size=args.recurrence_chunk_size)
     mx.set_wired_limit(mx.device_info()["max_recommended_working_set_size"])
     world = mx.distributed.init()
     world_size = world.size()
