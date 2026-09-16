@@ -2,3 +2,4 @@ include requirements.txt
 include README.md
 recursive-include mlx_lm_lora/ *.py
 recursive-include logos/ *.png
+recursive-include skills/ *.md

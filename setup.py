@@ -22,11 +22,26 @@ setup(
     url="https://github.com/Goekdeniz-Guelmez/mlx-lm-lora",
     license="MIT",
     install_requires=requirements,
-    packages=["mlx_lm_lora", "mlx_lm_lora.trainer"],
-    python_requires=">=3.8",
+    packages=[
+        "mlx_lm_lora",
+        "mlx_lm_lora.trainer",
+        "skills",
+        "skills.mlx_lm_lora",
+    ],
+    python_requires=">=3.10",
+    extras_require={
+        # Keep the historical extra as a compatibility alias. MCP is now a
+        # core dependency through requirements.txt, so new installs do not
+        # need to request this extra.
+        "mcp": ["mcp[cli]>=1.13.0"],
+    },
+    package_data={
+        "skills.mlx_lm_lora": ["SKILL.md", "references/*.md"],
+    },
     entry_points={
         "console_scripts": [
             "mlx_lm_lora.train = mlx_lm_lora.train:main",
+            "mlx_lm_lora.mcp = mlx_lm_lora.mcp:main",
         ]
     },
 )
