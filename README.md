@@ -357,13 +357,37 @@ mlx_lm_lora.train \
 **Key Parameters:**
 
 - `--group-size`: Number of generations per prompt (default: 4)
-- `--epsilon`: Numerical stability constant (default: 1e-4)
+- `--epsilon`: Importance-ratio clipping width (default: 1e-4)
 - `--max-completion-length`: Max generation length (default: 512)
 - `--temperature`: Sampling temperature (default: 0.8)
 - `--reward-functions`: Comma-separated reward function names
 - `--reward-functions-file`: Path to custom reward functions file
 - `--reward-weights`: JSON list of weights for each reward function
 - `--grpo-loss-type`: Loss variant - `grpo`, `bnpo`, or `dr_grpo`
+
+GRPO scores the exact sampled tokens with their prompt context, including the
+first completion token and any sampled stop token. Each rollout is used for one
+update; the fixed reference model is used only for the KL penalty. With
+`--beta 0`, reference scoring is skipped and the KL metric is zero.
+
+Log probabilities and loss reductions use float32. The KL estimator is
+`expm1(log_ref - log_policy) - (log_ref - log_policy)`, with its log ratio capped
+above at 20 to prevent exponential overflow. `kl_clip_ratio` (shown as
+“KL saturation”) reports how often this cap is reached; persistent saturation
+indicates excessive divergence and should be investigated. Non-finite losses or
+gradients abort the update before changing optimizer state.
+
+`grpo` averages each completion's token loss before averaging completions;
+`bnpo` divides by the total valid token count; `dr_grpo` divides by the number of
+completions times the configured maximum completion length. Empty completions
+contribute zero. Reward functions run once per rollout; unavailable rewards
+(`None`/NaN) have zero coverage and zero summary statistics when entirely absent,
+while infinite rewards and completions with no valid rewards are rejected.
+Generation concurrency and scoring microbatches are capped at the prompt batch
+size to limit KV-cache and activation memory as group size grows. Advantages
+are still normalized over complete groups, and microbatch gradients preserve
+the chosen loss normalization. Float32 scoring costs extra arithmetic; these
+memory limits trade some throughput for a smaller working set.
 
 **Dataset Format:**
 
