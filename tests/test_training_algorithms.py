@@ -42,6 +42,7 @@ class SFTTrainerTest(unittest.TestCase):
         self.assertEqual(args.gradient_accumulation_steps, 1)
         self.assertEqual(args.recurrence_chunk_size, 64)
         self.assertFalse(args.qat_enable)
+        self.assertIsNone(args.resume_checkpoint)
 
     def test_get_sft_loss_selects_supported_losses(self):
         self.assertIs(sft_trainer.get_sft_loss("nll"), sft_trainer.default_loss)

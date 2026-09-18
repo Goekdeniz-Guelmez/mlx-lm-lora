@@ -226,18 +226,21 @@ def from_pretrained(
             model.args.quantization_config = model.args.quantization
 
     if new_adapter_path is not None:
-        args = (
-            {
+        new_adapter_path = Path(new_adapter_path)
+        new_adapter_path.mkdir(parents=True, exist_ok=True)
+        if lora_config is not None:
+            adapter_args = {
                 "lora_parameters": lora_config,
                 "num_layers": lora_config.get("num_layers", None),
             }
-            if lora_config is not None
-            else {} | args
-        )
-        new_adapter_path = Path(new_adapter_path)
-        new_adapter_path.mkdir(parents=True, exist_ok=True)
-        new_adapter_file = new_adapter_path / "adapters.safetensors"
-        save_config(args, new_adapter_path / "adapter_config.json")
+            new_adapter_file = new_adapter_path / "adapters.safetensors"
+            save_config(adapter_args, new_adapter_path / "adapter_config.json")
+        else:
+            # Full fine-tuning produces a normal MLX model directory, not an
+            # adapter package. The trainer writes all parameters to this file.
+            new_adapter_file = new_adapter_path / "model.safetensors"
+            save_config(args, new_adapter_path / "config.json")
+            tokenizer.save_pretrained(new_adapter_path)
 
     return model, tokenizer, new_adapter_file if new_adapter_path is not None else None
 
