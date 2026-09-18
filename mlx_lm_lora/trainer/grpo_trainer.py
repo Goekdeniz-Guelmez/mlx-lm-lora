@@ -89,13 +89,17 @@ class GRPOTrainingArgs(SFTTrainingArgs):
 
 @mx.compile
 def _select_token_logps(logits, targets, mask):
-    """Select float32 log probabilities without materializing log-softmax."""
+    """Select float32 log probabilities without materializing log-softmax.
+
+    The elementwise mask and cast fuse into the reduction and gather kernels
+    under mx.compile, so no full-width float32 logits copy is materialized.
+    mx.logsumexp performs its own max-shifted accumulation, and the shift
+    cancels in ``selected - logsumexp``, so no separate row max is needed.
+    """
     # Mask before reductions: multiplying an invalid log probability by zero
     # afterwards still produces NaN. Only the small selected scores are retained.
     logits = mx.where(mask[..., None], logits, 0).astype(mx.float32)
-    logits = logits - mx.stop_gradient(mx.max(logits, axis=-1, keepdims=True))
-    targets = targets[..., None]
-    selected = mx.take_along_axis(logits, targets, axis=-1).squeeze(-1)
+    selected = mx.take_along_axis(logits, targets[..., None], axis=-1).squeeze(-1)
     return mx.where(mask, selected - mx.logsumexp(logits, axis=-1), 0)
 
 
