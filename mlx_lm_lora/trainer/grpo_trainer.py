@@ -358,8 +358,7 @@ def _rollout_rewards(batch, texts, indices, reward_funcs, reward_weights):
     )
 
 
-# Prevent exp overflow from extreme policy/reference separation. Expose the
-# fraction saturated in metrics so a divergent run is not silently hidden.
+# Prevent exp overflow from extreme policy/reference separation. Expose the fraction saturated in metrics so a divergent run is not silently hidden.
 _MAX_KL_LOG_RATIO = 20.0
 
 
