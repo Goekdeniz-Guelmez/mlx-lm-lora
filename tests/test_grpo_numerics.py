@@ -135,6 +135,52 @@ class GRPONumericsTest(unittest.TestCase):
             self.assertEqual(result.dtype, mx.float32)
             self.assertAlmostEqual(result.item(), -101.31326, places=4)
 
+    def test_masked_nonfinite_logits_have_zero_scores_and_gradients(self):
+        logits = mx.array([[[1.0, 2.0, 3.0], [float("nan"), float("inf"), 0.0]]])
+        targets = mx.array([[1, 0]])
+        mask = mx.array([[True, False]])
+        scores = grpo._select_token_logps(logits, targets, mask)
+        grad = mx.grad(lambda x: grpo._select_token_logps(x, targets, mask).sum())(
+            logits
+        )
+        self.assertTrue(mx.all(mx.isfinite(scores)).item())
+        self.assertTrue(mx.all(mx.isfinite(grad)).item())
+        self.assertEqual(scores[0, 1].item(), 0)
+        self.assertTrue(mx.all(grad[0, 1] == 0).item())
+
+    def test_prompt_cropping_preserves_dense_loss_and_gradients(self):
+        model, reference = TableModel(), TableModel()
+        reference.weight = reference.weight * 0.5
+        batch = ([[0, 1, 2, 1], [1, 2]], None, None, None, None)
+        completions = [mx.array([0, 2]), mx.array([1]), mx.array([], dtype=mx.int32)]
+        indices = [0, 1, 1]
+        advantages = mx.array([1.0, -1.0, 2.0])
+        inputs, mask, _ = grpo._prepare_grpo_inputs(batch, completions, indices)
+        refs = grpo._get_token_logps(reference, inputs, mask)
+
+        def dense_loss(m):
+            return objective(
+                grpo._get_token_logps(m, inputs, mask), refs, mask, advantages
+            )[0]
+
+        expected, expected_grad = nn.value_and_grad(model, dense_loss)(model)
+        (actual, _, _), actual_grad = nn.value_and_grad(model, grpo.grpo_loss)(
+            model,
+            reference,
+            batch,
+            completions,
+            batch_indices=indices,
+            advantages=advantages,
+            epsilon=0.2,
+            max_tokens=4,
+        )
+        self.assertAlmostEqual(actual.item(), expected.item(), places=6)
+        self.assertTrue(
+            mx.allclose(
+                actual_grad["weight"], expected_grad["weight"], atol=1e-6
+            ).item()
+        )
+
     def test_prompt_conditioning_includes_first_completion_token(self):
         model = TableModel()
         batch = ([[0, 1], [2]], None, None, None, None)
@@ -150,21 +196,24 @@ class GRPONumericsTest(unittest.TestCase):
     def test_empty_completions_have_zero_loss_and_gradient(self):
         model = TableModel()
 
-        def loss_fn(m):
-            return grpo.grpo_loss(
-                m,
-                None,
-                ([[1]], None, None, None, None),
-                [mx.array([], dtype=mx.int32)],
-                batch_indices=[0],
-                advantages=mx.array([1.0]),
-            )
+        for prompt in ([1], [0, 1, 2]):
+            with self.subTest(prompt=prompt):
 
-        (loss, tokens, metrics), grads = nn.value_and_grad(model, loss_fn)(model)
-        self.assertEqual(loss.item(), 0)
-        self.assertEqual(tokens.item(), 0)
-        self.assertTrue(mx.all(grads["weight"] == 0).item())
-        self.assertTrue(all(mx.isfinite(v).item() for v in metrics.values()))
+                def loss_fn(m):
+                    return grpo.grpo_loss(
+                        m,
+                        None,
+                        ([prompt], None, None, None, None),
+                        [mx.array([], dtype=mx.int32)],
+                        batch_indices=[0],
+                        advantages=mx.array([1.0]),
+                    )
+
+                (loss, tokens, metrics), grads = nn.value_and_grad(model, loss_fn)(model)
+                self.assertEqual(loss.item(), 0)
+                self.assertEqual(tokens.item(), 0)
+                self.assertTrue(mx.all(grads["weight"] == 0).item())
+                self.assertTrue(all(mx.isfinite(v).item() for v in metrics.values()))
 
     def test_microbatches_preserve_full_loss_gradients_and_metrics(self):
         model = TableModel()
@@ -201,6 +250,15 @@ class GRPONumericsTest(unittest.TestCase):
                 for key, value in full_metrics.items():
                     self.assertAlmostEqual(
                         chunk_metrics[key].item(), value.item(), places=6, msg=key
+                    )
+                eval_loss, eval_tokens, eval_metrics = grpo._grpo_microbatches(
+                    grpo.grpo_loss, model, 2, **kwargs
+                )
+                self.assertAlmostEqual(eval_loss.item(), full_loss.item(), places=6)
+                self.assertEqual(eval_tokens.item(), full_tokens.item())
+                for key, value in full_metrics.items():
+                    self.assertAlmostEqual(
+                        eval_metrics[key].item(), value.item(), places=6, msg=key
                     )
 
     def test_reference_is_not_evaluated_when_beta_is_zero(self):
@@ -278,6 +336,49 @@ class GRPORewardsTest(unittest.TestCase):
 
 
 class GRPOLifecycleTest(unittest.TestCase):
+    def test_evaluation_bounds_scoring_batch_size(self):
+        sizes = []
+
+        class RecordingModel(TableModel):
+            def __call__(self, inputs):
+                sizes.append(inputs.shape[0])
+                return super().__call__(inputs)
+
+        model = RecordingModel()
+
+        def reward(**kwargs):
+            return [1.0, 2.0, 3.0] * 2
+
+        with patch.object(
+            grpo,
+            "generate_grpo",
+            return_value=([mx.array([0])] * 6, ["a"] * 6, [0, 0, 0, 1, 1, 1]),
+        ):
+            loss, count, metrics = grpo.evaluate_grpo(
+                model,
+                None,
+                [([1], [], "p", "a"), ([2], [], "q", "b")],
+                None,
+                2,
+                1,
+                0.0,
+                0.2,
+                None,
+                3,
+                8,
+                4,
+                0.8,
+                1.0,
+                0,
+                0.0,
+                reward_funcs=[reward],
+            )
+        self.assertEqual(sizes, [2, 2, 2])
+        self.assertAlmostEqual(loss, 0.0, places=6)
+        self.assertEqual(count.item(), 6)
+        self.assertAlmostEqual(metrics["reward_mean"], 2.0, places=6)
+        self.assertTrue(model.training)
+
     def test_generation_preserves_tokens_order_and_closes_generator(self):
         model = TableModel()
 

@@ -91,20 +91,24 @@ class GRPOTrainingArgs(SFTTrainingArgs):
 def _select_token_logps(logits, targets, mask):
     """Select float32 log probabilities without materializing log-softmax.
 
-    The elementwise mask and cast fuse into the reduction and gather kernels
-    under mx.compile, so no full-width float32 logits copy is materialized.
-    mx.logsumexp performs its own max-shifted accumulation, and the shift
-    cancels in ``selected - logsumexp``, so no separate row max is needed.
+    Shift before subtracting the normalizer to preserve small log probabilities
+    even when logits have a large common offset. Compilation fuses elementwise
+    operations where possible; reductions still need vocabulary-sized work.
     """
     # Mask before reductions: multiplying an invalid log probability by zero
     # afterwards still produces NaN. Only the small selected scores are retained.
     logits = mx.where(mask[..., None], logits, 0).astype(mx.float32)
+    logits = logits - mx.stop_gradient(logits.max(axis=-1, keepdims=True))
     selected = mx.take_along_axis(logits, targets[..., None], axis=-1).squeeze(-1)
-    return mx.where(mask, selected - mx.logsumexp(logits, axis=-1), 0)
+    # Already max-shifted: avoid repeating logsumexp's max and subtraction.
+    normalizer = mx.log(mx.exp(logits).sum(axis=-1))
+    return mx.where(mask, selected - normalizer, 0)
 
 
-def _get_token_logps(model, inputs, mask):
-    return _select_token_logps(model(inputs[:, :-1]), inputs[:, 1:], mask)
+def _get_token_logps(model, inputs, mask, start=0):
+    # Keep the full causal context, but only normalize scored target positions.
+    logits = model(inputs[:, :-1])[:, start:]
+    return _select_token_logps(logits, inputs[:, start + 1 :], mask)
 
 
 def get_per_token_logps(model: nn.Module, inputs, lengths):
@@ -443,10 +447,14 @@ def grpo_loss(
     inputs, mask, completion_lengths = _prepare_grpo_inputs(
         batch, completions, batch_indices
     )
-    logps = _get_token_logps(model, inputs, mask)
+    start = min(len(batch[0][idx]) for idx in batch_indices) - 1
+    mask = mask[:, start:]
     if beta != 0 and ref_model is not None:
-        ref_logps = mx.stop_gradient(_get_token_logps(ref_model, inputs, mask))
+        ref_logps = mx.stop_gradient(_get_token_logps(ref_model, inputs, mask, start))
     else:
+        ref_logps = None
+    logps = _get_token_logps(model, inputs, mask, start)
+    if ref_logps is None:
         ref_logps = mx.stop_gradient(logps)
     loss, tokens, metrics = _grpo_objective(
         logps,
@@ -599,8 +607,13 @@ def evaluate_grpo(
                 batch, all_completion_texts, batch_indices, reward_funcs, reward_weights
             )
 
-            losses, toks, metrics = loss_fn(
-                model=model,
+            if loss_fn is grpo_loss:
+                compute_loss = lambda **kwargs: _grpo_microbatches(
+                    loss_fn, model, max(len(prompt_tokens), 1), **kwargs
+                )
+            else:
+                compute_loss = lambda **kwargs: loss_fn(model=model, **kwargs)
+            losses, toks, metrics = compute_loss(
                 ref_model=ref_model,
                 batch=(
                     prompt_tokens,
@@ -652,8 +665,8 @@ def evaluate_grpo(
         model.train(was_training)
 
 
-def _grpo_value_and_grad(loss_value_and_grad, model, chunk_size, **kwargs):
-    """Accumulate completion microbatches without retaining all rollout graphs.
+def _grpo_microbatches(compute, model, chunk_size, *, with_grad=False, **kwargs):
+    """Score or differentiate microbatches without retaining all rollout graphs.
 
     Rewards/advantages are computed over complete groups before this function.
     Weight each microbatch by the loss's actual denominator so chunking does
@@ -674,7 +687,7 @@ def _grpo_value_and_grad(loss_value_and_grad, model, chunk_size, **kwargs):
             token_count, 1
         )
         weight = token_weight if loss_type == "bnpo" else row_weight
-        (loss, tokens, metrics), grads = loss_value_and_grad(
+        result = compute(
             model,
             completions=completions[start:stop],
             completion_texts=texts[start:stop],
@@ -682,12 +695,18 @@ def _grpo_value_and_grad(loss_value_and_grad, model, chunk_size, **kwargs):
             advantages=advantages[start:stop],
             **kwargs,
         )
-        grads = tree_map(lambda g: g * weight, grads)
-        accumulated = (
-            grads
-            if accumulated is None
-            else tree_map(lambda a, b: a + b, accumulated, grads)
-        )
+        if with_grad:
+            (loss, tokens, metrics), grads = result
+            grads = tree_map(lambda g: g * weight, grads)
+            accumulated = (
+                grads
+                if accumulated is None
+                else tree_map(lambda a, b: a + b, accumulated, grads)
+            )
+            del grads
+        else:
+            loss, tokens, metrics = result
+        del result
         total_loss = total_loss + loss * weight
         total_tokens = total_tokens + tokens
         weighted_metrics = {
@@ -711,11 +730,18 @@ def _grpo_value_and_grad(loss_value_and_grad, model, chunk_size, **kwargs):
                     all_metrics[key] = mx.minimum(all_metrics[key], metrics[key])
                 else:
                     all_metrics[key] = all_metrics[key] + value
-        del grads, loss, tokens, metrics, weighted_metrics
+        del loss, tokens, metrics, weighted_metrics
         # A real evaluation boundary releases each microbatch's activations
         # before building the next graph. Cache clearing cannot achieve this.
         mx.eval(total_loss, total_tokens, all_metrics, accumulated)
-    return (total_loss, total_tokens, all_metrics), accumulated
+    result = total_loss, total_tokens, all_metrics
+    return (result, accumulated) if with_grad else result
+
+
+def _grpo_value_and_grad(loss_value_and_grad, model, chunk_size, **kwargs):
+    return _grpo_microbatches(
+        loss_value_and_grad, model, chunk_size, with_grad=True, **kwargs
+    )
 
 
 def train_grpo(
