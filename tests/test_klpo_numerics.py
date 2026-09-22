@@ -1,6 +1,8 @@
 """Numerical checks for the MLX KLPO objective."""
 
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import mlx.core as mx
 import numpy as np
@@ -9,6 +11,61 @@ from mlx_lm_lora.trainer import klpo_trainer as klpo
 
 
 class KLPONumericsTest(unittest.TestCase):
+    def test_generation_discards_sampler_lookahead_record(self):
+        class Model:
+            training = True
+
+            def eval(self):
+                self.training = False
+
+            def train(self, value=True):
+                self.training = value
+
+        class Tokenizer:
+            eos_token_ids = frozenset()
+
+            def encode(self, text, add_special_tokens=False):
+                return [1]
+
+            def decode(self, tokens):
+                return str(tokens)
+
+        class Generator:
+            def __init__(self, model, **kwargs):
+                self.emitted = False
+
+            def insert(self, prompts, max_tokens, samplers=None):
+                self.sampler = samplers[0]
+                self.sampler(mx.zeros((1, 4)))
+                self.sampler(mx.zeros((1, 4)))
+                return [7]
+
+            def next_generated(self):
+                if self.emitted:
+                    return []
+                self.emitted = True
+                return [SimpleNamespace(uid=7, token=2)]
+
+            def close(self):
+                pass
+
+        def fake_recording_sampler(record, temperature):
+            def sampler(logprobs):
+                record.action_logps.append(mx.array(-1.0))
+                return mx.array([2], dtype=mx.int32)
+
+            return sampler
+
+        with patch.object(klpo, "BatchGenerator", Generator), patch.object(
+            klpo, "_recording_sampler", fake_recording_sampler
+        ):
+            completions, _, records, _ = klpo.generate_klpo(
+                Model(), Tokenizer(), [[1]], 2, 1, None, 1.0, "binary", 1, 1
+            )
+
+        self.assertEqual(completions[0].shape, (1,))
+        self.assertEqual(records[0]["action_logps"].shape, (1,))
+
     def test_binary_identical_sampler_has_zero_kl(self):
         current = mx.array([[-1.0, -2.0]])
         behavior = current

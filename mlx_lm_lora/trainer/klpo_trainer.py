@@ -450,8 +450,10 @@ class _KLPORecords:
         self.mc_samples = mc_samples
         self.top_k = top_k
 
-    def as_dict(self):
+    def as_dict(self, length=None):
         def stack(values, tail=()):
+            if length is not None:
+                values = values[:length]
             if values:
                 return mx.stack(values)
             return None
@@ -566,7 +568,10 @@ def generate_klpo(
                         ids[:-1] if ids and ids[-1] in tokenizer.eos_token_ids else ids
                     )
                     texts.append(tokenizer.decode(text_ids))
-                    records.append(store.as_dict())
+                    # BatchGenerator evaluates one look-ahead sampler step before
+                    # returning the final response token. Only records aligned
+                    # with returned completion tokens belong to the rollout.
+                    records.append(store.as_dict(len(ids)))
             finally:
                 generator.close()
         return completions, texts, records, list(range(len(prompt_tokens)))
