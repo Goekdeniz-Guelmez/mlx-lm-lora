@@ -1,7 +1,7 @@
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, Iterator, List, Optional, Sequence, Tuple, Union
 
 import mlx.core as mx
 import mlx.nn as nn
@@ -479,7 +479,45 @@ def grpo_loss(
     return loss, tokens, metrics
 
 
-def iterate_grpo_batches(dataset, batch_size, max_seq_length, train=False):
+GRPOExample = Union[
+    Tuple[Sequence[int], Sequence[int], str, str],
+    Tuple[Sequence[int], Sequence[int], str, str, Any],
+]
+GRPOBatch = Tuple[
+    List[Sequence[int]],
+    List[Sequence[int]],
+    List[str],
+    List[str],
+    Optional[List[Any]],
+]
+
+
+def iterate_grpo_batches(
+    dataset: Sequence[GRPOExample],
+    batch_size: int,
+    max_seq_length: int,
+    train: bool = False,
+) -> Iterator[GRPOBatch]:
+    """Yield distributed GRPO batches with bounded prompt lengths.
+
+    GRPO generates from the tokenized prompt and uses the answer text only for
+    reward computation. Prompts longer than ``max_seq_length`` are therefore
+    prefix-truncated before rollout; the original prompt and answer strings
+    remain unchanged for reward functions.
+
+    Args:
+        dataset: Tokenized GRPO examples with optional type metadata.
+        batch_size: Global batch size, divisible by the worker count.
+        max_seq_length: Maximum number of prompt tokens passed to the model.
+        train: Whether to randomize the batch order.
+
+    Yields:
+        Tuples containing prompt tokens, answer tokens, prompt text, answer
+        text, and optional type metadata.
+
+    Raises:
+        ValueError: If the dataset shape or batch configuration is invalid.
+    """
     has_types = bool(dataset) and isinstance(dataset[0], tuple) and len(dataset[0]) == 5
 
     if (
@@ -497,10 +535,8 @@ def iterate_grpo_batches(dataset, batch_size, max_seq_length, train=False):
         raise ValueError("max_seq_length must be positive.")
 
     def length_key(i):
-        # GRPO only feeds the prompt to the rollout model.  Cap the sorting
-        # length as well, otherwise an overlong prompt can determine padding
-        # and batching even though it will be truncated below.
-        return min(len(dataset[i][0]), max_seq_length) + len(dataset[i][1])
+        # Answer tokens are not fed to the GRPO rollout or loss model.
+        return min(len(dataset[i][0]), max_seq_length)
 
     idx = sorted(range(len(dataset)), key=length_key)
 

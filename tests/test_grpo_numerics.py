@@ -209,7 +209,9 @@ class GRPONumericsTest(unittest.TestCase):
                         advantages=mx.array([1.0]),
                     )
 
-                (loss, tokens, metrics), grads = nn.value_and_grad(model, loss_fn)(model)
+                (loss, tokens, metrics), grads = nn.value_and_grad(model, loss_fn)(
+                    model
+                )
                 self.assertEqual(loss.item(), 0)
                 self.assertEqual(tokens.item(), 0)
                 self.assertTrue(mx.all(grads["weight"] == 0).item())
@@ -515,6 +517,18 @@ class GRPOLifecycleTest(unittest.TestCase):
         dataset = [([1], [], "prompt", "answer")]
         with self.assertRaisesRegex(ValueError, "max_seq_length must be positive"):
             next(grpo.iterate_grpo_batches(dataset, 1, 0))
+
+    def test_batch_iterator_preserves_reward_metadata_after_truncation(self):
+        dataset = [
+            ([1, 2, 3, 4], [9, 10], "prompt", "reference", "math"),
+        ]
+        world = SimpleNamespace(size=lambda: 1, rank=lambda: 0)
+        with patch.object(grpo.mx.distributed, "init", return_value=world):
+            batch = next(grpo.iterate_grpo_batches(dataset, 1, 2))
+
+        self.assertEqual(batch[0], [[1, 2]])
+        self.assertEqual(batch[1], [[9, 10]])
+        self.assertEqual(batch[2:], (["prompt"], ["reference"], ["math"]))
 
     def test_workers_receive_distinct_rows(self):
         dataset = [([i], [], str(i), "") for i in range(4)]
