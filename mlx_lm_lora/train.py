@@ -95,6 +95,7 @@ CONFIG_DEFAULTS = {
     "iters": None,
     "epochs": None,
     "gradient_accumulation_steps": 1,
+    "micro_batch_size": None,
     "val_batches": 25,
     "learning_rate": 1e-5,
     "steps_per_report": 10,
@@ -453,6 +454,12 @@ def build_parser():
         "--temperature", type=float, help="Temperature for sampling.", default=1.0
     )
     parser.add_argument(
+        "--micro-batch-size",
+        type=int,
+        default=None,
+        help="Bound online DPO/RLHF/XPO scoring memory with this microbatch size.",
+    )
+    parser.add_argument(
         "--reward-weights",
         type=str,
         help="Weights for each reward function.",
@@ -718,6 +725,7 @@ def train_model(
             "beta": args.beta,
             "reference_model_path": args.reference_model_path,
             "gradient_accumulation_steps": args.gradient_accumulation_steps,
+            "micro_batch_size": args.micro_batch_size,
             "judge": args.judge,
             "max_completion_length": args.max_completion_length,
         }
