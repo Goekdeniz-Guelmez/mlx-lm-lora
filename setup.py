@@ -20,7 +20,7 @@ setup(
     author_email="goekdenizguelmez@gmail.com",
     author="Gökdeniz Gülmez",
     url="https://github.com/Goekdeniz-Guelmez/mlx-lm-lora",
-    license="MIT",
+    license="Apache-2.0",
     install_requires=requirements,
     packages=["mlx_lm_lora", "mlx_lm_lora.trainer"],
     python_requires=">=3.8",
