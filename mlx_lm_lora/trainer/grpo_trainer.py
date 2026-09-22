@@ -493,9 +493,14 @@ def iterate_grpo_batches(dataset, batch_size, max_seq_length, train=False):
 
     if batch_size < 1:
         raise ValueError("batch_size must be positive.")
+    if max_seq_length < 1:
+        raise ValueError("max_seq_length must be positive.")
 
     def length_key(i):
-        return len(dataset[i][0]) + len(dataset[i][1])
+        # GRPO only feeds the prompt to the rollout model.  Cap the sorting
+        # length as well, otherwise an overlong prompt can determine padding
+        # and batching even though it will be truncated below.
+        return min(len(dataset[i][0]), max_seq_length) + len(dataset[i][1])
 
     idx = sorted(range(len(dataset)), key=length_key)
 
@@ -524,7 +529,11 @@ def iterate_grpo_batches(dataset, batch_size, max_seq_length, train=False):
         for batch_idx in indices:
             current_batch = [dataset[j] for j in batch_idx]
 
-            prompts_tokens = [item[0] for item in current_batch]
+            # Keep the same prefix-truncation convention as the other
+            # trainers.  This bounds prompt/KV-cache memory for long-context
+            # GRPO rollouts while leaving the original text available to
+            # reward functions.
+            prompts_tokens = [item[0][:max_seq_length] for item in current_batch]
             answers_tokens = [item[1] for item in current_batch]
             prompts_text = [item[2] for item in current_batch]
             answers_text = [item[3] for item in current_batch]

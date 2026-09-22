@@ -499,6 +499,23 @@ class GRPOLifecycleTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Dataset must"):
             next(grpo.iterate_grpo_batches([], 1, 8))
 
+    def test_batch_iterator_truncates_prompts_to_max_seq_length(self):
+        dataset = [
+            ([1, 2, 3, 4, 5], [], "long-1", "answer"),
+            ([6, 7, 8, 9], [], "long-2", "answer"),
+        ]
+        world = SimpleNamespace(size=lambda: 1, rank=lambda: 0)
+        with patch.object(grpo.mx.distributed, "init", return_value=world):
+            batch = next(grpo.iterate_grpo_batches(dataset, 2, 3))
+
+        self.assertEqual(batch[0], [[1, 2, 3], [6, 7, 8]])
+        self.assertEqual(batch[2], ["long-1", "long-2"])
+
+    def test_batch_iterator_rejects_non_positive_max_seq_length(self):
+        dataset = [([1], [], "prompt", "answer")]
+        with self.assertRaisesRegex(ValueError, "max_seq_length must be positive"):
+            next(grpo.iterate_grpo_batches(dataset, 1, 0))
+
     def test_workers_receive_distinct_rows(self):
         dataset = [([i], [], str(i), "") for i in range(4)]
         for rank in (0, 1):
