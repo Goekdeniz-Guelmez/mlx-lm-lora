@@ -643,7 +643,7 @@ def create_dataset(
             )
         else:
             raise ValueError("Unsupported data format for RLHF training.")
-    elif train_mode in ["grpo"]:
+    elif train_mode in ["grpo", "klpo"]:
         if prompt_feature in sample:
             return GRPODataset(
                 data=data,

@@ -391,6 +391,29 @@ are still normalized over complete groups, and microbatch gradients preserve
 the chosen loss normalization. Float32 scoring costs extra arithmetic; these
 memory limits trade some throughput for a smaller working set.
 
+### KL-Regularized Policy Optimization (KLPO)
+
+KLPO trains one complete sampled response per prompt using terminal rewards and
+sampler-conditioned KL records. The default is token regression with MC-KL:
+
+```shell
+mlx_lm_lora.train \
+  --model <model> \
+  --train \
+  --train-mode klpo \
+  --data <dataset> \
+  --beta 0.1 \
+  --klpo-route token \
+  --klpo-kl-estimator mc \
+  --klpo-mc-samples 128
+```
+
+Use `--klpo-route sequence` for sequence regression and
+`--klpo-kl-estimator binary|topk|full` for the other conditional KL
+estimators. KLPO does not use GRPO group normalization, PPO ratio clipping, or
+a reference model. It reuses the GRPO reward callbacks and bounded generation,
+scoring, gradient, evaluation, and checkpointing pipeline.
+
 **Dataset Format:**
 
 ```jsonl
@@ -1037,6 +1060,7 @@ Use multiple reward functions:
 | CPO | Preference | ✅ | ❌ | ❌ | Better for structured tasks |
 | ORPO | Preference | ❌ | ❌ | ❌ | Monolithic optimization |
 | GRPO | Policy | ❌ | ❌ | ✅ | Group-based learning |
+| KLPO | Policy | ❌ | ❌ | ❌ | Critic-free KL regularization |
 | GSPO | Policy | ❌ | ❌ | ✅ | Importance sampling |
 | Dr. GRPO | Policy | ❌ | ❌ | ✅ | Decoupled rewards |
 | DAPO | Policy | ❌ | ❌ | ✅ | Dynamic clipping |
@@ -1216,7 +1240,7 @@ Below is a comparison of iteration speed and memory usage across different train
 #### Key Differences
 
 **MLX-LM-LoRA (Apple Silicon - Native MLX)**
-- ✅ **Comprehensive**: 12 training algorithms (SFT, DPO, CPO, ORPO, GRPO, GSPO, Dr. GRPO, DAPO, Online DPO, XPO, RLHF, PPO)
+- ✅ **Comprehensive**: 13 training algorithms (SFT, DPO, CPO, ORPO, GRPO, KLPO, GSPO, Dr. GRPO, DAPO, Online DPO, XPO, RLHF, PPO)
 - ✅ **Custom Preference Models**: Built-in judge training for online preference workflows
 - ✅ **Unified Memory**: Access to full system RAM (up to 512GB on Ultra)
 - ✅ **Moderate Speed**: Optimized MLX implementation with native Apple Silicon support
