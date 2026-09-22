@@ -9,19 +9,17 @@ import math
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, List, Optional
 
 import mlx.core as mx
-import mlx.nn as nn
 import numpy as np
+from mlx import nn
+from mlx.utils import tree_flatten, tree_map
 from mlx_lm.generate import BatchGenerator
 from mlx_lm.tuner.callbacks import TrainingCallback
-from mlx.utils import tree_flatten, tree_map
 from tqdm import tqdm
 
 from ..recurrent_patch import enable_memory_safe_recurrences, model_uses_recurrence
 from .grpo_reward_functions import (
-    RewardFunctions,
     r1_accuracy_reward_func,
     r1_count_xml,
     r1_int_reward_func,
@@ -61,7 +59,7 @@ class KLPOTrainingArgs(SFTTrainingArgs):
     temperature: float = field(
         default=1.0, metadata={"help": "Collection sampler temperature."}
     )
-    reward_weights: Optional[List[float]] = field(
+    reward_weights: list[float] | None = field(
         default=None,
         metadata={"help": "Weights for each reward function."},
     )
@@ -661,7 +659,7 @@ def _klpo_microbatches(compute, model, chunk_size, *, with_grad=False, **kwargs)
         )
         if with_grad:
             (loss, tokens, metrics), grads = result
-            grads = tree_map(lambda value: value * weight, grads)
+            grads = tree_map(lambda value, weight=weight: value * weight, grads)
             accumulated = (
                 grads
                 if accumulated is None
@@ -793,10 +791,11 @@ def train_klpo(
     train_dataset,
     val_dataset=None,
     reward_funcs=None,
-    args=KLPOTrainingArgs(),
+    args=None,
     training_callback: TrainingCallback = None,
     end_answer_token="</answer>",
 ):
+    args = args or KLPOTrainingArgs()
     reward_funcs = reward_funcs or [
         r1_accuracy_reward_func,
         r1_int_reward_func,
@@ -894,7 +893,7 @@ def train_klpo(
         if val_dataset is not None and len(val_dataset) > 0 and (
             iteration == 1 or iteration % args.steps_per_eval == 0 or iteration == args.iters
         ):
-            val_loss, val_tokens, val_metrics = evaluate_klpo(
+            val_loss, val_tokens, _val_metrics = evaluate_klpo(
                 model, val_dataset, tokenizer, args.batch_size, args.val_batches,
                 args.beta, args.route, args.kl_estimator, args.mc_samples, args.top_k,
                 args.tail_floor, args.max_seq_length, args.max_completion_length,
@@ -910,7 +909,7 @@ def train_klpo(
             model.train()
             start_time = time.perf_counter()
 
-        prompt_tokens, answer_tokens, prompt_text, answer_text, type_info = batch
+        prompt_tokens, _, _, _, _ = batch
         completions, texts, records, indices = generate_klpo(
             model, tokenizer, prompt_tokens, args.max_completion_length,
             args.batch_size, end_answer_token, args.temperature, args.kl_estimator,

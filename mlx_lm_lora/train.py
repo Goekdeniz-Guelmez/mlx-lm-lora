@@ -792,7 +792,7 @@ def train_model(
                 reward_funcs = [get_reward_function(name) for name in func_names]
                 print_success(f"Using custom reward functions: {', '.join(func_names)}")
             except KeyError as e:
-                print_error(f"Error: {str(e)}")
+                print_error(f"Error: {e!s}")
                 print_info(
                     f"Available reward functions: {list_available_reward_functions()}"
                 )
@@ -845,7 +845,7 @@ def train_model(
                 reward_funcs = [get_reward_function(name) for name in func_names]
                 print_success(f"Using custom reward functions: {', '.join(func_names)}")
             except KeyError as e:
-                print_error(f"Error: {str(e)}")
+                print_error(f"Error: {e!s}")
                 print_info(
                     f"Available reward functions: {list_available_reward_functions()}"
                 )
@@ -1152,7 +1152,7 @@ def evaluate_model(
             try:
                 reward_funcs = [get_reward_function(name) for name in func_names]
             except KeyError as e:
-                print_error(f"Error: {str(e)}")
+                print_error(f"Error: {e!s}")
                 print_info(
                     f"Available reward functions: {list_available_reward_functions()}"
                 )
@@ -1203,7 +1203,7 @@ def evaluate_model(
             try:
                 reward_funcs = [get_reward_function(name) for name in func_names]
             except KeyError as e:
-                print_error(f"Error: {str(e)}")
+                print_error(f"Error: {e!s}")
                 print_info(
                     f"Available reward functions: {list_available_reward_functions()}"
                 )

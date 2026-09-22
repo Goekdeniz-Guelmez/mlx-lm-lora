@@ -145,6 +145,7 @@ test*.txt
 
 test*.ipynb
 .test*.ipynb
+!test_klpo.ipynb
 
 examples/test*
 .examples/test*

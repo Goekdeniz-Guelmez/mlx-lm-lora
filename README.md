@@ -1058,6 +1058,7 @@ Use multiple reward functions:
 | CPO | Preference | ✅ | ❌ | ❌ | Better for structured tasks |
 | ORPO | Preference | ❌ | ❌ | ❌ | Monolithic optimization |
 | GRPO | Policy | ❌ | ❌ | ✅ | Group-based learning |
+| KLPO | Policy | ❌ | ❌ | ❌ | Critic-free KL regularization |
 | GSPO | Policy | ❌ | ❌ | ✅ | Importance sampling |
 | Dr. GRPO | Policy | ❌ | ❌ | ✅ | Decoupled rewards |
 | DAPO | Policy | ❌ | ❌ | ✅ | Dynamic clipping |
@@ -1237,7 +1238,7 @@ Below is a comparison of iteration speed and memory usage across different train
 #### Key Differences
 
 **MLX-LM-LoRA (Apple Silicon - Native MLX)**
-- ✅ **Comprehensive**: 12 training algorithms (SFT, DPO, CPO, ORPO, GRPO, GSPO, Dr. GRPO, DAPO, Online DPO, XPO, RLHF, PPO)
+- ✅ **Comprehensive**: 13 training algorithms (SFT, DPO, CPO, ORPO, GRPO, KLPO, GSPO, Dr. GRPO, DAPO, Online DPO, XPO, RLHF, PPO)
 - ✅ **Custom Preference Models**: Built-in judge training for online preference workflows
 - ✅ **Unified Memory**: Access to full system RAM (up to 512GB on Ultra)
 - ✅ **Moderate Speed**: Optimized MLX implementation with native Apple Silicon support
