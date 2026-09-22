@@ -389,6 +389,29 @@ are still normalized over complete groups, and microbatch gradients preserve
 the chosen loss normalization. Float32 scoring costs extra arithmetic; these
 memory limits trade some throughput for a smaller working set.
 
+### KL-Regularized Policy Optimization (KLPO)
+
+KLPO trains one complete sampled response per prompt using terminal rewards and
+sampler-conditioned KL records. The default is token regression with MC-KL:
+
+```shell
+mlx_lm_lora.train \
+  --model <model> \
+  --train \
+  --train-mode klpo \
+  --data <dataset> \
+  --beta 0.1 \
+  --klpo-route token \
+  --klpo-kl-estimator mc \
+  --klpo-mc-samples 128
+```
+
+Use `--klpo-route sequence` for sequence regression and
+`--klpo-kl-estimator binary|topk|full` for the other conditional KL
+estimators. KLPO does not use GRPO group normalization, PPO ratio clipping, or
+a reference model. It reuses the GRPO reward callbacks and bounded generation,
+scoring, gradient, evaluation, and checkpointing pipeline.
+
 **Dataset Format:**
 
 ```jsonl
