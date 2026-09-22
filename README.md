@@ -5,6 +5,7 @@
 # MLX-LM-LORA
 
 [![image](https://img.shields.io/pypi/v/mlx-lm-lora.svg)](https://pypi.python.org/pypi/mlx-lm-lora)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
 **[Explore the project site →](https://goekdeniz-guelmez.github.io/mlx-lm-lora/)**
 
@@ -103,6 +104,7 @@ With MLX-LM-LoRA you can, train Large Language Models locally on Apple Silicon u
 - [Memory Optimization](#memory-optimization)
 - [Evaluation & Generation](#evaluation--generation)
 - [Performance Comparison](#performance-comparison)
+- [License](#license)
 
 ---
 
@@ -1283,3 +1285,7 @@ MLX-LM-LoRA is also beeing used by researchers, engineers, and other profesional
   year = {2025},
 }
 ```
+
+## License
+
+MLX-LM-LoRA is licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for the full license text.
