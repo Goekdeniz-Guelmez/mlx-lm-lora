@@ -67,6 +67,10 @@ class KLPOTrainingArgs(SFTTrainingArgs):
 
 def _log1mexp(x):
     """Stable log(1-exp(x)) for negative log-probabilities."""
+    # Float32 log-softmax can round a near-certain action to log(p)=0. The
+    # binary complement is undefined at that rounded boundary, so keep the
+    # numerical calculation strictly inside p < 1.
+    x = mx.minimum(x, -float(np.finfo(np.float32).eps))
     cutoff = -math.log(2.0)
     return mx.where(x < cutoff, mx.log1p(-mx.exp(x)), mx.log(-mx.expm1(x)))
 
@@ -76,10 +80,13 @@ def _masked_logps(logps, mask):
 
 
 def _binary_terms(current, behavior, mask):
-    # Use finite sentinels in padding before complement arithmetic. Active
-    # values remain untouched, including their gradients where applicable.
-    log_p = mx.where(mask, current, -1.0)
-    log_q = mx.where(mask, mx.stop_gradient(behavior), -1.0)
+    # Use finite sentinels in padding before complement arithmetic and clamp
+    # rounded-one active probabilities to a strictly negative log-probability.
+    log_p = mx.minimum(mx.where(mask, current, -1.0), -float(np.finfo(np.float32).eps))
+    log_q = mx.minimum(
+        mx.where(mask, mx.stop_gradient(behavior), -1.0),
+        -float(np.finfo(np.float32).eps),
+    )
     log_pc = _log1mexp(log_p)
     log_qc = _log1mexp(log_q)
     ell = log_p - log_q

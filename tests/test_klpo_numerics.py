@@ -82,6 +82,25 @@ class KLPONumericsTest(unittest.TestCase):
         self.assertTrue(mx.allclose(local_kl, mx.zeros_like(local_kl)).item())
         self.assertTrue(mx.isfinite(loss).item())
 
+    def test_binary_rounded_one_logps_remain_finite(self):
+        current = mx.array([[0.0]])
+        behavior = mx.array([[-0.1]])
+        rewards = mx.array([1.0])
+        mask = mx.array([[True]])
+
+        for route, loss_fn in (("token", klpo._token_loss), ("sequence", klpo._sequence_loss)):
+            with self.subTest(route=route):
+                loss, local_kl, _, _ = loss_fn(
+                    current,
+                    behavior,
+                    rewards,
+                    mask,
+                    estimator="binary",
+                    beta=0.1,
+                )
+                self.assertTrue(mx.isfinite(loss).item())
+                self.assertTrue(mx.all(mx.isfinite(local_kl)).item())
+
     def test_token_mc_keeps_auxiliary_policy_gradient(self):
         current = mx.array([[-1.0, -2.0]])
         behavior = mx.array([[-1.2, -1.8]])
