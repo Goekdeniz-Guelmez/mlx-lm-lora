@@ -546,6 +546,11 @@ mlx_lm_lora.train \
 - `--judge`: Judge model ID or "human" for human feedback
 - `--alpha`: Learning rate for online updates (default: 1e-5)
 - `--judge-config`: Additional configuration for judge model
+- `--micro-batch-size`: Maximum number of preference pairs scored together;
+  lower it to reduce activation/KV-cache memory (defaults to `batch_size`)
+
+Online DPO batches both policy/reference scoring and uses selected-token
+log-probabilities, so full-vocabulary log-softmax tensors are not retained.
 
 **Dataset Format:**
 
@@ -577,6 +582,8 @@ mlx_lm_lora.train \
 - `--alpha`: Online learning rate (default: 1e-5)
 - `--beta`: KL penalty strength (default: 0.1)
 - `--judge-config`: Additional judge configuration
+- `--micro-batch-size`: Maximum number of preference pairs scored together;
+  lower it to reduce activation/KV-cache memory (defaults to `batch_size`)
 
 **Dataset Format:** Same as Online DPO
 
@@ -602,6 +609,12 @@ mlx_lm_lora.train \
 - `--judge`: Reward model ID
 - `--alpha`: Policy learning rate (default: 1e-5)
 - `--beta`: KL penalty strength (default: 0.1)
+- `--micro-batch-size`: Maximum number of sampled trajectories scored together;
+  lower it to reduce activation/logit memory (defaults to `2 * batch_size`)
+
+RLHF REINFORCE scores the sampled target token directly and microbatches the
+trajectory graph, avoiding materialization of a second full-vocabulary logits
+graph for the reference policy.
 
 **Dataset Format:** Same as Online DPO
 

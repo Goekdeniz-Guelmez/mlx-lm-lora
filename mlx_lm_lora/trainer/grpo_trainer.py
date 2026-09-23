@@ -97,6 +97,8 @@ def _select_token_logps(logits, targets, mask):
     """
     # Mask before reductions: multiplying an invalid log probability by zero
     # afterwards still produces NaN. Only the small selected scores are retained.
+    if logits.shape[1] == 0:
+        return mx.zeros(mask.shape, dtype=mx.float32)
     logits = mx.where(mask[..., None], logits, 0).astype(mx.float32)
     logits = logits - mx.stop_gradient(logits.max(axis=-1, keepdims=True))
     selected = mx.take_along_axis(logits, targets[..., None], axis=-1).squeeze(-1)
