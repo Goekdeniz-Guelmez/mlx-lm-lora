@@ -5,6 +5,7 @@
 # MLX-LM-LORA
 
 [![image](https://img.shields.io/pypi/v/mlx-lm-lora.svg)](https://pypi.python.org/pypi/mlx-lm-lora)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
 **[Explore the project site →](https://goekdeniz-guelmez.github.io/mlx-lm-lora/)**
 
@@ -104,6 +105,7 @@ With MLX-LM-LoRA you can, train Large Language Models locally on Apple Silicon u
 - [Memory Optimization](#memory-optimization)
 - [Evaluation & Generation](#evaluation--generation)
 - [Performance Comparison](#performance-comparison)
+- [License](#license)
 
 ---
 
@@ -606,13 +608,60 @@ mlx_lm_lora.train \
 **Key Parameters:**
 
 - `--group-size`: Number of generations per prompt (default: 4)
-- `--epsilon`: Numerical stability constant (default: 1e-4)
+- `--epsilon`: Importance-ratio clipping width (default: 1e-4)
 - `--max-completion-length`: Max generation length (default: 512)
 - `--temperature`: Sampling temperature (default: 0.8)
 - `--reward-functions`: Comma-separated reward function names
 - `--reward-functions-file`: Path to custom reward functions file
 - `--reward-weights`: JSON list of weights for each reward function
 - `--grpo-loss-type`: Loss variant - `grpo`, `bnpo`, or `dr_grpo`
+
+GRPO scores the exact sampled tokens with their prompt context, including the
+first completion token and any sampled stop token. Each rollout is used for one
+update; the fixed reference model is used only for the KL penalty. With
+`--beta 0`, reference scoring is skipped and the KL metric is zero.
+
+Log probabilities and loss reductions use float32. The KL estimator is
+`expm1(log_ref - log_policy) - (log_ref - log_policy)`, with its log ratio capped
+above at 20 to prevent exponential overflow. `kl_clip_ratio` (shown as
+“KL saturation”) reports how often this cap is reached; persistent saturation
+indicates excessive divergence and should be investigated. Non-finite losses or
+gradients abort the update before changing optimizer state.
+
+`grpo` averages each completion's token loss before averaging completions;
+`bnpo` divides by the total valid token count; `dr_grpo` divides by the number of
+completions times the configured maximum completion length. Empty completions
+contribute zero. Reward functions run once per rollout; unavailable rewards
+(`None`/NaN) have zero coverage and zero summary statistics when entirely absent,
+while infinite rewards and completions with no valid rewards are rejected.
+Generation concurrency and scoring microbatches are capped at the prompt batch
+size to limit KV-cache and activation memory as group size grows. Advantages
+are still normalized over complete groups, and microbatch gradients preserve
+the chosen loss normalization. Float32 scoring costs extra arithmetic; these
+memory limits trade some throughput for a smaller working set.
+
+### KL-Regularized Policy Optimization (KLPO)
+
+KLPO trains one complete sampled response per prompt using terminal rewards and
+sampler-conditioned KL records. The default is token regression with MC-KL:
+
+```shell
+mlx_lm_lora.train \
+  --model <model> \
+  --train \
+  --train-mode klpo \
+  --data <dataset> \
+  --beta 0.1 \
+  --klpo-route token \
+  --klpo-kl-estimator mc \
+  --klpo-mc-samples 128
+```
+
+Use `--klpo-route sequence` for sequence regression and
+`--klpo-kl-estimator binary|topk|full` for the other conditional KL
+estimators. KLPO does not use GRPO group normalization, PPO ratio clipping, or
+a reference model. It reuses the GRPO reward callbacks and bounded generation,
+scoring, gradient, evaluation, and checkpointing pipeline.
 
 **Dataset Format:**
 
@@ -627,13 +676,26 @@ Create a Python file with reward functions:
 
 ```python
 # my_rewards.py
-from mlx_lm_lora.reward_functions import register_reward_function
+from typing import Optional
+
+from mlx_lm_lora.trainer.grpo_reward_functions import register_reward_function
+
 
 @register_reward_function()
-def my_custom_reward(prompt, completion, reference_answer, **kwargs):
-    """Custom reward function"""
-    # Your logic here
-    return score  # float between 0 and 1
+def my_custom_reward(
+    prompts: list, completions: list, answer: list, types: Optional[list] = None
+) -> list[float]:
+    """Score a whole batch of completions.
+
+    Reward functions are called with keyword arguments
+    (`prompts=`, `completions=`, `answer=`, `types=`), so these parameter names
+    must match exactly -- note that `answer` is singular. Each call receives the
+    full batch and must return one float per entry in `completions`.
+    """
+    return [
+        1.0 if str(a).strip() and str(a).strip() in c else 0.0
+        for c, a in zip(completions, answer)
+    ]
 ```
 
 Then use: `--reward-functions-file ./my_rewards.py --reward-functions "my_custom_reward"`
@@ -733,6 +795,11 @@ mlx_lm_lora.train \
 - `--judge`: Judge model ID or "human" for human feedback
 - `--alpha`: Learning rate for online updates (default: 1e-5)
 - `--judge-config`: Additional configuration for judge model
+- `--micro-batch-size`: Maximum number of preference pairs scored together;
+  lower it to reduce activation/KV-cache memory (defaults to `batch_size`)
+
+Online DPO batches both policy/reference scoring and uses selected-token
+log-probabilities, so full-vocabulary log-softmax tensors are not retained.
 
 **Dataset Format:**
 
@@ -764,6 +831,8 @@ mlx_lm_lora.train \
 - `--alpha`: Online learning rate (default: 1e-5)
 - `--beta`: KL penalty strength (default: 0.1)
 - `--judge-config`: Additional judge configuration
+- `--micro-batch-size`: Maximum number of preference pairs scored together;
+  lower it to reduce activation/KV-cache memory (defaults to `batch_size`)
 
 **Dataset Format:** Same as Online DPO
 
@@ -789,6 +858,12 @@ mlx_lm_lora.train \
 - `--judge`: Reward model ID
 - `--alpha`: Policy learning rate (default: 1e-5)
 - `--beta`: KL penalty strength (default: 0.1)
+- `--micro-batch-size`: Maximum number of sampled trajectories scored together;
+  lower it to reduce activation/logit memory (defaults to `2 * batch_size`)
+
+RLHF REINFORCE scores the sampled target token directly and microbatches the
+trajectory graph, avoiding materialization of a second full-vocabulary logits
+graph for the reference policy.
 
 **Dataset Format:** Same as Online DPO
 
@@ -1247,6 +1322,7 @@ Use multiple reward functions:
 | CPO | Preference | ✅ | ❌ | ❌ | Better for structured tasks |
 | ORPO | Preference | ❌ | ❌ | ❌ | Monolithic optimization |
 | GRPO | Policy | ❌ | ❌ | ✅ | Group-based learning |
+| KLPO | Policy | ❌ | ❌ | ❌ | Critic-free KL regularization |
 | GSPO | Policy | ❌ | ❌ | ✅ | Importance sampling |
 | Dr. GRPO | Policy | ❌ | ❌ | ✅ | Decoupled rewards |
 | DAPO | Policy | ❌ | ❌ | ✅ | Dynamic clipping |
@@ -1426,7 +1502,7 @@ Below is a comparison of iteration speed and memory usage across different train
 #### Key Differences
 
 **MLX-LM-LoRA (Apple Silicon - Native MLX)**
-- ✅ **Comprehensive**: 12 training algorithms (SFT, DPO, CPO, ORPO, GRPO, GSPO, Dr. GRPO, DAPO, Online DPO, XPO, RLHF, PPO)
+- ✅ **Comprehensive**: 13 training algorithms (SFT, DPO, CPO, ORPO, GRPO, KLPO, GSPO, Dr. GRPO, DAPO, Online DPO, XPO, RLHF, PPO)
 - ✅ **Custom Preference Models**: Built-in judge training for online preference workflows
 - ✅ **Unified Memory**: Access to full system RAM (up to 512GB on Ultra)
 - ✅ **Moderate Speed**: Optimized MLX implementation with native Apple Silicon support
@@ -1495,3 +1571,7 @@ MLX-LM-LoRA is also beeing used by researchers, engineers, and other profesional
   year = {2025},
 }
 ```
+
+## License
+
+MLX-LM-LoRA is licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for the full license text.

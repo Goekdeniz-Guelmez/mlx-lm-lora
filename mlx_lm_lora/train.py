@@ -28,6 +28,7 @@ from .trainer.grpo_reward_functions import (
     list_available_reward_functions,
 )
 from .trainer.grpo_trainer import GRPOTrainingArgs, evaluate_grpo, train_grpo
+from .trainer.klpo_trainer import KLPOTrainingArgs, evaluate_klpo, train_klpo
 from .trainer.online_dpo_trainer import (
     OnlineDPOTrainingArgs,
     evaluate_online_dpo,
@@ -94,6 +95,7 @@ CONFIG_DEFAULTS = {
     "iters": None,
     "epochs": None,
     "gradient_accumulation_steps": 1,
+    "micro_batch_size": None,
     "val_batches": 25,
     "learning_rate": 1e-5,
     "steps_per_report": 10,
@@ -107,6 +109,7 @@ CONFIG_DEFAULTS = {
     "config": None,
     "grad_checkpoint": False,
     "efficient_long_context": False,
+    "recurrence_chunk_size": 64,
     "lr_schedule": None,
     "lora_parameters": {"rank": 8, "dropout": 0.0, "scale": 10.0},
     "mask_prompt": False,
@@ -133,6 +136,11 @@ CONFIG_DEFAULTS = {
     "reward_functions_file": None,
     "grpo_loss_type": "grpo",
     "importance_sampling_level": "token",
+    "klpo_route": "token",
+    "klpo_kl_estimator": "mc",
+    "klpo_mc_samples": 128,
+    "klpo_top_k": 128,
+    "klpo_tail_floor": 1e-6,
     "lm_studio_name": None,
     "qat_enable": False,
     "qat_bits": 8,
@@ -261,6 +269,7 @@ def build_parser():
             "cpo",
             "orpo",
             "grpo",
+            "klpo",
             "online_dpo",
             "xpo",
             "rlhf_reinforce",
@@ -364,6 +373,12 @@ def build_parser():
         default=None,
     )
     parser.add_argument(
+        "--recurrence-chunk-size",
+        type=int,
+        help="Chunk size for memory-safe recurrent training fallbacks.",
+        default=None,
+    )
+    parser.add_argument(
         "--wandb",
         type=str,
         default=None,
@@ -439,6 +454,12 @@ def build_parser():
         "--temperature", type=float, help="Temperature for sampling.", default=1.0
     )
     parser.add_argument(
+        "--micro-batch-size",
+        type=int,
+        default=None,
+        help="Bound online DPO/RLHF/XPO scoring memory with this microbatch size.",
+    )
+    parser.add_argument(
         "--reward-weights",
         type=str,
         help="Weights for each reward function.",
@@ -480,6 +501,38 @@ def build_parser():
         choices=["token", "sequence"],
         default="token",
         help="Level of importance sampling to use (default: token).",
+    )
+    parser.add_argument(
+        "--klpo-route",
+        type=str,
+        choices=["token", "sequence"],
+        default="token",
+        help="KLPO regression route.",
+    )
+    parser.add_argument(
+        "--klpo-kl-estimator",
+        type=str,
+        choices=["mc", "topk", "binary", "full"],
+        default="mc",
+        help="KLPO conditional KL estimator.",
+    )
+    parser.add_argument(
+        "--klpo-mc-samples",
+        type=int,
+        default=128,
+        help="KLPO auxiliary MC-KL draws per visited prefix.",
+    )
+    parser.add_argument(
+        "--klpo-top-k",
+        type=int,
+        default=128,
+        help="KLPO TopK-KL sampler head size.",
+    )
+    parser.add_argument(
+        "--klpo-tail-floor",
+        type=float,
+        default=1e-6,
+        help="KLPO TopK-KL tail probability floor.",
     )
     parser.add_argument(
         "--qat-enable",
@@ -574,6 +627,7 @@ def train_model(
                 adapter_file=adapter_file,
                 max_seq_length=args.max_seq_length,
                 grad_checkpoint=args.grad_checkpoint,
+                recurrence_chunk_size=args.recurrence_chunk_size,
                 beta=args.beta,
                 seq_step_size=512 if args.efficient_long_context else None,
                 reward_scaling=args.reward_scaling,
@@ -605,6 +659,7 @@ def train_model(
                 adapter_file=adapter_file,
                 max_seq_length=args.max_seq_length,
                 grad_checkpoint=args.grad_checkpoint,
+                recurrence_chunk_size=args.recurrence_chunk_size,
                 gradient_accumulation_steps=args.gradient_accumulation_steps,
                 lambda_mse_target=args.lambda_mse_target,
                 tau_mse_target=args.tau_mse_target,
@@ -631,6 +686,7 @@ def train_model(
                 adapter_file=adapter_file,
                 max_seq_length=args.max_seq_length,
                 grad_checkpoint=args.grad_checkpoint,
+                recurrence_chunk_size=args.recurrence_chunk_size,
                 beta=args.beta,
                 loss_type=args.dpo_cpo_loss_type,
                 delta=args.delta,
@@ -665,9 +721,11 @@ def train_model(
             "adapter_file": adapter_file,
             "max_seq_length": args.max_seq_length,
             "grad_checkpoint": args.grad_checkpoint,
+            "recurrence_chunk_size": args.recurrence_chunk_size,
             "beta": args.beta,
             "reference_model_path": args.reference_model_path,
             "gradient_accumulation_steps": args.gradient_accumulation_steps,
+            "micro_batch_size": args.micro_batch_size,
             "judge": args.judge,
             "max_completion_length": args.max_completion_length,
         }
@@ -720,12 +778,66 @@ def train_model(
                 adapter_file=adapter_file,
                 max_seq_length=args.max_seq_length,
                 grad_checkpoint=args.grad_checkpoint,
+                recurrence_chunk_size=args.recurrence_chunk_size,
                 beta=args.beta,
                 loss_type=args.dpo_cpo_loss_type,
                 delta=args.delta,
                 seq_step_size=512 if args.efficient_long_context else None,
                 reference_model_path=args.reference_model_path,
                 gradient_accumulation_steps=args.gradient_accumulation_steps,
+            ),
+            training_callback=training_callback,
+        )
+
+    elif args.train_mode == "klpo":
+        if args.reward_functions_file:
+            load_reward_functions_from_file(args.reward_functions_file)
+
+        reward_funcs = get_default_reward_functions()
+        if args.reward_functions:
+            func_names = [name.strip() for name in args.reward_functions.split(",")]
+            try:
+                reward_funcs = [get_reward_function(name) for name in func_names]
+                print_success(f"Using custom reward functions: {', '.join(func_names)}")
+            except KeyError as e:
+                print_error(f"Error: {e!s}")
+                print_info(
+                    f"Available reward functions: {list_available_reward_functions()}"
+                )
+                return
+
+        train_klpo(
+            model=model,
+            tokenizer=tokenizer,
+            optimizer=opt,
+            train_dataset=train_set,
+            val_dataset=valid_set,
+            reward_funcs=reward_funcs,
+            args=KLPOTrainingArgs(
+                batch_size=args.batch_size,
+                iters=args.iters,
+                val_batches=args.val_batches,
+                steps_per_report=args.steps_per_report,
+                steps_per_eval=args.steps_per_eval,
+                steps_per_save=args.save_every,
+                adapter_file=adapter_file,
+                max_seq_length=args.max_seq_length,
+                max_completion_length=args.max_completion_length,
+                grad_checkpoint=args.grad_checkpoint,
+                recurrence_chunk_size=args.recurrence_chunk_size,
+                beta=args.beta,
+                route=args.klpo_route,
+                kl_estimator=args.klpo_kl_estimator,
+                mc_samples=args.klpo_mc_samples,
+                top_k=args.klpo_top_k,
+                tail_floor=args.klpo_tail_floor,
+                temperature=args.temperature,
+                gradient_accumulation_steps=args.gradient_accumulation_steps,
+                reward_weights=(
+                    [float(x) for x in args.reward_weights.strip("[]").split(",")]
+                    if args.reward_weights
+                    else None
+                ),
             ),
             training_callback=training_callback,
         )
@@ -741,7 +853,7 @@ def train_model(
                 reward_funcs = [get_reward_function(name) for name in func_names]
                 print_success(f"Using custom reward functions: {', '.join(func_names)}")
             except KeyError as e:
-                print_error(f"Error: {str(e)}")
+                print_error(f"Error: {e!s}")
                 print_info(
                     f"Available reward functions: {list_available_reward_functions()}"
                 )
@@ -766,6 +878,7 @@ def train_model(
                 max_seq_length=args.max_seq_length,
                 max_completion_length=args.max_completion_length,
                 grad_checkpoint=args.grad_checkpoint,
+                recurrence_chunk_size=args.recurrence_chunk_size,
                 beta=args.beta,
                 group_size=args.group_size,
                 epsilon=args.epsilon,
@@ -800,6 +913,7 @@ def train_model(
                 grad_checkpoint=args.grad_checkpoint,
                 gradient_accumulation_steps=args.gradient_accumulation_steps,
                 seq_step_size=512 if args.efficient_long_context else None,
+                recurrence_chunk_size=args.recurrence_chunk_size,
                 qat_enable=args.qat_enable,
                 qat_bits=args.qat_bits,
                 qat_group_size=args.qat_group_size,
@@ -830,8 +944,6 @@ def evaluate_model(
     print_section(f"Evaluating {args.train_mode.upper()} Model")
 
     if args.train_mode == "orpo":
-        efficient = args.seq_step_size is not None
-        seq_step_size = args.seq_step_size or args.max_seq_length
         test_loss, test_rewards, _, test_metrics = evaluate_orpo(
             model=model,
             dataset=test_set,
@@ -839,8 +951,6 @@ def evaluate_model(
             num_batches=args.test_batches,
             max_seq_length=args.max_seq_length,
             beta=args.beta,
-            efficient=efficient,
-            seq_step_size=seq_step_size,
         )
         test_ppl = math.exp(test_loss)
         print(
@@ -1040,6 +1150,57 @@ def evaluate_model(
                 f"  {Colors.WHITE}{metric_name}:{Colors.RESET} {float(metric_value):.3f}"
             )
 
+    elif args.train_mode == "klpo":
+        if args.reward_functions_file:
+            load_reward_functions_from_file(args.reward_functions_file)
+
+        reward_funcs = get_default_reward_functions()
+        if args.reward_functions:
+            func_names = [name.strip() for name in args.reward_functions.split(",")]
+            try:
+                reward_funcs = [get_reward_function(name) for name in func_names]
+            except KeyError as e:
+                print_error(f"Error: {e!s}")
+                print_info(
+                    f"Available reward functions: {list_available_reward_functions()}"
+                )
+                return
+
+        test_loss, test_ntokens, test_metrics = evaluate_klpo(
+            model=model,
+            dataset=test_set,
+            tokenizer=tokenizer,
+            batch_size=args.batch_size,
+            num_batches=args.test_batches,
+            beta=args.beta,
+            route=args.klpo_route,
+            kl_estimator=args.klpo_kl_estimator,
+            mc_samples=args.klpo_mc_samples,
+            top_k=args.klpo_top_k,
+            tail_floor=args.klpo_tail_floor,
+            max_seq_length=args.max_seq_length,
+            max_tokens=args.max_completion_length,
+            temperature=args.temperature,
+            reward_funcs=reward_funcs,
+            reward_weights=(
+                [float(x) for x in args.reward_weights.strip("[]").split(",")]
+                if args.reward_weights
+                else None
+            ),
+        )
+        test_ppl = math.exp(test_loss)
+        print(
+            f"{Colors.BOLD}Test Results:{Colors.RESET}\n"
+            f"  {Colors.YELLOW}Loss:{Colors.RESET} {test_loss:.3f}\n"
+            f"  {Colors.YELLOW}Perplexity:{Colors.RESET} {test_ppl:.3f}\n"
+            f"  {Colors.YELLOW}Tokens:{Colors.RESET} {test_ntokens}"
+        )
+        print(f"\n{Colors.CYAN}KLPO Test Metrics:{Colors.RESET}")
+        for metric_name, metric_value in test_metrics.items():
+            print(
+                f"  {Colors.WHITE}{metric_name}:{Colors.RESET} {float(metric_value):.3f}"
+            )
+
     elif args.train_mode == "grpo":
         if args.reward_functions_file:
             load_reward_functions_from_file(args.reward_functions_file)
@@ -1050,7 +1211,7 @@ def evaluate_model(
             try:
                 reward_funcs = [get_reward_function(name) for name in func_names]
             except KeyError as e:
-                print_error(f"Error: {str(e)}")
+                print_error(f"Error: {e!s}")
                 print_info(
                     f"Available reward functions: {list_available_reward_functions()}"
                 )
@@ -1102,6 +1263,7 @@ def evaluate_model(
             num_batches=args.test_batches,
             max_seq_length=args.max_seq_length,
             loss=get_sft_loss(args.sft_loss_type),
+            recurrence_chunk_size=args.recurrence_chunk_size,
         )
         test_ppl = math.exp(test_loss)
         print(

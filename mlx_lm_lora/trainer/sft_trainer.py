@@ -137,6 +137,12 @@ class SFTTrainingArgs:
             "help": "The examples are processsed sequentially in seq_step_size chunks."
         },
     )
+    recurrence_chunk_size: int = field(
+        default=64,
+        metadata={
+            "help": "Chunk size used by memory-safe recurrent training fallbacks."
+        },
+    )
     qat_enable: bool = field(
         default=False,
         metadata={
@@ -386,7 +392,11 @@ def evaluate_sft(
     iterate_batches: callable = iterate_batches,
     efficient: bool = False,
     seq_step_size: int = 512,
+    recurrence_chunk_size: int = 64,
 ):
+    if model_uses_recurrence(model):
+        enable_memory_safe_recurrences(chunk_size=recurrence_chunk_size)
+
     model.eval()
     all_losses = mx.array(0.0)
     ntokens = mx.array(0)
@@ -440,7 +450,7 @@ def train_sft(
     # Direct API users (including the SFT notebook) bypass train.py, so apply
     # the same automatic protection used by the command-line entry point.
     if model_uses_recurrence(model):
-        enable_memory_safe_recurrences()
+        enable_memory_safe_recurrences(chunk_size=args.recurrence_chunk_size)
 
     mx.set_wired_limit(mx.device_info()["max_recommended_working_set_size"])
     world = mx.distributed.init()
@@ -577,6 +587,7 @@ def train_sft(
                 num_batches=args.val_batches,
                 max_seq_length=args.max_seq_length,
                 iterate_batches=iterate_batches,
+                recurrence_chunk_size=args.recurrence_chunk_size,
             )
             model.train()
             val_time = time.perf_counter() - tic

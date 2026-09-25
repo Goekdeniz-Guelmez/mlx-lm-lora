@@ -13,6 +13,9 @@ from tqdm import tqdm
 from ..recurrent_patch import enable_memory_safe_recurrences, model_uses_recurrence
 from .judge import LLMPPOJudge
 from .online_dpo_trainer import (
+    _online_token_logps,
+    _pad_online_sequences,
+    _validate_micro_batch_size,
     generate_for_online_dpo,
     iterate_online_dpo_batches,
 )
@@ -31,6 +34,12 @@ class RLHFReinforceTrainingArgs(SFTTrainingArgs):
     max_completion_length: int = field(
         default=128, metadata={"help": "Max tokens to generate per prompt."}
     )
+    micro_batch_size: Optional[int] = field(
+        default=None,
+        metadata={
+            "help": "Maximum number of sampled trajectories scored per microbatch."
+        },
+    )
 
 
 def compute_kl_penalty(logits_policy, logits_ref, masks):
@@ -48,6 +57,7 @@ def rlhf_reinforce_loss(
     rewards: mx.array,
     masks: mx.array,
     beta: float,
+    targets: mx.array = None,
 ):
     """
     KL-regularized REINFORCE loss for RLHF.
@@ -57,7 +67,7 @@ def rlhf_reinforce_loss(
     (reward - beta * KL) as the advantage signal.
     """
     # Compute log probabilities for actual tokens
-    labels = mx.argmax(policy_logits, axis=-1)
+    labels = mx.argmax(policy_logits, axis=-1) if targets is None else targets
     policy_log_probs = -nn.losses.cross_entropy(policy_logits, labels, reduction="none")
     ref_log_probs = -nn.losses.cross_entropy(ref_logits, labels, reduction="none")
 
@@ -84,7 +94,33 @@ def rlhf_reinforce_loss(
         "ref_logps": mx.mean(ref_log_probs),
     }
 
-    mx.clear_cache()
+    return loss, token_count, metrics
+
+
+def _rlhf_reinforce_logp_loss(
+    policy_log_probs: mx.array,
+    ref_log_probs: mx.array,
+    rewards: mx.array,
+    masks: mx.array,
+    beta: float,
+):
+    """Memory-bounded RLHF objective over already-selected trajectory logps."""
+    policy_log_probs = mx.where(masks, policy_log_probs.astype(mx.float32), 0)
+    ref_log_probs = mx.where(
+        masks, mx.stop_gradient(ref_log_probs.astype(mx.float32)), 0
+    )
+    kl_penalty = (policy_log_probs - ref_log_probs).sum(axis=-1)
+    advantages = rewards.astype(mx.float32) - beta * kl_penalty
+    loss = -(advantages * policy_log_probs.sum(axis=-1)).sum()
+    token_count = masks.sum()
+    loss = loss / mx.maximum(token_count, 1)
+    metrics = {
+        "rewards": mx.mean(rewards),
+        "kl_penalty": mx.mean(kl_penalty),
+        "advantages": mx.mean(advantages),
+        "policy_logps": mx.sum(policy_log_probs) / mx.maximum(token_count, 1),
+        "ref_logps": mx.sum(ref_log_probs) / mx.maximum(token_count, 1),
+    }
     return loss, token_count, metrics
 
 
@@ -93,6 +129,78 @@ def get_model_logits(model, tokens, masks):
     targets = tokens[:, 1:]
     target_masks = masks[:, 1:]
     return model(inputs), targets, target_masks
+
+
+def _rlhf_loss_from_sequences(
+    model, ref_model, sequences, rewards, beta, loss_fn
+):
+    tokens, target_masks = _pad_online_sequences(sequences)
+    policy_log_probs = _online_token_logps(model, tokens, target_masks)
+    if ref_model is None:
+        ref_log_probs = mx.stop_gradient(policy_log_probs)
+    else:
+        ref_log_probs = mx.stop_gradient(
+            _online_token_logps(ref_model, tokens, target_masks)
+        )
+    if loss_fn is rlhf_reinforce_loss:
+        return _rlhf_reinforce_logp_loss(
+            policy_log_probs, ref_log_probs, rewards, target_masks, beta
+        )
+
+    full_masks = mx.concatenate(
+        [mx.ones((tokens.shape[0], 1), dtype=target_masks.dtype), target_masks],
+        axis=1,
+    )
+    policy_logits, targets, target_masks = get_model_logits(model, tokens, full_masks)
+    ref_logits = (
+        get_model_logits(ref_model, tokens, full_masks)[0]
+        if ref_model is not None
+        else mx.stop_gradient(policy_logits)
+    )
+    return loss_fn(
+        policy_logits=policy_logits,
+        ref_logits=ref_logits,
+        rewards=rewards,
+        masks=target_masks,
+        beta=beta,
+    )
+
+
+def _rlhf_value_and_grad(
+    loss_value_and_grad, model, sequences, rewards, micro_batch_size
+):
+    """Accumulate RLHF gradients over trajectory microbatches."""
+    if not sequences:
+        raise ValueError("RLHF requires at least one sampled trajectory")
+    total = len(sequences)
+    token_counts = [max(int(sequence.size) - 1, 0) for sequence in sequences]
+    total_tokens = max(sum(token_counts), 1)
+    total_loss, counted_tokens, all_metrics, accumulated = 0, 0, None, None
+    for start in range(0, total, micro_batch_size):
+        stop = min(start + micro_batch_size, total)
+        row_weight = (stop - start) / total
+        token_weight = sum(token_counts[start:stop]) / total_tokens
+        result = loss_value_and_grad(
+            model, sequences[start:stop], rewards[start:stop]
+        )
+        (loss, tokens, metrics), grads = result
+        grads = tree_map(lambda value, weight=token_weight: value * weight, grads)
+        accumulated = (
+            grads
+            if accumulated is None
+            else tree_map(lambda left, right: left + right, accumulated, grads)
+        )
+        total_loss = total_loss + loss * token_weight
+        counted_tokens = counted_tokens + tokens
+        weighted_metrics = {key: value * row_weight for key, value in metrics.items()}
+        if all_metrics is None:
+            all_metrics = weighted_metrics
+        else:
+            for key, value in weighted_metrics.items():
+                all_metrics[key] = all_metrics[key] + value
+        del result, loss, tokens, metrics, weighted_metrics, grads
+        mx.eval(total_loss, counted_tokens, all_metrics, accumulated)
+    return (total_loss, counted_tokens, all_metrics), accumulated
 
 
 def evaluate_rlhf_reinforce(
@@ -109,11 +217,17 @@ def evaluate_rlhf_reinforce(
     judge_tokenizer: mx.array = None,
     tokenizer=None,
     max_tokens: int = 512,
+    micro_batch_size: Optional[int] = None,
 ):
     model.eval()
+    if ref_model is not None:
+        ref_model.eval()
     all_losses = 0
     all_metrics = None
     ntokens = 0
+    micro_batch_size = _validate_micro_batch_size(
+        micro_batch_size, batch_size * 2
+    )
 
     index_iterator = iter(range(num_batches)) if num_batches != -1 else iter(int, 1)
 
@@ -129,19 +243,21 @@ def evaluate_rlhf_reinforce(
 
         # Generate completions
         completions = generate_for_online_dpo(
-            model, tokenizer, prompts, max_tokens=max_tokens
+            model,
+            tokenizer,
+            prompts,
+            max_tokens=max_tokens,
+            batch_size=max(1, micro_batch_size // 2),
         )
 
         judger = LLMPPOJudge(
             model=judge_model,
             tokenizer=judge_tokenizer,
-            system_prompt=judge_config.get("system_prompt", None),
+            system_prompt=(judge_config or {}).get("system_prompt", None),
         )
         rewards = judger.judge(prompt_texts, completions=completions)
 
-        # Process completions into tokens and masks
         all_tokens = []
-        all_masks = []
         all_rewards = []
 
         for i, (prompt_text, completion_pair, reward_pair) in enumerate(
@@ -149,62 +265,31 @@ def evaluate_rlhf_reinforce(
         ):
             for j, (completion, reward) in enumerate(zip(completion_pair, reward_pair)):
                 full_text = prompt_text + completion
-                tokens = mx.array(tokenizer.encode(full_text))
-                mask = mx.ones(len(tokens))
-
-                all_tokens.append(tokens)
-                all_masks.append(mask)
+                all_tokens.append(mx.array(tokenizer.encode(full_text), dtype=mx.int32))
                 all_rewards.append(reward)
-
-        # Pad sequences to same length
-        max_len = max(len(tokens) for tokens in all_tokens)
-        padded_tokens = []
-        padded_masks = []
-
-        for tokens, mask in zip(all_tokens, all_masks):
-            pad_len = max_len - len(tokens)
-            if pad_len > 0:
-                padded_tokens.append(
-                    mx.concatenate([tokens, mx.zeros(pad_len, dtype=tokens.dtype)])
-                )
-                padded_masks.append(mx.concatenate([mask, mx.zeros(pad_len)]))
-            else:
-                padded_tokens.append(tokens)
-                padded_masks.append(mask)
-
-        batch_tokens = mx.stack(padded_tokens)
-        batch_masks = mx.stack(padded_masks)
         batch_rewards = mx.array(all_rewards)
-
-        # Get model logits
-        policy_logits, targets, target_masks = get_model_logits(
-            model, batch_tokens, batch_masks
-        )
-
-        if ref_model is not None:
-            ref_logits, _, _ = get_model_logits(ref_model, batch_tokens, batch_masks)
-        else:
-            ref_logits = mx.zeros_like(policy_logits)
-
-        # Compute loss
-        loss_value, toks, metrics = loss_fn(
-            policy_logits=policy_logits,
-            ref_logits=ref_logits,
-            rewards=batch_rewards,
-            masks=target_masks,
-            beta=beta,
-        )
-
-        all_losses += loss_value * toks
-        ntokens += toks
-
-        if all_metrics is None:
-            all_metrics = {k: v * toks for k, v in metrics.items()}
-        else:
-            for k, v in metrics.items():
-                all_metrics[k] += v * toks
-
-        mx.eval(all_losses, ntokens, *all_metrics.values())
+        total_rows = len(all_tokens)
+        for start in range(0, total_rows, micro_batch_size):
+            stop = min(start + micro_batch_size, total_rows)
+            row_weight = (stop - start) / total_rows
+            loss_value, toks, metrics = _rlhf_loss_from_sequences(
+                model,
+                ref_model,
+                all_tokens[start:stop],
+                batch_rewards[start:stop],
+                beta,
+                loss_fn,
+            )
+            all_losses += loss_value * toks
+            ntokens += toks
+            weighted_metrics = {key: value * row_weight for key, value in metrics.items()}
+            if all_metrics is None:
+                all_metrics = weighted_metrics
+            else:
+                for key, value in weighted_metrics.items():
+                    all_metrics[key] += value
+            del loss_value, toks, metrics, weighted_metrics
+            mx.eval(all_losses, ntokens, *all_metrics.values())
 
     # Distributed reduction
     all_losses = mx.distributed.all_sum(all_losses)
@@ -233,7 +318,7 @@ def train_rlhf_reinforce(
     training_callback: TrainingCallback = None,
 ):
     if model_uses_recurrence(model):
-        enable_memory_safe_recurrences()
+        enable_memory_safe_recurrences(chunk_size=args.recurrence_chunk_size)
     mx.set_wired_limit(mx.device_info()["max_recommended_working_set_size"])
     world = mx.distributed.init()
     world_size = world.size()
@@ -249,26 +334,33 @@ def train_rlhf_reinforce(
         raise ValueError("gradient_accumulation_steps must be at least 1")
 
     state = [model.state, optimizer.state, mx.random.state]
+    if ref_model is not None:
+        ref_model.eval()
+    micro_batch_size = _validate_micro_batch_size(
+        args.micro_batch_size, args.batch_size * 2
+    )
 
-    def step(batch, prev_grad, do_update):
+    def step(batch, prev_grad, do_update, accumulation_count):
         prompts, prompt_texts = batch
 
         # Generate completions for each prompt
         completions = generate_for_online_dpo(
-            model, tokenizer, prompts, max_tokens=args.max_completion_length
+            model,
+            tokenizer,
+            prompts,
+            max_tokens=args.max_completion_length,
+            batch_size=max(1, micro_batch_size // 2),
         )
 
         # Judge the completions
         judger = LLMPPOJudge(
             model=judge_model,
             tokenizer=judge_tokenizer,
-            system_prompt=judge_config.get("system_prompt", None),
+            system_prompt=(judge_config or {}).get("system_prompt", None),
         )
         rewards = judger.judge(prompt_texts, completions=completions)
 
-        # Process completions into tokens and masks
         all_tokens = []
-        all_masks = []
         all_rewards = []
 
         for i, (prompt_text, completion_pair, reward_pair) in enumerate(
@@ -276,46 +368,15 @@ def train_rlhf_reinforce(
         ):
             for j, (completion, reward) in enumerate(zip(completion_pair, reward_pair)):
                 full_text = prompt_text + completion
-                tokens = mx.array(tokenizer.encode(full_text))
-                mask = mx.ones(len(tokens))
-
-                all_tokens.append(tokens)
-                all_masks.append(mask)
+                all_tokens.append(mx.array(tokenizer.encode(full_text), dtype=mx.int32))
                 all_rewards.append(reward)
-
-        # Pad sequences to same length
-        max_len = max(len(tokens) for tokens in all_tokens)
-        padded_tokens = []
-        padded_masks = []
-
-        for tokens, mask in zip(all_tokens, all_masks):
-            pad_len = max_len - len(tokens)
-            if pad_len > 0:
-                padded_tokens.append(
-                    mx.concatenate([tokens, mx.zeros(pad_len, dtype=tokens.dtype)])
-                )
-                padded_masks.append(mx.concatenate([mask, mx.zeros(pad_len)]))
-            else:
-                padded_tokens.append(tokens)
-                padded_masks.append(mask)
-
-        batch_tokens = mx.stack(padded_tokens)
-        batch_masks = mx.stack(padded_masks)
         batch_rewards = mx.array(all_rewards)
-
-        # Get model logits
-        policy_logits, targets, target_masks = get_model_logits(
-            model, batch_tokens, batch_masks
-        )
-
-        if ref_model is not None:
-            ref_logits, _, _ = get_model_logits(ref_model, batch_tokens, batch_masks)
-        else:
-            ref_logits = mx.zeros_like(policy_logits)
-
-        # Compute loss and gradients
-        (lvalue, toks, metrics), grad = loss_value_and_grad(
-            policy_logits, ref_logits, batch_rewards, target_masks
+        (lvalue, toks, metrics), grad = _rlhf_value_and_grad(
+            loss_value_and_grad,
+            model,
+            all_tokens,
+            batch_rewards,
+            micro_batch_size,
         )
 
         if prev_grad is not None:
@@ -324,19 +385,15 @@ def train_rlhf_reinforce(
         if do_update:
             grad = average_gradients(grad)
             if grad_accum_steps > 1:
-                grad = tree_map(lambda x: x / grad_accum_steps, grad)
+                grad = tree_map(lambda x: x / accumulation_count, grad)
             optimizer.update(model, grad)
             grad = None
 
         return lvalue, batch_rewards, toks, metrics, grad
 
-    def loss_wrapper(policy_logits, ref_logits, rewards, masks):
-        return loss_fn(
-            policy_logits=policy_logits,
-            ref_logits=ref_logits,
-            rewards=rewards,
-            masks=masks,
-            beta=args.beta,
+    def loss_wrapper(model, sequences, rewards):
+        return _rlhf_loss_from_sequences(
+            model, ref_model, sequences, rewards, args.beta, loss_fn
         )
 
     loss_value_and_grad = nn.value_and_grad(model, loss_wrapper)
@@ -389,6 +446,7 @@ def train_rlhf_reinforce(
                 judge_tokenizer=judge_tokenizer,
                 judge_config=judge_config,
                 max_tokens=args.max_completion_length,
+                micro_batch_size=micro_batch_size,
             )
             val_time = time.perf_counter() - stop
             if rank == 0:
@@ -417,7 +475,8 @@ def train_rlhf_reinforce(
         lvalue, rewards, toks, metrics, grad_accum = step(
             batch,
             grad_accum,
-            it % grad_accum_steps == 0,
+            it % grad_accum_steps == 0 or it == args.iters,
+            (it - 1) % grad_accum_steps + 1,
         )
         losses += lvalue
         n_tokens += toks
