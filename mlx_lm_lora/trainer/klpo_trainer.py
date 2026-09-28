@@ -28,6 +28,7 @@ from .grpo_reward_functions import (
 )
 from .grpo_trainer import _prepare_grpo_inputs, iterate_grpo_batches
 from .sft_trainer import SFTTrainingArgs, average_gradients, grad_checkpoint
+from .token_logps import get_selected_token_logps
 
 
 @dataclass
@@ -375,31 +376,33 @@ def klpo_loss(
     )
     behavior = records["action"]
 
-    needs_full = kl_estimator in {"mc", "topk", "full"}
-    if needs_full:
+    aux = head = full = None
+    if kl_estimator in {"mc", "topk"}:
+        sampled_ids = (
+            records["mc_ids"] if kl_estimator == "mc" else records["head_ids"]
+        )
+        action_ids = inputs[:, start + 1 :][..., None]
+        scored_ids = mx.concatenate([action_ids, sampled_ids], axis=-1)
+        selected_logps = get_selected_token_logps(
+            model,
+            inputs[:, :-1],
+            scored_ids,
+            mask,
+            position_start=start,
+        )
+        current = selected_logps[..., 0]
+        if kl_estimator == "mc":
+            aux = (selected_logps[..., 1:], records["mc_behavior"])
+        else:
+            head = (selected_logps[..., 1:], records["head_behavior"])
+    elif kl_estimator == "full":
         current_full = _get_full_logps(model, inputs, mask, start)
         current = _gather_logps(current_full, inputs[:, start + 1 :], mask)
+        full = (current_full, records["full_behavior"])
     else:
         from .grpo_trainer import _get_token_logps
 
         current = _get_token_logps(model, inputs, mask, start)
-        current_full = None
-
-    aux = head = full = None
-    if kl_estimator == "mc":
-        ids = records["mc_ids"]
-        aux = (
-            _gather_aux_logps(current_full, ids, mask),
-            records["mc_behavior"],
-        )
-    elif kl_estimator == "topk":
-        ids = records["head_ids"]
-        head = (
-            mx.take_along_axis(current_full, ids, axis=-1),
-            records["head_behavior"],
-        )
-    elif kl_estimator == "full":
-        full = (current_full, records["full_behavior"])
 
     if route == "token":
         loss, local_kl, regression, extra = _token_loss(

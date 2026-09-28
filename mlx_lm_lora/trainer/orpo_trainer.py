@@ -21,6 +21,7 @@ from .sft_trainer import (
     grad_checkpoint,
     reset_prompt_cache,
 )
+from .token_logps import get_selected_token_logps
 
 
 @dataclass
@@ -37,15 +38,19 @@ class ORPOTrainingArgs(SFTTrainingArgs):
 def get_logps(model, tokens, mask, cache=None):
     inputs = tokens[:, :-1]
     targets = tokens[:, 1:]
-    logits = model(inputs, cache=cache)
-    # Clip log_probs to avoid -inf and NaN stability issues
-    log_probs = -nn.losses.cross_entropy(logits, targets, reduction="none")
-    log_probs = mx.clip(log_probs, -1000.0, 0.0)
-
-    # A logit at position t predicts token t + 1.  Require both the input
-    # position and its next-token target to be valid, so right padding is not
-    # scored as part of a shorter sequence.
+    # The model body still sees the full causal context; only the output head
+    # is evaluated for selected targets, in bounded token chunks.
     mask = mask[:, :-1] * mask[:, 1:]
+    log_probs, logit_sum = get_selected_token_logps(
+        model,
+        inputs,
+        targets,
+        mask,
+        cache=cache,
+        return_logit_sum=True,
+    )
+    # Clip log_probs to avoid -inf and NaN stability issues
+    log_probs = mx.clip(log_probs, -1000.0, 0.0)
 
     seq_lengths = mask.sum(-1)
     logp_sum = (log_probs * mask).sum(-1)
@@ -53,7 +58,7 @@ def get_logps(model, tokens, mask, cache=None):
     logp_seq_avg = mx.where(seq_lengths > 0, logp_sum / safe_seq_lengths, 0.0)
     mask_sum = mask.sum()
     safe_mask_sum = mx.where(mask_sum > 0, mask_sum, 1.0)
-    logits_mean = mx.where(mask_sum > 0, logits.sum() / safe_mask_sum, 0.0)
+    logits_mean = mx.where(mask_sum > 0, logit_sum / safe_mask_sum, 0.0)
     return logp_seq_avg, logits_mean
 
 

@@ -16,9 +16,9 @@ from tqdm import tqdm
 from transformers import PreTrainedTokenizer
 
 from ..recurrent_patch import enable_memory_safe_recurrences, model_uses_recurrence
-from .grpo_trainer import _select_token_logps
 from .judge import HumanPairwiseJudge, LLMPairwiseJudge
 from .sft_trainer import SFTTrainingArgs, grad_checkpoint
+from .token_logps import get_selected_token_logps
 
 
 @dataclass
@@ -97,8 +97,9 @@ def _pad_online_sequences(
 
 def _online_token_logps(model, tokens, target_mask):
     """Score only selected targets, avoiding a second full log-softmax graph."""
-    logits = model(tokens[:, :-1])
-    return _select_token_logps(logits, tokens[:, 1:], target_mask)
+    return get_selected_token_logps(
+        model, tokens[:, :-1], tokens[:, 1:], target_mask
+    )
 
 
 def _score_preference_batch(model, ref_model, chosen, rejected, loss_type):

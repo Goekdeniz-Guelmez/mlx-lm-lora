@@ -21,6 +21,7 @@ from .sft_trainer import (
     grad_checkpoint,
     reset_prompt_cache,
 )
+from .token_logps import get_selected_token_logps
 
 
 @dataclass
@@ -45,8 +46,9 @@ class DPOTrainingArgs(SFTTrainingArgs):
 
 def get_token_scores(model, x, mask, cache=None):
     inputs, targets = x[:, :-1], x[:, 1:]
-    logits = model(inputs, cache=cache).astype(mx.float32)
-    return -nn.losses.cross_entropy(logits, targets) * mask[:, :-1]
+    return get_selected_token_logps(
+        model, inputs, targets, mask[:, :-1], cache=cache
+    )
 
 
 def compute_score(scores, mask, loss_type):

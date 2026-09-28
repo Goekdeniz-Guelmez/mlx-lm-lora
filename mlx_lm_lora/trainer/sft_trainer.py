@@ -22,6 +22,7 @@ from tqdm import tqdm
 from ..recurrent_patch import enable_memory_safe_recurrences, model_uses_recurrence
 from .datasets import CacheDataset
 from .long_context import iter_cached_sft_chunks
+from .token_logps import get_selected_token_logps
 
 _CHUNKED_NLL_CHUNK_SIZE = 256
 
@@ -260,14 +261,13 @@ def default_loss(model, batch, lengths, cache=None):
 
     offset = _find_cache_offset(cache)
     offset = 0 if offset is None else offset
-    logits = model(inputs, cache=cache)
-
     steps = mx.arange(1, targets.shape[1] + 1) + offset
     mask = mx.logical_and(steps >= lengths[:, 0:1], steps <= lengths[:, 1:])
-
-    loss = nn.losses.cross_entropy(logits, targets) * mask
+    logps = get_selected_token_logps(
+        model, inputs, targets, mask, cache=cache
+    )
     ntoks = mask.sum()
-    loss = loss.astype(mx.float32).sum() / ntoks
+    loss = (-logps).astype(mx.float32).sum() / ntoks
     return loss, ntoks
 
 
@@ -278,21 +278,18 @@ def chunked_nll_loss(model, batch, lengths, cache=None):
 
     offset = _find_cache_offset(cache)
     offset = 0 if offset is None else offset
-    logits = model(inputs, cache=cache)
-
     steps = mx.arange(1, targets.shape[1] + 1) + offset
     mask = mx.logical_and(steps >= lengths[:, 0:1], steps <= lengths[:, 1:])
     ntoks = mask.sum()
-
-    loss_sum = mx.array(0.0, dtype=mx.float32)
-    for start in range(0, targets.shape[1], _CHUNKED_NLL_CHUNK_SIZE):
-        end = min(start + _CHUNKED_NLL_CHUNK_SIZE, targets.shape[1])
-        chunk_loss = nn.losses.cross_entropy(
-            logits[:, start:end], targets[:, start:end]
-        )
-        loss_sum += (chunk_loss * mask[:, start:end]).astype(mx.float32).sum()
-
-    return loss_sum / ntoks, ntoks
+    logps = get_selected_token_logps(
+        model,
+        inputs,
+        targets,
+        mask,
+        cache=cache,
+        chunk_size=_CHUNKED_NLL_CHUNK_SIZE,
+    )
+    return (-logps).astype(mx.float32).sum() / ntoks, ntoks
 
 
 def dft_loss(model, batch, lengths, cache=None):
@@ -302,14 +299,11 @@ def dft_loss(model, batch, lengths, cache=None):
 
     offset = _find_cache_offset(cache)
     offset = 0 if offset is None else offset
-    logits = model(inputs, cache=cache)
-
     steps = mx.arange(1, targets.shape[1] + 1) + offset
     mask = mx.logical_and(steps >= lengths[:, 0:1], steps <= lengths[:, 1:])
-
-    logprobs = mx.take_along_axis(
-        nn.log_softmax(logits, axis=-1), targets[..., None], axis=-1
-    ).squeeze(-1)
+    logprobs = get_selected_token_logps(
+        model, inputs, targets, mask, cache=cache
+    )
     weights = mx.stop_gradient(mx.exp(logprobs))
     ntoks = mask.sum()
     loss = (-(weights * logprobs) * mask).astype(mx.float32).sum() / ntoks

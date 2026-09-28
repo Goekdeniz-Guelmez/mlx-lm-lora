@@ -379,6 +379,13 @@ above at 20 to prevent exponential overflow. `kl_clip_ratio` (shown as
 indicates excessive divergence and should be investigated. Non-finite losses or
 gradients abort the update before changing optimizer state.
 
+For standard MLX-LM output heads, GRPO scoring runs the transformer over the
+full causal context and applies the vocabulary projection in chunks of 128 token
+rows. It returns only selected-token scores instead of constructing one dense
+batch-by-sequence-by-vocabulary logits tensor. GRPO, MC/top-k KLPO, online
+preference training, and the SFT NLL/DFT losses share this path; models with
+custom output transforms retain their normal model-call fallback.
+
 `grpo` averages each completion's token loss before averaging completions;
 `bnpo` divides by the total valid token count; `dr_grpo` divides by the number of
 completions times the configured maximum completion length. Empty completions
@@ -947,6 +954,11 @@ mlx_lm_lora.train --model <model> --load-in-8bits --train
 ```
 
 ### Other Memory Reduction Techniques
+
+Exact token-scoring losses apply the vocabulary projection in bounded chunks
+and return selected-token scores instead of constructing one dense
+batch-by-sequence-by-vocabulary logits tensor. This is applied automatically to
+GRPO, preference/RL scoring, SFT NLL/DFT, and FTPO's final-token scoring.
 
 ```shell
 # Reduce batch size

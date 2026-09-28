@@ -22,6 +22,7 @@ from .grpo_reward_functions import (
     r1_strict_format_reward_func,
 )
 from .sft_trainer import SFTTrainingArgs, average_gradients, grad_checkpoint
+from .token_logps import get_selected_token_logps, select_token_logps as _select_token_logps
 
 
 @dataclass
@@ -87,30 +88,15 @@ class GRPOTrainingArgs(SFTTrainingArgs):
     )
 
 
-@mx.compile
-def _select_token_logps(logits, targets, mask):
-    """Select float32 log probabilities without materializing log-softmax.
-
-    Shift before subtracting the normalizer to preserve small log probabilities
-    even when logits have a large common offset. Compilation fuses elementwise
-    operations where possible; reductions still need vocabulary-sized work.
-    """
-    # Mask before reductions: multiplying an invalid log probability by zero
-    # afterwards still produces NaN. Only the small selected scores are retained.
-    if logits.shape[1] == 0:
-        return mx.zeros(mask.shape, dtype=mx.float32)
-    logits = mx.where(mask[..., None], logits, 0).astype(mx.float32)
-    logits = logits - mx.stop_gradient(logits.max(axis=-1, keepdims=True))
-    selected = mx.take_along_axis(logits, targets[..., None], axis=-1).squeeze(-1)
-    # Already max-shifted: avoid repeating logsumexp's max and subtraction.
-    normalizer = mx.log(mx.exp(logits).sum(axis=-1))
-    return mx.where(mask, selected - normalizer, 0)
-
-
 def _get_token_logps(model, inputs, mask, start=0):
     # Keep the full causal context, but only normalize scored target positions.
-    logits = model(inputs[:, :-1])[:, start:]
-    return _select_token_logps(logits, inputs[:, start + 1 :], mask)
+    return get_selected_token_logps(
+        model,
+        inputs[:, :-1],
+        inputs[:, start + 1 :],
+        mask,
+        position_start=start,
+    )
 
 
 def get_per_token_logps(model: nn.Module, inputs, lengths):
