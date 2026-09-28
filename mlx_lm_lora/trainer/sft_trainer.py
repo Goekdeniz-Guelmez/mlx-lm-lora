@@ -588,6 +588,8 @@ def train_sft(
                 max_seq_length=args.max_seq_length,
                 iterate_batches=iterate_batches,
                 recurrence_chunk_size=args.recurrence_chunk_size,
+                efficient=efficient,
+                seq_step_size=seq_step_size,
             )
             model.train()
             val_time = time.perf_counter() - tic
