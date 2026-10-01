@@ -109,6 +109,7 @@ def _prepare_loss_inputs(logps, behavior_logps, rewards, mask, beta):
     return current, behavior, returns
 
 
+@mx.compile
 def _token_loss(current, behavior, rewards, mask, *, estimator, beta, aux=None, head=None, full=None, tail_floor=1e-6):
     """Return the KLPO token-regression backward surrogate and statistics."""
     h = mx.stop_gradient(
@@ -162,6 +163,7 @@ def _token_loss(current, behavior, rewards, mask, *, estimator, beta, aux=None, 
     return loss, local_kl, mx.array(0.0), extra
 
 
+@mx.compile
 def _sequence_loss(current, behavior, rewards, mask, *, estimator, beta, aux=None, head=None, full=None, tail_floor=1e-6):
     """Return the KLPO sequence-regression backward surrogate and statistics."""
     if estimator == "binary":

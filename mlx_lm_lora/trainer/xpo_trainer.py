@@ -45,6 +45,7 @@ def get_current_alpha(
     return alpha_schedule[index]
 
 
+@mx.compile
 def xpo_loss(
     policy_chosen_score: mx.array,
     policy_rejected_score: mx.array,

@@ -21,6 +21,11 @@ from .grpo_reward_functions import (
     r1_soft_format_reward_func,
     r1_strict_format_reward_func,
 )
+from .online_rl_utils import (
+    bucket_sequence_length,
+    build_shared_prompt_cache,
+    fork_prompt_cache,
+)
 from .sft_trainer import SFTTrainingArgs, average_gradients, grad_checkpoint
 
 
@@ -136,7 +141,7 @@ def _prepare_grpo_inputs(batch, completions, batch_indices):
         prompt_lengths.append(prompt.size)
         completion_lengths.append(completion.size)
     # Keep a valid model input even when every completion is empty.
-    width = max(2, max(seq.size for seq in sequences))
+    width = max(2, bucket_sequence_length(max(seq.size for seq in sequences)))
     inputs = mx.stack([mx.pad(seq, (0, width - seq.size)) for seq in sequences])
     starts = mx.array(prompt_lengths)[:, None] - 1
     lengths = mx.array(completion_lengths)
@@ -222,6 +227,28 @@ def generate_grpo(
                 )
                 for idx in indices
             ]
+            prompt_by_index = {}
+            for idx, prompt in zip(indices, prompts):
+                prompt_by_index.setdefault(idx, prompt)
+            templates = (
+                {
+                    idx: build_shared_prompt_cache(model, prompt)
+                    for idx, prompt in prompt_by_index.items()
+                }
+                if group_size > 1
+                else {}
+            )
+            generation_prompts, histories, caches = [], [], []
+            for idx in indices:
+                prompt = prompt_by_index[idx]
+                cache = fork_prompt_cache(model, templates.get(idx))
+                if cache is None:
+                    generation_prompts.append(prompt)
+                    histories.append([])
+                else:
+                    generation_prompts.append(prompt[-1:])
+                    histories.append(prompt[:-1])
+                caches.append(cache)
             generator = BatchGenerator(
                 model,
                 stop_tokens=stop_tokens,
@@ -231,7 +258,12 @@ def generate_grpo(
                 prefill_batch_size=batch_size,
             )
             try:
-                uids = generator.insert(prompts, [max_tokens] * len(prompts))
+                uids = generator.insert(
+                    generation_prompts,
+                    [max_tokens] * len(generation_prompts),
+                    caches=caches,
+                    all_tokens=histories,
+                )
                 tokens = {uid: [] for uid in uids}
                 while responses := generator.next_generated():
                     for response in responses:
