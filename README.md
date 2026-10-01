@@ -959,8 +959,12 @@ mlx_lm_lora.train --model <model> --load-in-8bits --train
 --grad-checkpoint
 
 # Linear and hybrid recurrent models (Qwen3.5/Next, Kimi, Mamba, etc.) are
-# detected automatically and use checkpointed linear blocks and smaller SSM
-# blocks during training.
+# detected automatically. Gated-delta layers use MLX's fast VJP when the
+# installed MLX build exposes it; masked or unsupported calls use checkpointed
+# blocks. SSM layers use smaller checkpointed blocks during training.
+
+# Attention already uses mx.fast.scaled_dot_product_attention, so MLX selects
+# its accelerated attention VJP automatically when supported by the build/device.
 
 # Reduce sequence length
 --max-seq-length 1024
