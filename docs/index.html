@@ -1,223 +1,36 @@
 <!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#0b0b0a" />
-    <meta name="description" content="MLX-LM-LoRA is a native Apple Silicon toolkit for local LLM fine-tuning, preference optimization, and quantization-aware training." />
-    <meta property="og:title" content="MLX-LM-LoRA | The local edge for model shaping" />
-    <meta property="og:description" content="Fine-tune LLMs locally on Apple Silicon with MLX, adapters, preference optimization, and QAT." />
-    <meta property="og:type" content="website" />
-    <meta property="og:url" content="https://goekdeniz-guelmez.github.io/mlx-lm-lora/" />
-    <title>MLX-LM-LoRA | The local edge for model shaping</title>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/locomotive-scroll@5.0.1/bundled/locomotive-scroll.css" />
-    <link rel="stylesheet" href="./styles.css" />
-    <script defer src="https://cdn.jsdelivr.net/npm/locomotive-scroll@5.0.1/bundled/locomotive-scroll.min.js"></script>
-    <script defer src="./script.js"></script>
-  </head>
-  <body>
-    <div class="grain" aria-hidden="true"></div>
-
-    <header class="site-header">
-      <a class="brand" href="#top" aria-label="MLX-LM-LoRA home">
-        <span class="brand-mark" aria-hidden="true">
-          <span class="mark-word">MLX</span>
-        </span>
-        <span class="brand-copy">
-          <span class="brand-name">MLX LM LoRA</span>
-          <span class="brand-subtitle">native model training</span>
-        </span>
-      </a>
-
-      <nav class="desktop-nav" aria-label="Primary navigation">
-        <a href="#capabilities">Capabilities</a>
-        <a href="#methods">Methods</a>
-        <a href="#quick-start">Quick start</a>
-      </nav>
-
-      <a class="header-action" href="https://github.com/Goekdeniz-Guelmez/mlx-lm-lora" target="_blank" rel="noreferrer">
-        <span>View on GitHub</span>
-        <span class="arrow" aria-hidden="true">↗</span>
-      </a>
-      <button class="menu-toggle" type="button" aria-expanded="false" aria-controls="mobile-nav" aria-label="Open navigation">
-        <span></span><span></span>
-      </button>
-    </header>
-
-    <nav class="mobile-nav" id="mobile-nav" aria-label="Mobile navigation">
-      <a href="#capabilities">Capabilities</a>
-      <a href="#methods">Methods</a>
-      <a href="#quick-start">Quick start</a>
-      <a href="https://github.com/Goekdeniz-Guelmez/mlx-lm-lora" target="_blank" rel="noreferrer">GitHub <span>↗</span></a>
-    </nav>
-
-    <main id="top">
-      <section class="hero section-shell">
-        <div class="hero-copy reveal" data-scroll data-scroll-speed="0.06">
-          <div class="eyebrow">Open source · Apple Silicon</div>
-          <h1>Shape the model.<br /><em>Keep the control.</em></h1>
-          <p class="hero-lede">A native MLX toolkit for fine-tuning language models locally, with adapters, preference optimization, and quantization-aware training built into one calm, capable workflow.</p>
-          <div class="hero-actions">
-            <a class="button button--primary" href="#quick-start">Start training <span aria-hidden="true">↓</span></a>
-            <a class="button button--quiet" href="https://github.com/Goekdeniz-Guelmez/mlx-lm-lora-example-notebooks" target="_blank" rel="noreferrer">Advanced notebooks <span aria-hidden="true">↗</span></a>
-          </div>
-          <div class="hero-note"><span class="note-line"></span> Runs on the machine in front of you.</div>
-        </div>
-
-        <div class="hero-console reveal reveal--delay" data-scroll data-scroll-speed="-0.04" aria-label="Example MLX-LM-LoRA training run">
-          <div class="console-topbar">
-            <div class="window-controls" aria-hidden="true"><span></span><span></span><span></span></div>
-            <span class="console-path">mlx_lm_lora / train</span>
-          </div>
-          <div class="console-heading">
-            <span class="console-kicker">current surface</span>
-            <strong>Fine-tune with intent.</strong>
-          </div>
-          <div class="console-code">
-            <div><span class="line-number">01</span><span class="syntax-key">model</span><span class="syntax-muted"> = </span><span class="syntax-value">Qwen3-8B</span></div>
-            <div><span class="line-number">02</span><span class="syntax-key">train_mode</span><span class="syntax-muted"> = </span><span class="syntax-value">sft</span></div>
-            <div><span class="line-number">03</span><span class="syntax-key">train_type</span><span class="syntax-muted"> = </span><span class="syntax-value">lora</span></div>
-            <div><span class="line-number">04</span><span class="syntax-key">quantization</span><span class="syntax-muted"> = </span><span class="syntax-value syntax-value--amber">qat · 4-bit</span></div>
-          </div>
-          <div class="console-footer">
-            <div class="run-metric"><span>adapter rank</span><strong>16</strong></div>
-            <div class="run-metric"><span>device</span><strong>mps / native</strong></div>
-            <div class="run-play" aria-hidden="true">⌁</div>
-          </div>
-        </div>
-      </section>
-
-      <section class="signal-row section-shell reveal" data-scroll data-scroll-speed="0.025" aria-label="Project highlights">
-        <div class="signal"><strong>12<span>+</span></strong><span>training algorithms</span></div>
-        <div class="signal"><strong>4 to 16<span>bit</span></strong><span>QAT precision range</span></div>
-        <div class="signal"><strong>1</strong><span>local command surface</span></div>
-        <div class="signal signal--wide"><strong>MLX</strong><span>native on Apple Silicon</span></div>
-      </section>
-
-      <section class="content-section section-shell" id="capabilities">
-        <div class="section-intro reveal" data-scroll>
-          <div class="eyebrow">01 / Capability map</div>
-          <h2>Everything you need to<br /><span>move a model forward.</span></h2>
-          <p>Keep the loop close to the work. MLX-LM-LoRA puts efficient adaptation, preference learning, and evaluation in the same local toolkit.</p>
-        </div>
-
-        <div class="feature-grid">
-          <article class="feature-card feature-card--large reveal" data-scroll data-scroll-speed="0.03">
-            <div class="feature-icon icon-terminal" aria-hidden="true"><span>›_</span></div>
-            <div class="feature-card-copy">
-              <span class="card-index">01</span>
-              <h3>One local command</h3>
-              <p>Move from a base model to a focused training run without leaving your terminal or your machine.</p>
-            </div>
-            <div class="feature-code"><span>mlx_lm_lora.train</span><span class="feature-code-dot">●</span></div>
-          </article>
-          <article class="feature-card reveal reveal--delay-short" data-scroll data-scroll-speed="0.015">
-            <div class="feature-icon icon-layers" aria-hidden="true"><span></span><span></span><span></span></div>
-            <span class="card-index">02</span>
-            <h3>Preference-native</h3>
-            <p>DPO, CPO, ORPO, GRPO, online DPO, and more. Train toward the behavior you actually want.</p>
-          </article>
-          <article class="feature-card reveal reveal--delay-short" data-scroll data-scroll-speed="0.02">
-            <div class="feature-icon icon-diamond" aria-hidden="true"></div>
-            <span class="card-index">03</span>
-            <h3>Quantized by design</h3>
-            <p>Use QLoRA and QAT to keep memory practical while preserving a direct path to better models.</p>
-          </article>
-          <article class="feature-card feature-card--wide reveal" data-scroll data-scroll-speed="0.02">
-            <div class="feature-icon icon-spark" aria-hidden="true">✦</div>
-            <div>
-              <span class="card-index">04</span>
-              <h3>Bring your own signal</h3>
-              <p>Register custom reward functions and shape GRPO around the signal that matters to your domain.</p>
-            </div>
-          </article>
-        </div>
-      </section>
-
-      <section class="methods-section section-shell" id="methods">
-        <div class="methods-heading reveal" data-scroll>
-          <div class="eyebrow">02 / Method library</div>
-          <h2>Choose the pressure.<br /><span>Keep the surface simple.</span></h2>
-        </div>
-        <div class="methods-workbench reveal reveal--delay" data-scroll data-scroll-speed="0.02">
-          <div class="method-tabs" role="tablist" aria-label="Training methods">
-            <button class="method-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="method-panel" data-method="sft">SFT</button>
-            <button class="method-tab" type="button" role="tab" aria-selected="false" aria-controls="method-panel" data-method="dpo">DPO</button>
-            <button class="method-tab" type="button" role="tab" aria-selected="false" aria-controls="method-panel" data-method="grpo">GRPO</button>
-            <button class="method-tab" type="button" role="tab" aria-selected="false" aria-controls="method-panel" data-method="orpo">ORPO</button>
-            <button class="method-tab" type="button" role="tab" aria-selected="false" aria-controls="method-panel" data-method="online">Online DPO</button>
-          </div>
-          <div class="method-panel" id="method-panel" role="tabpanel" tabindex="0">
-            <div class="method-panel-copy">
-              <span class="method-label" id="method-label">Supervised fine-tuning</span>
-              <h3 id="method-title">Teach the model a sharper way to speak.</h3>
-              <p id="method-description">Use prompt and completion pairs or chat messages to turn a capable base model into one that understands your task, tone, and format.</p>
-              <a class="text-link" id="method-link" href="https://github.com/Goekdeniz-Guelmez/mlx-lm-lora#supervised-fine-tuning-sft" target="_blank" rel="noreferrer">Read the method notes <span aria-hidden="true">↗</span></a>
-            </div>
-            <div class="method-terminal">
-              <div class="terminal-header"><span>run recipe</span><span id="method-status">SFT</span></div>
-              <code id="method-command">mlx_lm_lora.train \
-  --model &lt;model&gt; \
-  --train-mode sft \
-  --data &lt;dataset&gt;</code>
-              <div class="terminal-footer"><span class="terminal-cursor"></span><span>ready for your data</span></div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section class="quick-start section-shell" id="quick-start">
-        <div class="quick-start-card reveal" data-scroll data-scroll-speed="0.025">
-          <div class="quick-start-copy">
-            <div class="eyebrow">03 / Quick start</div>
-            <h2>Make the first run<br /><span>feel close.</span></h2>
-            <p>Install the package, point it at a model and dataset, then keep iterating where your weights live: locally.</p>
-            <div class="quick-resources">
-              <a class="quick-resource" href="https://github.com/Goekdeniz-Guelmez/mlx-lm-lora-example-notebooks" target="_blank" rel="noreferrer">
-                <span class="quick-resource-icon" aria-hidden="true">↗</span>
-                <span class="quick-resource-copy"><strong>Advanced notebook runs</strong><small>Step-by-step examples for fine-tuning, preference learning, and RL.</small></span>
-                <span class="quick-resource-arrow" aria-hidden="true">→</span>
-              </a>
-              <a class="quick-resource" href="https://huggingface.co/mlx-community/datasets" target="_blank" rel="noreferrer">
-                <span class="quick-resource-icon quick-resource-icon--hf" aria-hidden="true">HF</span>
-                <span class="quick-resource-copy"><strong>MLX Community datasets</strong><small>Datasets formatted for direct use with MLX-LM-LoRA.</small></span>
-                <span class="quick-resource-arrow" aria-hidden="true">→</span>
-              </a>
-            </div>
-            <div class="quick-start-links">
-              <a class="button button--primary" href="https://github.com/Goekdeniz-Guelmez/mlx-lm-lora#install" target="_blank" rel="noreferrer">Read the docs <span aria-hidden="true">↗</span></a>
-              <a class="button button--quiet" href="https://pypi.org/project/mlx-lm-lora/" target="_blank" rel="noreferrer">PyPI package <span aria-hidden="true">↗</span></a>
-            </div>
-          </div>
-          <div class="quick-start-terminal">
-            <div class="terminal-header"><span>terminal / zsh</span><button class="copy-button" type="button" data-copy-target="quickstart-code"><span class="copy-icon" aria-hidden="true">□</span> Copy</button></div>
-            <pre><code id="quickstart-code">pip install -U mlx-lm-lora
-
-mlx_lm_lora.train \
-  --model &lt;model&gt; \
-  --train \
-  --data &lt;dataset&gt; \
-  --iters 600</code></pre>
-            <div class="terminal-footer"><span class="terminal-cursor"></span><span>local · private · yours</span></div>
-          </div>
-        </div>
-      </section>
-
-      <section class="closing-section section-shell reveal" data-scroll data-scroll-speed="0.025">
-        <div class="closing-orb" aria-hidden="true"><span></span></div>
-        <div>
-          <div class="eyebrow">The local edge</div>
-          <h2>Better models begin<br /><em>with closer loops.</em></h2>
-        </div>
-        <a class="button button--primary" href="https://github.com/Goekdeniz-Guelmez/mlx-lm-lora" target="_blank" rel="noreferrer">Build with MLX-LM-LoRA <span aria-hidden="true">↗</span></a>
-      </section>
-    </main>
-
-    <footer class="site-footer section-shell">
-      <div class="footer-brand"><span class="footer-mark" aria-hidden="true">MLX</span><span>MLX LM LoRA</span></div>
-      <p>Native training infrastructure for Apple Silicon.</p>
-      <div class="footer-links"><a href="https://github.com/Goekdeniz-Guelmez/mlx-lm-lora" target="_blank" rel="noreferrer">GitHub ↗</a><a href="https://pypi.org/project/mlx-lm-lora/" target="_blank" rel="noreferrer">PyPI ↗</a><a href="https://github.com/Goekdeniz-Guelmez/mlx-lm-lora-example-notebooks" target="_blank" rel="noreferrer">Advanced notebooks ↗</a></div>
-      <span class="footer-meta">MIT · 2026</span>
-    </footer>
-  </body>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#100b09" />
+  <meta name="description" content="MLX-LM-LoRA and MLX-LoRA-Studio — fast, local fine-tuning on Apple silicon." />
+  <meta property="og:title" content="MLX-LM-LoRA — Fine-tuning, native to Apple silicon" />
+  <meta property="og:description" content="MLX-LM-LoRA and MLX-LoRA-Studio — fast, local fine-tuning on Apple silicon." />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://goekdeniz-guelmez.github.io/mlx-lm-lora/" />
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' fill='%23100b09'/%3E%3Cpath d='M17 44V20h8l7 12 7-12h8v24h-7V31l-8 13-8-13v13z' fill='%23ff7a1a'/%3E%3C/svg%3E" />
+  <title>MLX-LM-LoRA — Fine-tuning, native to Apple silicon</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;500;600;700&family=Libre+Baskerville:ital,wght@0,400;1,400&display=swap');
+    :root{--bg:#100b09;--fg:#f8f0e7;--muted:#9f9186;--line:#3b2b24;--accent:#ff7620;--panel:#17100d;--serif:'Libre Baskerville',Georgia,serif;--sans:'DM Sans',Arial,sans-serif;--mono:'DM Mono',monospace}
+    [data-theme=light]{--bg:#f4efe8;--fg:#1b1410;--muted:#766b63;--line:#d7c9bc;--accent:#c84d13;--panel:#efe8df}
+    *{box-sizing:border-box} html{scroll-behavior:smooth} body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);font-size:16px;line-height:1.6} body:before{content:'';position:fixed;inset:0;pointer-events:none;opacity:.055;background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.45'/%3E%3C/svg%3E");z-index:10} a{color:inherit;text-decoration:none} .wrap{max-width:1320px;margin:auto;padding:0 42px} .top{border-bottom:1px solid var(--line)} nav{height:76px;display:flex;align-items:center;justify-content:space-between;font-family:var(--mono);font-size:12px;letter-spacing:.08em;text-transform:uppercase}.brand{display:flex;gap:14px;align-items:center}.brand-mark{width:25px;height:25px;border:1px solid var(--accent);color:var(--accent);display:grid;place-items:center;font-weight:500;font-size:11px}.navlinks{display:flex;gap:32px;align-items:center}.navlinks a{color:var(--muted);transition:color .2s}.navlinks a:hover{color:var(--fg)}button{font:inherit;color:var(--fg);background:none;border:1px solid var(--line);padding:9px 13px;cursor:pointer}.hero{min-height:670px;display:grid;grid-template-columns:1.06fr .94fr;gap:7vw;align-items:center;border-bottom:1px solid var(--line)}.eyebrow,.kicker{font:12px var(--mono);letter-spacing:.15em;text-transform:uppercase;color:var(--accent)}h1{font-size:clamp(54px,7.3vw,112px);letter-spacing:-.075em;line-height:.94;margin:24px 0 32px;max-width:780px;font-weight:600}h1 em{font-family:var(--serif);font-weight:400;letter-spacing:-.06em}.lede{font-size:20px;line-height:1.45;color:var(--muted);max-width:530px;margin:0 0 34px}.actions{display:flex;gap:12px;flex-wrap:wrap}.btn{display:inline-flex;align-items:center;gap:14px;padding:13px 18px;background:var(--accent);color:#160c07;font-weight:600}.btn.secondary{background:transparent;color:var(--fg);border:1px solid var(--line)}.visual{position:relative;min-height:430px;display:flex;align-items:center;justify-content:center;overflow:hidden}.visual:after{content:'';position:absolute;inset:8% -12%;background:radial-gradient(ellipse at center,rgba(255,78,10,.28),transparent 62%);filter:blur(28px);z-index:-1}.visual img{width:100%;max-width:470px;aspect-ratio:1;object-fit:cover;mix-blend-mode:screen;filter:saturate(.86);transform:scale(1.08)}[data-theme=light] .visual img{content:url('assets/mlx_lm_lora_light.webp');mix-blend-mode:multiply}.meta-line{display:flex;gap:28px;margin-top:28px;font:12px var(--mono);color:var(--muted);text-transform:uppercase;letter-spacing:.08em}.section{padding:115px 0;border-bottom:0}.intro{display:block}.intro h2,.feature-head h2{font-size:clamp(36px,5vw,72px);line-height:1;letter-spacing:-.065em;margin:0;font-weight:500}.intro h2 em,.feature-head h2 em{font-family:var(--serif);font-weight:400}.copy{font-size:22px;line-height:1.5;max-width:700px;margin:0}.copy strong{color:var(--fg);font-weight:500}.feature-head{display:grid;grid-template-columns:1fr 1.7fr;gap:7vw;margin-bottom:74px}.feature-head p{color:var(--muted);max-width:480px;margin:0;font-size:17px}.features{display:grid;grid-template-columns:repeat(3,1fr);border-top:1px solid var(--line)}.feature{padding:27px 25px 30px 0;border-right:1px solid var(--line);min-height:220px}.feature:not(:first-child){padding-left:25px}.feature:last-child{border-right:0}.num{font:12px var(--mono);color:var(--accent)}.feature h3{font-size:22px;letter-spacing:-.03em;margin:30px 0 12px}.feature p{color:var(--muted);margin:0;line-height:1.5}.algorithm-list{display:grid;grid-template-columns:repeat(4,1fr);gap:0;border-top:1px solid var(--line);border-left:1px solid var(--line)}.algorithm-list span{padding:18px 15px;border-right:1px solid var(--line);border-bottom:1px solid var(--line);font:14px var(--mono);color:var(--muted)}.algorithm-list span strong{color:var(--fg);font-weight:500}.image-strip img:last-child{height:280px}.code-section{display:grid;grid-template-columns:1fr 1fr;gap:7vw;align-items:start}.code-section h2{font-size:clamp(38px,5vw,68px);line-height:1;letter-spacing:-.06em;margin:0 0 25px}.code-section p{color:var(--muted);font-size:18px;max-width:470px}.terminal{background:var(--panel);border:1px solid var(--line);padding:25px;font:14px/2 var(--mono);color:#d9c6b9}.terminal .dim{color:#806e64}.terminal .orange{color:var(--accent)}.repos{display:flex;flex-direction:column;border-top:1px solid var(--line)}.repo{display:flex;align-items:center;justify-content:space-between;padding:22px 0;border-bottom:1px solid var(--line)}.repo-name{font:16px var(--mono);color:var(--fg)}.repo small{display:block;color:var(--muted);font:12px var(--sans);margin-top:3px}.arrow{font-size:22px;color:var(--accent)}footer{padding:28px 0;color:var(--muted);font:12px var(--mono);display:flex;justify-content:space-between;text-transform:uppercase;letter-spacing:.08em}@media(max-width:800px){.wrap{padding:0 20px}nav{height:64px}.navlinks a{display:none}.hero,.intro,.feature-head,.code-section{grid-template-columns:1fr;gap:52px}.hero{padding:75px 0 65px}.visual{min-height:260px;order:-1}.visual img{max-width:360px}.section{padding:75px 0}.features,.algorithm-list,.image-strip{grid-template-columns:1fr}.feature,.feature:not(:first-child){border-right:0;border-bottom:1px solid var(--line);padding:25px 0;min-height:auto}.feature:last-child{border-bottom:0}h1{font-size:59px}.lede{font-size:18px}.meta-line{gap:15px;flex-wrap:wrap}footer{gap:15px;flex-direction:column}}
+  </style>
+  <style>.num{display:none}.brand-logo{width:34px;height:34px;object-fit:contain}.feature h3{margin-top:0}.algorithm-list{display:grid;grid-template-columns:repeat(4,1fr);border-top:1px solid var(--line);border-left:1px solid var(--line)}.algorithm-list span{padding:18px 15px;border-right:1px solid var(--line);border-bottom:1px solid var(--line);font:14px var(--mono);color:var(--muted)}.algorithm-list strong{color:var(--fg);font-weight:500}@media (prefers-color-scheme:light){:root{--bg:#f4efe8;--fg:#1b1410;--muted:#766b63;--line:#d7c9bc;--accent:#c84d13;--panel:#efe8df}.visual img{content:url('assets/mlx_lm_lora_light.webp');mix-blend-mode:multiply}}@media(max-width:800px){.algorithm-list,.image-strip{grid-template-columns:1fr}.image-strip img{height:220px}}</style>
+  <style>.trust{padding:58px 0 62px;border-bottom:0}.trust-title{font-size:clamp(22px,2.6vw,34px);font-weight:600;letter-spacing:-.045em;line-height:1.15;max-width:760px}.trust-logos{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;padding:30px 0 34px}.trust-logos span{min-height:94px;padding:20px 22px;display:flex;align-items:center;border:1px solid var(--line);background:var(--panel);font-size:clamp(24px,3vw,40px);font-weight:600;letter-spacing:-.06em}.trust-logos span:nth-child(2){font-family:var(--sans);font-weight:700;letter-spacing:-.08em}.trust-logos span:nth-child(3){font-family:var(--mono);font-size:clamp(17px,2vw,28px);letter-spacing:-.08em}.trust p{margin:0;color:var(--muted);font:15px/1.65 var(--mono);max-width:980px}.trust p strong{color:var(--accent);font-weight:500}@media(max-width:800px){.trust{padding:42px 0 48px}.trust-logos{grid-template-columns:1fr;gap:10px}.trust-logos span{min-height:72px}}
+  </style>
+  <style>.footer-inner{display:flex;align-items:center;justify-content:space-between;gap:15px}@media(max-width:800px){.footer-inner{flex-direction:column;align-items:flex-start}}</style>
+</head>
+<body>
+  <header class="top"><div class="wrap"><nav><a class="brand" href="#top"><img class="brand-logo" src="assets/mlx_lm_lora_transparent.webp" alt="MLX logo"><span>MLX / LORA</span></a><div class="navlinks"><a href="#about">About</a><a href="#features">Features</a><a href="#install">Install</a></div></nav></div></header>
+  <main id="top"><div class="wrap"><section class="hero"><div><div class="eyebrow">Open source · Apple silicon native</div><h1>Fine-tuning,<br><em>without the cloud.</em></h1><p class="lede">MLX-LM-LoRA puts serious language-model adaptation on your Mac. Fast, private, and built for the silicon under your desk.</p><div class="actions"><a class="btn" href="https://github.com/Goekdeniz-Guelmez/mlx-lm-lora">Explore the repo <span>↗</span></a><a class="btn secondary" href="https://github.com/Goekdeniz-Guelmez/mlx-lm-lora-example-notebooks">Try it with example notebooks <span>↗</span></a></div><div class="meta-line"><span>Python toolkit</span><span>Studio interface</span><span>MIT licensed</span></div></div><div class="visual"><img src="assets/mlx_lm_lora_dark.webp" alt="Abstract amber MLX mark on a dark textured field"></div></section><section class="trust"><div class="trust-title">MLX-LM-LoRA is trusted by teams and industry leaders such as:</div><div class="trust-logos"><span>MacPaw</span><span>TypeFox</span><span>Computacenter</span></div><p>Also being used by researchers, engineers, and other professionals at <strong>Apple</strong>, <strong>IBM</strong>, <strong>Bosch</strong>, <strong>Red Hat</strong>, <strong>Hugging Face</strong>, <strong>Daimler Truck</strong>, and <strong>Mercedes-Benz Group</strong>.</p></section>
+  <section class="section intro" id="about"><p class="copy">A focused training stack for people who want to <strong>adapt models locally</strong>—without turning every experiment into a distributed-systems project. MLX-LM-LoRA is the code. MLX-LoRA-Studio is the calm, visual layer on top. The <strong>JOSIE model family</strong> is a production, very high-intelligence model family trained on MLX-LM-LoRA. <a href="https://josie-model-family.goekdenizguelmez.chatgpt.site"><strong>Learn more about JOSIE ↗</strong></a></p></section>
+  <section class="section" id="features"><div class="feature-head"><h2>Small surface.<br><em>Deep control.</em></h2><p>Everything you need to move from dataset to adapter, with the defaults and visibility to understand what is happening.</p></div><div class="features"><article class="feature"><h3>Native by default</h3><p>Built on Apple’s MLX framework. Unified memory, Metal acceleration, and a workflow tuned for M-series machines.</p></article><article class="feature"><h3>LoRA, made legible</h3><p>Low-rank adaptation with explicit configuration, checkpoints, evaluation hooks, and reproducible command-line runs.</p></article><article class="feature"><h3>Studio when you want it</h3><p>Launch and monitor jobs through MLX-LoRA-Studio: a native interface for datasets, hyperparameters, logs, and exports.</p></article></div></section>
+  <section class="section" id="algorithms"><div class="feature-head"><h2>Training<br><em>algorithms.</em></h2><p>Choose from 12+ training algorithms in one local package—the first and only training package in its class to bring this breadth together. Each algorithm includes advanced features and deep customization for the job at hand.</p></div><div class="algorithm-list"><span><strong>SFT</strong><br>Supervised fine-tuning</span><span><strong>DPO</strong><br>Direct preference optimization</span><span><strong>CPO</strong><br>Contrastive preference</span><span><strong>ORPO</strong><br>Odds-ratio preference</span><span><strong>GRPO</strong><br>Group relative policy</span><span><strong>GSPO</strong><br>Group sequence policy</span><span><strong>Online DPO</strong><br>Online preference training</span><span><strong>PPO</strong><br>Proximal policy optimization</span><span><strong>FTPO</strong><br>Final-token preference</span><span><strong>QAT</strong><br>Quantization-aware training</span><span><strong>RLHF Reinforce</strong><br>KL-regularized RL</span><span><strong>+ more</strong><br>Extensible training modes</span></div></section>
+  <section class="section code-section" id="install"><div><div class="kicker">First run</div><h2>From zero<br>to <em>adapter.</em></h2><p>Install the toolkit, point it at a compatible model and dataset, then keep the whole loop on your machine.</p><a class="btn" href="mlx-lm-lora-algorithms-python-api.pdf" download="mlx-lm-lora-algorithms-python-api.pdf">View document <span>↓</span></a></div><div class="terminal"><div class="dim"># install the toolkit</div><div>pip install mlx-lm-lora</div><br><div class="dim"># train a LoRA adapter</div><div><span class="orange">mlx_lm_lora</span> train </div><div>  --model mlx-community/Llama-3.2-3B-Instruct-4bit </div><div>  --data ./data </div><div>  --iters 600</div><br><div class="dim"># install the studio</div><div>Open the <span class="orange">MLX-LoRA-Studio</span> GitHub repo</div><div>Download the .dmg and install it</div></div></section>
+  <section class="section"><div class="kicker">Two ways in</div><div class="repos"><a class="repo" href="https://github.com/Goekdeniz-Guelmez/mlx-lm-lora"><div><span class="repo-name">mlx-lm-lora</span><small>CLI · training engine · evaluation</small></div><span class="arrow">↗</span></a><a class="repo" href="https://github.com/Goekdeniz-Guelmez/MLX-LoRA-Studio"><div><span class="repo-name">mlx-lora-studio</span><small>Desktop UI · job control · local observability</small></div><span class="arrow">↗</span></a></div></section></div></main>
+  <footer><div class="wrap footer-inner"><span>MLX-LM-LoRA / 2026</span><span>Made for the local loop</span></div></footer>
+  
+</body>
 </html>
