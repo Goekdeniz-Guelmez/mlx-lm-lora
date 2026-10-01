@@ -1,4 +1,6 @@
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import mlx.core as mx
 import mlx.nn as nn
@@ -250,6 +252,69 @@ class OnlineDPOTrainerTest(unittest.TestCase):
         prompts, texts = next(online_dpo_trainer.iterate_online_dpo_batches(data, 2, 8))
         self.assertEqual(prompts, [[1], [2, 3]])
         self.assertEqual(texts, ["one", "two"])
+
+    def test_online_generation_passes_token_ids_to_batch_generator(self):
+        class Tokenizer:
+            eos_token_ids = [99]
+
+            def encode(self, text):
+                return [21, 22]
+
+            def decode(self, tokens):
+                return f"decoded:{tokens}"
+
+        class Model:
+            training = True
+
+            def eval(self):
+                self.training = False
+
+            def train(self, training):
+                self.training = training
+
+        class Generator:
+            inserted_prompts = None
+
+            def __init__(self, model, **kwargs):
+                del model, kwargs
+                self.generated = False
+
+            def insert(self, prompts, max_tokens):
+                Generator.inserted_prompts = prompts
+                self.max_tokens = max_tokens
+                return [10, 20]
+
+            def next_generated(self):
+                if self.generated:
+                    return []
+                self.generated = True
+                return [
+                    SimpleNamespace(uid=10, token=31),
+                    SimpleNamespace(uid=20, token=32),
+                ]
+
+            def close(self):
+                pass
+
+        with patch.object(
+            online_dpo_trainer, "BatchGenerator", Generator
+        ), patch.object(online_dpo_trainer, "make_sampler", return_value=None):
+            completions = online_dpo_trainer.generate_for_online_dpo(
+                Model(), Tokenizer(), [[11, 12], "plain prompt"], max_tokens=4
+            )
+
+        self.assertEqual(
+            Generator.inserted_prompts,
+            [[11, 12], [11, 12], [21, 22], [21, 22]],
+        )
+        self.assertTrue(
+            all(
+                isinstance(token, int)
+                for prompt in Generator.inserted_prompts
+                for token in prompt
+            )
+        )
+        self.assertEqual(completions, [["decoded:[31]", "decoded:[32]"]])
 
     def test_online_scoring_masks_only_next_token_targets(self):
         tokens, mask = online_dpo_trainer._pad_online_sequences(

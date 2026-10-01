@@ -16,7 +16,6 @@ from tqdm import tqdm
 
 from ..recurrent_patch import enable_memory_safe_recurrences, model_uses_recurrence
 from .sft_trainer import SFTTrainingArgs, grad_checkpoint
-from .token_logps import get_last_token_logits
 
 
 @dataclass
@@ -134,7 +133,10 @@ def iterate_ftpo_batches(dataset, batch_size, max_seq_length, train=False):
 
 
 def _last_logits(model, prompts, lengths):
-    return get_last_token_logits(model, prompts, lengths).astype(mx.float32)
+    logits = model(prompts).astype(mx.float32)
+    indices = (lengths - 1).astype(mx.int32)[:, None, None]
+    indices = mx.broadcast_to(indices, (logits.shape[0], 1, logits.shape[-1]))
+    return mx.take_along_axis(logits, indices, axis=1).squeeze(1)
 
 
 def _batch_loss(model, ref_model, batch, args):

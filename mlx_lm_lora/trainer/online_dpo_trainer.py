@@ -229,16 +229,16 @@ def generate_for_online_dpo(
     )
     stop_tokens = [[token] for token in tokenizer.eos_token_ids]
     generation_batch_size = max(1, batch_size or len(prompts))
-    prompt_texts = [
-        tokenizer.decode(prompt) if isinstance(prompt, list) else prompt
+    prompt_tokens = [
+        tokenizer.encode(prompt) if isinstance(prompt, str) else list(prompt)
         for prompt in prompts
     ]
     completions = []
     was_training = model.training
     model.eval()
     try:
-        for start in range(0, len(prompt_texts), generation_batch_size):
-            current_prompts = prompt_texts[start : start + generation_batch_size]
+        for start in range(0, len(prompt_tokens), generation_batch_size):
+            current_prompts = prompt_tokens[start : start + generation_batch_size]
             expanded_prompts = [
                 prompt for prompt in current_prompts for _ in range(2)
             ]

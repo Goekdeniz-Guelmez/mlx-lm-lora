@@ -182,19 +182,3 @@ def get_selected_token_logps(
     else:
         result = mx.concatenate(scores, axis=0).reshape(targets.shape)
     return (result, logit_sum) if return_logit_sum else result
-
-
-def get_last_token_logits(model, inputs, lengths):
-    """Project only each row's final non-padding hidden state to vocabulary."""
-    projection = _output_projection(model)
-    if projection is None:
-        logits = model(inputs).astype(mx.float32)
-        indices = (lengths - 1).astype(mx.int32)[:, None, None]
-        indices = mx.broadcast_to(indices, (logits.shape[0], 1, logits.shape[-1]))
-        return mx.take_along_axis(logits, indices, axis=1).squeeze(1)
-
-    body, head = projection
-    hidden = body(inputs)
-    row_indices = mx.arange(inputs.shape[0])
-    final_hidden = hidden[row_indices, (lengths - 1).astype(mx.int32)]
-    return head(final_hidden)
