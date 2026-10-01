@@ -97,6 +97,7 @@ def rlhf_reinforce_loss(
     return loss, token_count, metrics
 
 
+@mx.compile
 def _rlhf_reinforce_logp_loss(
     policy_log_probs: mx.array,
     ref_log_probs: mx.array,
