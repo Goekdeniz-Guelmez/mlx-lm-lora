@@ -78,13 +78,16 @@ def enable_fast_vjps() -> bool:
                 "lower_bound",
                 "allow_neg_eigval",
             }
-
             if (
                 not use_kernel
                 and mask is None
                 and lower_bound is None
                 and not allow_neg_eigval
                 and not unsupported_options
+                # MLX's fused GDN kernels assume scalar gates. Vector-gated
+                # models (for example Kimi Linear) must use the ops fallback.
+                and a.ndim == 3
+                and b.ndim == 3
             ):
                 beta = mx.sigmoid(b)
                 g = gated_delta.compute_g(A_log, a, dt_bias)
