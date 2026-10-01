@@ -292,9 +292,7 @@ class OnlineDPOTrainerTest(unittest.TestCase):
         )
         self.assertAlmostEqual(_scalar(chunked[0]), _scalar(full[0]), places=6)
         self.assertTrue(
-            mx.allclose(
-                chunked_grad["weight"], full_grad["weight"], atol=1e-6
-            ).item()
+            mx.allclose(chunked_grad["weight"], full_grad["weight"], atol=1e-6).item()
         )
 
 
@@ -494,9 +492,7 @@ class RLHFReinforceTrainerTest(unittest.TestCase):
         targets = mx.array([[1, 0]])
         masks = mx.ones((1, 2), dtype=mx.bool_)
         policy_logps = -nn.losses.cross_entropy(policy, targets, reduction="none")
-        reference_logps = -nn.losses.cross_entropy(
-            reference, targets, reduction="none"
-        )
+        reference_logps = -nn.losses.cross_entropy(reference, targets, reduction="none")
         expected = rlhf_reinforce_trainer.rlhf_reinforce_loss(
             policy,
             reference,

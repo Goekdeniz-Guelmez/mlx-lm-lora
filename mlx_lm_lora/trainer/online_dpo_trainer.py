@@ -373,9 +373,7 @@ def iterate_online_dpo_batches(dataset, batch_size, max_seq_length, train=False)
 
         for i in indices:
             batch = [dataset[j] for j in batch_idx[i]]
-            prompts = [
-                list(x["prompt"][:max_seq_length]) for x in batch
-            ]
+            prompts = [list(x["prompt"][:max_seq_length]) for x in batch]
             prompt_text = [x["prompt_text"] for x in batch]
 
             yield prompts, prompt_text
@@ -455,8 +453,12 @@ def evaluate_online_dpo(
                 chosen.append(prompt_text + completion_pair[1])
                 rejected.append(prompt_text + completion_pair[0])
 
-        chosen_tokens = [mx.array(tokenizer.encode(text), dtype=mx.int32) for text in chosen]
-        rejected_tokens = [mx.array(tokenizer.encode(text), dtype=mx.int32) for text in rejected]
+        chosen_tokens = [
+            mx.array(tokenizer.encode(text), dtype=mx.int32) for text in chosen
+        ]
+        rejected_tokens = [
+            mx.array(tokenizer.encode(text), dtype=mx.int32) for text in rejected
+        ]
         for start in range(0, len(chosen_tokens), micro_batch_size):
             stop = min(start + micro_batch_size, len(chosen_tokens))
             (
@@ -585,8 +587,12 @@ def train_online_dpo(
                 chosen.append(prompt_text + completion_pair[1])
                 rejected.append(prompt_text + completion_pair[0])
 
-        chosen_tokens = [mx.array(tokenizer.encode(text), dtype=mx.int32) for text in chosen]
-        rejected_tokens = [mx.array(tokenizer.encode(text), dtype=mx.int32) for text in rejected]
+        chosen_tokens = [
+            mx.array(tokenizer.encode(text), dtype=mx.int32) for text in chosen
+        ]
+        rejected_tokens = [
+            mx.array(tokenizer.encode(text), dtype=mx.int32) for text in rejected
+        ]
         (lvalue, reward, toks, metrics), grad = _preference_microbatches(
             loss_value_and_grad,
             model,
@@ -620,9 +626,7 @@ def train_online_dpo(
             reference_rejected_score,
             chosen_masks,
             rejected_masks,
-        ) = _score_preference_batch(
-            model, ref_model, chosen, rejected, loss_type
-        )
+        ) = _score_preference_batch(model, ref_model, chosen, rejected, loss_type)
         return loss_fn(
             policy_chosen_score=policy_chosen_score,
             policy_rejected_score=policy_rejected_score,

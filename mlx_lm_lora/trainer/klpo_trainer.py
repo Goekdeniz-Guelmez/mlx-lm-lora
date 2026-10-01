@@ -95,8 +95,7 @@ def _binary_terms(current, behavior, mask):
     centered_ratio = q_complement * (ell + log_qc - log_pc)
     correction = mx.exp(log_qc - log_pc)
     return tuple(
-        mx.where(mask, value, 0)
-        for value in (binary_kl, centered_ratio, correction)
+        mx.where(mask, value, 0) for value in (binary_kl, centered_ratio, correction)
     )
 
 
@@ -109,7 +108,19 @@ def _prepare_loss_inputs(logps, behavior_logps, rewards, mask, beta):
     return current, behavior, returns
 
 
-def _token_loss(current, behavior, rewards, mask, *, estimator, beta, aux=None, head=None, full=None, tail_floor=1e-6):
+def _token_loss(
+    current,
+    behavior,
+    rewards,
+    mask,
+    *,
+    estimator,
+    beta,
+    aux=None,
+    head=None,
+    full=None,
+    tail_floor=1e-6,
+):
     """Return the token objective and metrics, dispatching estimators in Python.
 
     Estimators use different optional array trees and return different metric
@@ -167,7 +178,19 @@ def _token_loss(current, behavior, rewards, mask, *, estimator, beta, aux=None, 
     return loss, local_kl, mx.array(0.0), extra
 
 
-def _sequence_loss(current, behavior, rewards, mask, *, estimator, beta, aux=None, head=None, full=None, tail_floor=1e-6):
+def _sequence_loss(
+    current,
+    behavior,
+    rewards,
+    mask,
+    *,
+    estimator,
+    beta,
+    aux=None,
+    head=None,
+    full=None,
+    tail_floor=1e-6,
+):
     """Return the sequence objective and metrics, dispatching estimators in Python.
 
     Route-specific optional inputs and metric trees are not a stable compiled
@@ -177,7 +200,9 @@ def _sequence_loss(current, behavior, rewards, mask, *, estimator, beta, aux=Non
         binary_kl, centered_ratio, correction = _binary_terms(current, behavior, mask)
         residual = mx.stop_gradient(rewards - beta * centered_ratio.sum(axis=-1))
         regression = residual * residual / (2 * beta)
-        loss = -(residual * (mx.stop_gradient(correction) * current).sum(axis=-1)).mean()
+        loss = -(
+            residual * (mx.stop_gradient(correction) * current).sum(axis=-1)
+        ).mean()
         return loss, binary_kl, regression.mean(), {"residual": residual}
 
     if estimator == "mc":
@@ -199,10 +224,15 @@ def _sequence_loss(current, behavior, rewards, mask, *, estimator, beta, aux=Non
         corrected = current.sum(axis=-1)[:, None] - mc_current.sum(axis=1)
         loss = -(other_residual * corrected).mean(axis=-1).mean()
         local_kl = ratio.mean(axis=-1)
-        return loss, local_kl, regression.mean(), {
-            "residual": residual,
-            "mc_samples": mx.array(m),
-        }
+        return (
+            loss,
+            local_kl,
+            regression.mean(),
+            {
+                "residual": residual,
+                "mc_samples": mx.array(m),
+            },
+        )
 
     p_log, q_log = head if estimator == "topk" else full
     p_log = p_log.astype(mx.float32)
@@ -330,7 +360,9 @@ def _gather_logps(logps, targets, mask):
 
 def _gather_aux_logps(logps, targets, mask):
     samples = targets.shape[-1]
-    expanded = mx.broadcast_to(logps[..., None, :], logps.shape[:-1] + (samples, logps.shape[-1]))
+    expanded = mx.broadcast_to(
+        logps[..., None, :], logps.shape[:-1] + (samples, logps.shape[-1])
+    )
     gathered = mx.take_along_axis(expanded, targets[..., None], axis=-1).squeeze(-1)
     return mx.where(mask[..., None], gathered, 0)
 
@@ -476,11 +508,29 @@ class _KLPORecords:
 
         return {
             "action_logps": stack(self.action_logps),
-            "mc_ids": stack(self.mc_ids, (self.mc_samples,)) if self.mc_ids is not None else None,
-            "mc_logps": stack(self.mc_logps, (self.mc_samples,)) if self.mc_logps is not None else None,
-            "head_ids": stack(self.head_ids, (self.top_k,)) if self.head_ids is not None else None,
-            "head_logps": stack(self.head_logps, (self.top_k,)) if self.head_logps is not None else None,
-            "full_logps": stack(self.full_logps) if self.full_logps is not None else None,
+            "mc_ids": (
+                stack(self.mc_ids, (self.mc_samples,))
+                if self.mc_ids is not None
+                else None
+            ),
+            "mc_logps": (
+                stack(self.mc_logps, (self.mc_samples,))
+                if self.mc_logps is not None
+                else None
+            ),
+            "head_ids": (
+                stack(self.head_ids, (self.top_k,))
+                if self.head_ids is not None
+                else None
+            ),
+            "head_logps": (
+                stack(self.head_logps, (self.top_k,))
+                if self.head_logps is not None
+                else None
+            ),
+            "full_logps": (
+                stack(self.full_logps) if self.full_logps is not None else None
+            ),
         }
 
 
@@ -492,9 +542,9 @@ def _recording_sampler(record, temperature):
         logits = logprobs.astype(mx.float32) / temperature
         q_logps = logits - mx.logsumexp(logits, axis=-1, keepdims=True)
         sampled = mx.random.categorical(logits)
-        action_logp = mx.take_along_axis(
-            q_logps, sampled[..., None], axis=-1
-        ).squeeze(-1)
+        action_logp = mx.take_along_axis(q_logps, sampled[..., None], axis=-1).squeeze(
+            -1
+        )
         record.action_logps.append(action_logp.squeeze(0))
 
         if record.estimator == "mc":
@@ -551,14 +601,14 @@ def generate_klpo(
         for start in range(0, len(prompt_tokens), batch_size):
             indices = list(range(start, min(start + batch_size, len(prompt_tokens))))
             prompts = [
-                prompt_tokens[idx].tolist()
-                if isinstance(prompt_tokens[idx], mx.array)
-                else list(prompt_tokens[idx])
+                (
+                    prompt_tokens[idx].tolist()
+                    if isinstance(prompt_tokens[idx], mx.array)
+                    else list(prompt_tokens[idx])
+                )
                 for idx in indices
             ]
-            stores = [
-                _KLPORecords(kl_estimator, mc_samples, top_k) for _ in prompts
-            ]
+            stores = [_KLPORecords(kl_estimator, mc_samples, top_k) for _ in prompts]
             generator = BatchGenerator(
                 model,
                 stop_tokens=stop_tokens,
@@ -571,7 +621,9 @@ def generate_klpo(
                 uids = generator.insert(
                     prompts,
                     [max_tokens] * len(prompts),
-                    samplers=[_recording_sampler(store, temperature) for store in stores],
+                    samplers=[
+                        _recording_sampler(store, temperature) for store in stores
+                    ],
                 )
                 tokens = {uid: [] for uid in uids}
                 while responses := generator.next_generated():
@@ -607,7 +659,9 @@ def calculate_rewards(
     if not reward_funcs or not completion_texts:
         raise ValueError("At least one reward function and completion are required.")
     if reward_weights is not None and len(reward_weights) != len(reward_funcs):
-        raise ValueError("Number of reward weights must match number of reward functions")
+        raise ValueError(
+            "Number of reward weights must match number of reward functions"
+        )
     weights = np.asarray(
         reward_weights if reward_weights is not None else [1.0] * len(reward_funcs),
         dtype=np.float64,
@@ -625,18 +679,28 @@ def calculate_rewards(
         if raw is None:
             raw = [None] * len(completion_texts)
         if len(raw) != len(completion_texts):
-            raise ValueError(f"{reward_func.__name__} must return one reward per completion.")
-        values = np.asarray([np.nan if value is None else float(value) for value in raw])
+            raise ValueError(
+                f"{reward_func.__name__} must return one reward per completion."
+            )
+        values = np.asarray(
+            [np.nan if value is None else float(value) for value in raw]
+        )
         if np.isinf(values).any():
             raise ValueError(f"{reward_func.__name__} returned an infinite reward.")
         valid = values[~np.isnan(values)]
-        metrics[f"{reward_func.__name__}_mean"] = float(valid.mean()) if valid.size else 0.0
-        metrics[f"{reward_func.__name__}_std"] = float(valid.std()) if valid.size else 0.0
+        metrics[f"{reward_func.__name__}_mean"] = (
+            float(valid.mean()) if valid.size else 0.0
+        )
+        metrics[f"{reward_func.__name__}_std"] = (
+            float(valid.std()) if valid.size else 0.0
+        )
         metrics[f"{reward_func.__name__}_coverage"] = valid.size / values.size
         columns.append(values)
     rewards = np.stack(columns, axis=1)
     if np.isnan(rewards).all(axis=1).any():
-        raise RuntimeError("All reward functions returned None or NaN for a completion.")
+        raise RuntimeError(
+            "All reward functions returned None or NaN for a completion."
+        )
     rewards = (np.nan_to_num(rewards, nan=0.0) * weights).sum(axis=1)
     if not np.isfinite(rewards).all():
         raise ValueError("Weighted rewards must be finite.")
@@ -753,19 +817,37 @@ def evaluate_klpo(
         index_iterator = iter(range(num_batches)) if num_batches != -1 else iter(int, 1)
         for _, batch in zip(
             index_iterator,
-            iterate_batches(dataset=dataset, batch_size=batch_size, max_seq_length=max_seq_length),
+            iterate_batches(
+                dataset=dataset, batch_size=batch_size, max_seq_length=max_seq_length
+            ),
         ):
             prompt_tokens, answer_tokens, prompt_text, answer_text, type_info = batch
             completions, texts, records, indices = generate_klpo(
-                model, tokenizer, prompt_tokens, max_tokens, batch_size,
-                end_answer_token, temperature, kl_estimator, mc_samples, top_k,
+                model,
+                tokenizer,
+                prompt_tokens,
+                max_tokens,
+                batch_size,
+                end_answer_token,
+                temperature,
+                kl_estimator,
+                mc_samples,
+                top_k,
             )
             rewards, reward_metrics = _rollout_rewards(
                 batch, texts, indices, reward_funcs, reward_weights
             )
             loss, tokens, metrics = _klpo_microbatches(
-                klpo_loss, model, max(len(prompt_tokens), 1),
-                batch=(prompt_tokens, answer_tokens, prompt_text, answer_text, type_info),
+                klpo_loss,
+                model,
+                max(len(prompt_tokens), 1),
+                batch=(
+                    prompt_tokens,
+                    answer_tokens,
+                    prompt_text,
+                    answer_text,
+                    type_info,
+                ),
                 completions=completions,
                 completion_texts=texts,
                 batch_indices=indices,
@@ -785,7 +867,9 @@ def evaluate_klpo(
             ntokens += tokens
             responses_seen += response_count
             if all_metrics is None:
-                all_metrics = {key: value * response_count for key, value in metrics.items()}
+                all_metrics = {
+                    key: value * response_count for key, value in metrics.items()
+                }
             else:
                 for key, value in metrics.items():
                     all_metrics[key] += value * response_count
@@ -795,7 +879,9 @@ def evaluate_klpo(
         all_losses = mx.distributed.all_sum(all_losses, stream=mx.cpu)
         ntokens = mx.distributed.all_sum(ntokens, stream=mx.cpu)
         responses_seen = mx.distributed.all_sum(responses_seen, stream=mx.cpu)
-        all_metrics = {key: mx.distributed.all_sum(value) for key, value in all_metrics.items()}
+        all_metrics = {
+            key: mx.distributed.all_sum(value) for key, value in all_metrics.items()
+        }
         avg_metrics = {
             key: (value / mx.maximum(responses_seen, 1)).item()
             for key, value in all_metrics.items()
@@ -825,7 +911,12 @@ def train_klpo(
         r1_count_xml,
     ]
     _validate_klpo_args(
-        args.route, args.kl_estimator, args.mc_samples, args.top_k, args.beta, args.tail_floor
+        args.route,
+        args.kl_estimator,
+        args.mc_samples,
+        args.top_k,
+        args.beta,
+        args.tail_floor,
     )
     if model_uses_recurrence(model):
         enable_memory_safe_recurrences(chunk_size=args.recurrence_chunk_size)
@@ -842,7 +933,18 @@ def train_klpo(
     state = [model.state, optimizer.state, mx.random.state]
     loss_value_and_grad = nn.value_and_grad(model, klpo_loss)
 
-    def step(batch, completions, texts, indices, records, rewards, reward_metrics, previous_grad, update, accumulation_count):
+    def step(
+        batch,
+        completions,
+        texts,
+        indices,
+        records,
+        rewards,
+        reward_metrics,
+        previous_grad,
+        update,
+        accumulation_count,
+    ):
         prompt_tokens, answer_tokens, prompt_text, answer_text, type_info = batch
         (loss, tokens, metrics), grads = _klpo_value_and_grad(
             loss_value_and_grad,
@@ -869,7 +971,9 @@ def train_klpo(
             mx.stack([mx.all(mx.isfinite(value)) for _, value in tree_flatten(grads)])
         )
         if not finite.item():
-            raise FloatingPointError("Non-finite KLPO loss or gradients; update aborted.")
+            raise FloatingPointError(
+                "Non-finite KLPO loss or gradients; update aborted."
+            )
         if update:
             grads = average_gradients(grads)
             if grad_accum_steps > 1:
@@ -911,36 +1015,71 @@ def train_klpo(
     )
     for iteration in pbar:
         batch = next(batches)
-        if val_dataset is not None and len(val_dataset) > 0 and (
-            iteration == 1 or iteration % args.steps_per_eval == 0 or iteration == args.iters
+        if (
+            val_dataset is not None
+            and len(val_dataset) > 0
+            and (
+                iteration == 1
+                or iteration % args.steps_per_eval == 0
+                or iteration == args.iters
+            )
         ):
             val_loss, val_tokens, _val_metrics = evaluate_klpo(
-                model, val_dataset, tokenizer, args.batch_size, args.val_batches,
-                args.beta, args.route, args.kl_estimator, args.mc_samples, args.top_k,
-                args.tail_floor, args.max_seq_length, args.max_completion_length,
-                args.temperature, reward_funcs, args.reward_weights,
+                model,
+                val_dataset,
+                tokenizer,
+                args.batch_size,
+                args.val_batches,
+                args.beta,
+                args.route,
+                args.kl_estimator,
+                args.mc_samples,
+                args.top_k,
+                args.tail_floor,
+                args.max_seq_length,
+                args.max_completion_length,
+                args.temperature,
+                reward_funcs,
+                args.reward_weights,
                 end_answer_token=end_answer_token,
             )
             if rank == 0:
                 tqdm.write(f"Iter {iteration}: Val loss {val_loss:.3f}")
             if training_callback is not None:
                 training_callback.on_val_loss_report(
-                    {"iteration": iteration, "val_loss": val_loss, "val_tokens": val_tokens.item()}
+                    {
+                        "iteration": iteration,
+                        "val_loss": val_loss,
+                        "val_tokens": val_tokens.item(),
+                    }
                 )
             model.train()
             start_time = time.perf_counter()
 
         prompt_tokens, _, _, _, _ = batch
         completions, texts, records, indices = generate_klpo(
-            model, tokenizer, prompt_tokens, args.max_completion_length,
-            args.batch_size, end_answer_token, args.temperature, args.kl_estimator,
-            args.mc_samples, args.top_k,
+            model,
+            tokenizer,
+            prompt_tokens,
+            args.max_completion_length,
+            args.batch_size,
+            end_answer_token,
+            args.temperature,
+            args.kl_estimator,
+            args.mc_samples,
+            args.top_k,
         )
         rewards, reward_metrics = _rollout_rewards(
             batch, texts, indices, reward_funcs, args.reward_weights
         )
         loss, tokens, metrics, grad_accum = step(
-            batch, completions, texts, indices, records, rewards, reward_metrics,
+            batch,
+            completions,
+            texts,
+            indices,
+            records,
+            rewards,
+            reward_metrics,
             grad_accum,
             iteration % grad_accum_steps == 0 or iteration == args.iters,
             (iteration - 1) % grad_accum_steps + 1,
@@ -964,7 +1103,9 @@ def train_klpo(
             total_tokens = mx.distributed.all_sum(n_tokens).item()
             trained_tokens += total_tokens
             if rank == 0:
-                pbar.set_postfix({"loss": f"{train_loss:.3f}", "it/s": f"{steps / elapsed:.3f}"})
+                pbar.set_postfix(
+                    {"loss": f"{train_loss:.3f}", "it/s": f"{steps / elapsed:.3f}"}
+                )
                 tqdm.write(
                     f"\nIter {iteration}: KLPO loss={train_loss:.4f}, "
                     f"reward={avg['reward_mean']:.4f}, KL={avg['kl']:.6f}, "
@@ -986,9 +1127,13 @@ def train_klpo(
         if iteration % args.steps_per_save == 0:
             adapter_weights = dict(tree_flatten(model.trainable_parameters()))
             mx.save_safetensors(str(args.adapter_file), adapter_weights)
-            checkpoint = Path(args.adapter_file).parent / f"{iteration:07d}_adapters.safetensors"
+            checkpoint = (
+                Path(args.adapter_file).parent / f"{iteration:07d}_adapters.safetensors"
+            )
             mx.save_safetensors(str(checkpoint), adapter_weights)
-            tqdm.write(f"Iter {iteration}: Saved adapter weights to {args.adapter_file} and {checkpoint}.")
+            tqdm.write(
+                f"Iter {iteration}: Saved adapter weights to {args.adapter_file} and {checkpoint}."
+            )
 
     adapter_weights = dict(tree_flatten(model.trainable_parameters()))
     mx.save_safetensors(str(args.adapter_file), adapter_weights)
