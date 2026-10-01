@@ -109,9 +109,13 @@ def _prepare_loss_inputs(logps, behavior_logps, rewards, mask, beta):
     return current, behavior, returns
 
 
-@mx.compile
 def _token_loss(current, behavior, rewards, mask, *, estimator, beta, aux=None, head=None, full=None, tail_floor=1e-6):
-    """Return the KLPO token-regression backward surrogate and statistics."""
+    """Return the token objective and metrics, dispatching estimators in Python.
+
+    Estimators use different optional array trees and return different metric
+    dictionaries. Keep that dispatch outside ``mx.compile``; the tensor operations
+    still build lazy MLX graphs and are differentiated normally.
+    """
     h = mx.stop_gradient(
         mx.where(mask, rewards[:, None] - beta * (current - behavior), 0)
     )
@@ -163,9 +167,12 @@ def _token_loss(current, behavior, rewards, mask, *, estimator, beta, aux=None, 
     return loss, local_kl, mx.array(0.0), extra
 
 
-@mx.compile
 def _sequence_loss(current, behavior, rewards, mask, *, estimator, beta, aux=None, head=None, full=None, tail_floor=1e-6):
-    """Return the KLPO sequence-regression backward surrogate and statistics."""
+    """Return the sequence objective and metrics, dispatching estimators in Python.
+
+    Route-specific optional inputs and metric trees are not a stable compiled
+    function interface across KLPO estimators.
+    """
     if estimator == "binary":
         binary_kl, centered_ratio, correction = _binary_terms(current, behavior, mask)
         residual = mx.stop_gradient(rewards - beta * centered_ratio.sum(axis=-1))
