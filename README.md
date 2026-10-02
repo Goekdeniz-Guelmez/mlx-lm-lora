@@ -44,6 +44,7 @@ With MLX-LM-LoRA you can, train Large Language Models locally on Apple Silicon u
 - **XPO**: Extended Preference Optimization
 - **RLHF Reinforce KL**: Reinforced Reinforcement Learning from Human Feedback (with KL regularization)
 - **PPO**: Proximal policy Optimization
+- **KLPO**: KL-Regularized Policy Optimization for Critic-Free Agentic Reinforcement Learning
 
 ## New Features
 
