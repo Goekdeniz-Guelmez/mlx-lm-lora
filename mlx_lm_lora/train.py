@@ -91,7 +91,7 @@ CONFIG_DEFAULTS = {
     "data": "data/",
     "seed": 0,
     "num_layers": -1,
-    "batch_size": 4,
+    "batch_size": 1,
     "iters": None,
     "epochs": None,
     "gradient_accumulation_steps": 1,
@@ -117,6 +117,12 @@ CONFIG_DEFAULTS = {
     "beta": 0.1,
     "reward_scaling": 1.0,
     "dpo_cpo_loss_type": "sigmoid",
+    "latent_weight": 0.1,
+    "latent_margin": 0.05,
+    "latent_gamma": 10.0,
+    "latent_variant": "both",
+    "latent_pooling": "answer_mean",
+    "latent_layer": "final",
     "delta": 50.0,
     "reference_model_path": None,
     "lambda_mse_target": 0.05,
@@ -265,9 +271,11 @@ def build_parser():
         choices=[
             "sft",
             "dpo",
+            "dlpo-dpo",
             "ftpo",
             "cpo",
             "orpo",
+            "dlpo-orpo",
             "grpo",
             "klpo",
             "online_dpo",
@@ -413,6 +421,18 @@ def build_parser():
     parser.add_argument(
         "--delta", type=float, help="Delta parameter for DPOP loss type.", default=50.0
     )
+    parser.add_argument("--latent-weight", type=float, default=0.1)
+    parser.add_argument("--latent-margin", type=float, default=0.05)
+    parser.add_argument("--latent-gamma", type=float, default=10.0)
+    parser.add_argument(
+        "--latent-variant", choices=["similarity", "direction", "both"], default="both"
+    )
+    parser.add_argument(
+        "--latent-pooling",
+        choices=["answer_mean", "last_token", "last_k_mean", "prompt_answer_mean"],
+        default="answer_mean",
+    )
+    parser.add_argument("--latent-layer", default="final")
     parser.add_argument(
         "--reference-model-path",
         type=str,
@@ -588,10 +608,16 @@ def train_model(
 ):
     mx.random.seed(args.seed)
 
-    if args.iters is None and args.epochs is not None:
-        args.iters = calculate_iters(
-            train_set=train_set, batch_size=args.batch_size, epochs=args.epochs
-        )
+    if args.iters is None:
+        if args.epochs is not None:
+            args.iters = calculate_iters(
+                train_set=train_set, batch_size=args.batch_size, epochs=args.epochs
+            )
+        else:
+            args.iters = SFTTrainingArgs().iters
+            print_info(
+                f"Neither iters nor epochs was provided; defaulting to {args.iters} iterations."
+            )
 
     if args.resume_adapter_file is not None:
         print_warning(
@@ -611,7 +637,7 @@ def train_model(
     print_info(f"Training mode: {Colors.YELLOW}{args.train_mode.upper()}{Colors.RESET}")
 
     # Training mode dispatch
-    if args.train_mode == "orpo":
+    if args.train_mode in ["orpo", "dlpo-orpo"]:
         train_orpo(
             model=model,
             optimizer=opt,
@@ -631,6 +657,13 @@ def train_model(
                 beta=args.beta,
                 seq_step_size=512 if args.efficient_long_context else None,
                 reward_scaling=args.reward_scaling,
+                loss_type=args.train_mode,
+                latent_weight=args.latent_weight,
+                latent_margin=args.latent_margin,
+                latent_gamma=args.latent_gamma,
+                latent_variant=args.latent_variant,
+                latent_pooling=args.latent_pooling,
+                latent_layer=args.latent_layer,
                 gradient_accumulation_steps=args.gradient_accumulation_steps,
                 qat_enable=args.qat_enable,
                 qat_bits=args.qat_bits,
@@ -669,7 +702,7 @@ def train_model(
             training_callback=training_callback,
         )
 
-    elif args.train_mode == "dpo":
+    elif args.train_mode in ["dpo", "dlpo-dpo"]:
         train_dpo(
             model=model,
             ref_model=reference_model,
@@ -688,9 +721,15 @@ def train_model(
                 grad_checkpoint=args.grad_checkpoint,
                 recurrence_chunk_size=args.recurrence_chunk_size,
                 beta=args.beta,
-                loss_type=args.dpo_cpo_loss_type,
+                loss_type=("dlpo-dpo" if args.train_mode == "dlpo-dpo" else args.dpo_cpo_loss_type),
                 delta=args.delta,
                 reference_model_path=args.reference_model_path,
+                latent_weight=args.latent_weight,
+                latent_margin=args.latent_margin,
+                latent_gamma=args.latent_gamma,
+                latent_variant=args.latent_variant,
+                latent_pooling=args.latent_pooling,
+                latent_layer=args.latent_layer,
                 seq_step_size=512 if args.efficient_long_context else None,
                 gradient_accumulation_steps=args.gradient_accumulation_steps,
                 qat_enable=args.qat_enable,
@@ -943,7 +982,16 @@ def evaluate_model(
 
     print_section(f"Evaluating {args.train_mode.upper()} Model")
 
-    if args.train_mode == "orpo":
+    if args.train_mode in ["orpo", "dlpo-orpo"]:
+        orpo_args = ORPOTrainingArgs(
+            loss_type=args.train_mode,
+            latent_weight=args.latent_weight,
+            latent_margin=args.latent_margin,
+            latent_gamma=args.latent_gamma,
+            latent_variant=args.latent_variant,
+            latent_pooling=args.latent_pooling,
+            latent_layer=args.latent_layer,
+        )
         test_loss, test_rewards, _, test_metrics = evaluate_orpo(
             model=model,
             dataset=test_set,
@@ -951,6 +999,7 @@ def evaluate_model(
             num_batches=args.test_batches,
             max_seq_length=args.max_seq_length,
             beta=args.beta,
+            args=orpo_args,
         )
         test_ppl = math.exp(test_loss)
         print(
@@ -986,7 +1035,16 @@ def evaluate_model(
                 f"  {Colors.WHITE}{metric_name}:{Colors.RESET} {float(metric_value):.3f}"
             )
 
-    elif args.train_mode == "dpo":
+    elif args.train_mode in ["dpo", "dlpo-dpo"]:
+        dpo_args = DPOTrainingArgs(
+            loss_type=("dlpo-dpo" if args.train_mode == "dlpo-dpo" else args.dpo_cpo_loss_type),
+            latent_weight=args.latent_weight,
+            latent_margin=args.latent_margin,
+            latent_gamma=args.latent_gamma,
+            latent_variant=args.latent_variant,
+            latent_pooling=args.latent_pooling,
+            latent_layer=args.latent_layer,
+        )
         test_loss, _, _, test_metrics = evaluate_dpo(
             model=model,
             ref_model=reference_model,
@@ -996,7 +1054,8 @@ def evaluate_model(
             max_seq_length=args.max_seq_length,
             beta=args.beta,
             delta=args.delta,
-            loss_type=args.dpo_cpo_loss_type,
+            loss_type=("dlpo-dpo" if args.train_mode == "dlpo-dpo" else args.dpo_cpo_loss_type),
+            args=dpo_args,
         )
         test_ppl = math.exp(test_loss)
         print(
@@ -1319,7 +1378,7 @@ def run(args, training_callback: TrainingCallback = None):
     reference_model = (
         load_reference_model(args)
         if args.train_mode
-        in ["dpo", "ftpo", "grpo", "online_dpo", "ppo", "rlhf_reinforce", "xpo"]
+        in ["dpo", "dlpo-dpo", "ftpo", "grpo", "online_dpo", "ppo", "rlhf_reinforce", "xpo"]
         else None
     )
     judge_model, judge_tokenizer = (

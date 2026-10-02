@@ -400,7 +400,7 @@ class GRPOLifecycleTest(unittest.TestCase):
             def __init__(self, model, **kwargs):
                 self.options = kwargs
 
-            def insert(self, prompts, max_tokens):
+            def insert(self, prompts, max_tokens, *, caches=None, all_tokens=None):
                 self.once = False
                 return [10, 20]
 

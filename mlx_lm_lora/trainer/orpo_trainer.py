@@ -21,6 +21,11 @@ from .sft_trainer import (
     grad_checkpoint,
     reset_prompt_cache,
 )
+from .dlpo import (
+    format_latent_metrics,
+    forward_logits_and_hidden,
+    latent_preference_loss,
+)
 
 
 @dataclass
@@ -32,12 +37,50 @@ class ORPOTrainingArgs(SFTTrainingArgs):
         default=1.0,
         metadata={"help": "Reward scaling factor for ORPO training, not implemented."},
     )
+    loss_type: str = field(
+        default="orpo",
+        metadata={"help": "ORPO loss type: 'orpo' or 'dlpo-orpo'."},
+    )
+    latent_weight: float = field(
+        default=0.1,
+        metadata={"help": "Weight of the DLPO hidden-state regularizer."},
+    )
+    latent_margin: float = field(
+        default=0.05,
+        metadata={"help": "Target prompt-response cosine margin."},
+    )
+    latent_gamma: float = field(
+        default=10.0,
+        metadata={"help": "Sharpness of the DLPO soft-margin losses."},
+    )
+    latent_variant: str = field(
+        default="both",
+        metadata={"help": "DLPO component: 'similarity', 'direction', or 'both'."},
+    )
+    latent_pooling: str = field(
+        default="answer_mean",
+        metadata={
+            "help": (
+                "Hidden-state pooling: 'answer_mean', 'last_token', "
+                "'last_k_mean', or 'prompt_answer_mean'."
+            )
+        },
+    )
+    latent_layer: str = field(
+        default="late",
+        metadata={
+            "help": "Residual-stream anchor: 'final', 'middle', 'late', or an index."
+        },
+    )
 
 
-def get_logps(model, tokens, mask, cache=None):
+def get_logps(model, tokens, mask, cache=None, return_hidden=False, layer="final"):
     inputs = tokens[:, :-1]
     targets = tokens[:, 1:]
-    logits = model(inputs, cache=cache)
+    if return_hidden:
+        logits, hidden = forward_logits_and_hidden(model, inputs, layer, cache)
+    else:
+        logits, hidden = model(inputs, cache=cache), None
     # Clip log_probs to avoid -inf and NaN stability issues
     log_probs = -nn.losses.cross_entropy(logits, targets, reduction="none")
     log_probs = mx.clip(log_probs, -1000.0, 0.0)
@@ -52,9 +95,10 @@ def get_logps(model, tokens, mask, cache=None):
     safe_seq_lengths = mx.where(seq_lengths > 0, seq_lengths, 1.0)
     logp_seq_avg = mx.where(seq_lengths > 0, logp_sum / safe_seq_lengths, 0.0)
     mask_sum = mask.sum()
-    safe_mask_sum = mx.where(mask_sum > 0, mask_sum, 1.0)
-    logits_mean = mx.where(mask_sum > 0, logits.sum() / safe_mask_sum, 0.0)
-    return logp_seq_avg, logits_mean
+    safe_mask_sum = mx.where(mask_sum > 0, mask_sum, mx.array(1.0))
+    logits_mean = mx.where(mask_sum > 0, logits.sum() / safe_mask_sum, mx.array(0.0))
+    result = (logp_seq_avg, logits_mean)
+    return result + (hidden,) if return_hidden else result
 
 
 def _log1mexp(log_probability):
@@ -135,7 +179,9 @@ def orpo_loss_from_model(
     )
 
 
-def iterate_orpo_batches(dataset, batch_size, max_seq_length, train=False):
+def iterate_orpo_batches(
+    dataset, batch_size, max_seq_length, train=False, include_prompt_masks=False
+):
     """Batch iterator for ORPO with preference scores"""
     idx = sorted(range(len(dataset)), key=lambda idx: len(dataset[idx]["chosen"]))
 
@@ -182,6 +228,8 @@ def iterate_orpo_batches(dataset, batch_size, max_seq_length, train=False):
             rejected_masks = np.zeros(
                 (batch_size_per_device, max_length_in_batch), np.float32
             )
+            chosen_prompt_masks = np.zeros_like(chosen_masks)
+            rejected_prompt_masks = np.zeros_like(rejected_masks)
 
             preference_scores = np.array(
                 [x.get("preference_score", 1.0) for x in batch], np.float32
@@ -203,21 +251,27 @@ def iterate_orpo_batches(dataset, batch_size, max_seq_length, train=False):
                     batch[j].get("rejected_prompt_length", 0), rejected_length
                 )
                 rejected_masks[j, rejected_prompt_length:rejected_length] = 1.0
+                if include_prompt_masks:
+                    chosen_prompt_masks[j, :chosen_prompt_length] = 1.0
+                    rejected_prompt_masks[j, :rejected_prompt_length] = 1.0
 
-            yield (
+            result = (
                 mx.array(chosen_arr),
                 mx.array(rejected_arr),
                 mx.array(chosen_masks),
                 mx.array(rejected_masks),
                 mx.array(preference_scores),
             )
+            if include_prompt_masks:
+                result += (mx.array(chosen_prompt_masks), mx.array(rejected_prompt_masks))
+            yield result
 
         if not train:
             break
 
 
 def evaluate_orpo(
-    model, dataset, batch_size, num_batches, beta: float, max_seq_length=2048
+    model, dataset, batch_size, num_batches, beta: float, max_seq_length=2048, args=None
 ):
     model.eval()
     all_losses = 0
@@ -226,20 +280,28 @@ def evaluate_orpo(
     ntokens = 0
 
     index_iterator = iter(range(num_batches)) if num_batches != -1 else iter(int, 1)
+    is_dlpo = args is not None and args.loss_type == "dlpo-orpo"
     for _, batch in zip(
         index_iterator,
         iterate_orpo_batches(
             dataset=dataset,
             batch_size=batch_size,
             max_seq_length=max_seq_length,
+            include_prompt_masks=is_dlpo,
         ),
     ):
-        chosen, rejected, chosen_masks, rejected_masks, preference_scores = batch
+        chosen, rejected, chosen_masks, rejected_masks, preference_scores, *prompt_masks = batch
 
-        chosen_logps, chosen_logits_mean = get_logps(model, chosen, chosen_masks)
-        rejected_logps, rejected_logits_mean = get_logps(
-            model, rejected, rejected_masks
+        chosen_result = get_logps(
+            model, chosen, chosen_masks, return_hidden=is_dlpo,
+            layer=args.latent_layer if is_dlpo else "final",
         )
+        rejected_result = get_logps(
+            model, rejected, rejected_masks, return_hidden=is_dlpo,
+            layer=args.latent_layer if is_dlpo else "final",
+        )
+        chosen_logps, chosen_logits_mean = chosen_result[:2]
+        rejected_logps, rejected_logits_mean = rejected_result[:2]
 
         lvalue, reward, toks, metrics = orpo_loss(
             chosen_logps,
@@ -251,6 +313,14 @@ def evaluate_orpo(
             preference_scores=preference_scores,
             beta=beta,
         )
+        if is_dlpo:
+            latent_loss, latent_metrics = latent_preference_loss(
+                chosen_result[2], rejected_result[2],
+                chosen_masks[:, :-1], rejected_masks[:, :-1],
+                prompt_masks[0][:, :-1], prompt_masks[1][:, :-1], args,
+            )
+            lvalue += args.latent_weight * latent_loss
+            metrics.update(latent_metrics)
         all_losses += lvalue * toks
         all_rewards += reward * toks
         ntokens += toks
@@ -303,7 +373,10 @@ def train_orpo(
         raise ValueError("qat_start_step must be at least 1")
 
     qat_installed = False
+    is_dlpo = args.loss_type == "dlpo-orpo"
     efficient = True if args.seq_step_size is not None else False
+    if is_dlpo and efficient:
+        raise ValueError("dlpo-orpo does not support efficient_long_context")
     if efficient:
         cache = make_prompt_cache(model)
         seq_step_size = args.seq_step_size
@@ -318,8 +391,12 @@ def train_orpo(
         chosen_masks,
         rejected_masks,
         preference_scores,
+        chosen_hidden=None,
+        rejected_hidden=None,
+        chosen_prompt_masks=None,
+        rejected_prompt_masks=None,
     ):
-        return loss(
+        result = loss(
             chosen_logps=chosen_logps,
             chosen_logits_mean=chosen_logits_mean,
             rejected_logps=rejected_logps,
@@ -329,31 +406,41 @@ def train_orpo(
             preference_scores=preference_scores,
             beta=args.beta,
         )
+        if not is_dlpo:
+            return result
+        loss_value, reward, toks, metrics = result
+        latent_loss, latent_metrics = latent_preference_loss(
+            chosen_hidden, rejected_hidden,
+            chosen_masks[:, :-1], rejected_masks[:, :-1],
+            chosen_prompt_masks[:, :-1], rejected_prompt_masks[:, :-1], args,
+        )
+        metrics.update(latent_metrics)
+        return loss_value + args.latent_weight * latent_loss, reward, toks, metrics
 
     def loss_wrapper(
-        model,
-        chosen,
-        rejected,
-        chosen_masks,
-        rejected_masks,
-        preference_scores,
+        model, chosen, rejected, chosen_masks, rejected_masks,
+        preference_scores, chosen_prompt_masks=None, rejected_prompt_masks=None,
     ):
-        return orpo_loss_from_model(
-            model,
-            chosen,
-            rejected,
-            chosen_masks,
-            rejected_masks,
-            preference_scores,
-            loss=loss,
-            beta=args.beta,
+        chosen_result = get_logps(
+            model, chosen, chosen_masks, return_hidden=is_dlpo, layer=args.latent_layer
+        )
+        rejected_result = get_logps(
+            model, rejected, rejected_masks, return_hidden=is_dlpo, layer=args.latent_layer
+        )
+        return loss_from_logps(
+            *chosen_result[:2], *rejected_result[:2],
+            chosen_masks, rejected_masks, preference_scores,
+            chosen_hidden=chosen_result[2] if is_dlpo else None,
+            rejected_hidden=rejected_result[2] if is_dlpo else None,
+            chosen_prompt_masks=chosen_prompt_masks,
+            rejected_prompt_masks=rejected_prompt_masks,
         )
 
     loss_value_and_grad = nn.value_and_grad(model, loss_wrapper)
 
     @partial(mx.compile, inputs=state, outputs=state)
     def step(batch, prev_grad, do_update):
-        chosen, rejected, chosen_masks, rejected_masks, preference_scores = batch
+        chosen, rejected, chosen_masks, rejected_masks, preference_scores, *prompt_masks = batch
 
         (lvalue, reward, toks, metrics), grad = loss_value_and_grad(
             model,
@@ -362,6 +449,8 @@ def train_orpo(
             chosen_masks,
             rejected_masks,
             preference_scores=preference_scores,
+            chosen_prompt_masks=prompt_masks[0] if is_dlpo else None,
+            rejected_prompt_masks=prompt_masks[1] if is_dlpo else None,
         )
 
         if prev_grad is not None:
@@ -528,6 +617,7 @@ def train_orpo(
                 args.batch_size,
                 args.max_seq_length,
                 train=True,
+                include_prompt_masks=is_dlpo,
             )
         )
 
@@ -544,16 +634,21 @@ def train_orpo(
                 num_batches=args.val_batches,
                 max_seq_length=args.max_seq_length,
                 beta=args.beta,
+                args=args,
             )
             val_time = time.perf_counter() - stop
             if rank == 0:
+                latent_report = (
+                    format_latent_metrics(val_metrics) if is_dlpo else ""
+                )
                 tqdm.write(
                     f"Iter {it}: "
                     f"Val loss {val_loss:.3f}, "
                     f"Val chosen reward {val_rewards[0]:.3f}, "
                     f"Val rejected reward {val_rewards[1]:.3f}, "
                     f"Val accuracy {val_metrics['accuracies']:.3f}, "
-                    f"Val margin {val_metrics['margins']:.3f}, "
+                    f"Val margin {val_metrics['margins']:.3f}"
+                    f"{latent_report}, "
                     f"Val took {val_time:.3f}s",
                 )
 
@@ -602,7 +697,7 @@ def train_orpo(
         steps += 1
 
         for k, v in metrics.items():
-            accumulated_metrics[k] += v
+            accumulated_metrics[k] = accumulated_metrics.get(k, 0) + v
 
         _acc = [v for v in accumulated_metrics.values() if isinstance(v, mx.array)]
         mx.eval(state, losses, rewards, n_tokens, grad_accum, *_acc)
@@ -626,19 +721,24 @@ def train_orpo(
             peak_mem = mx.get_peak_memory() / 1e9
 
             if rank == 0:
-                pbar.set_postfix(
-                    {
-                        "loss": f"{train_loss:.3f}",
-                        "it/s": f"{it_sec:.3f}",
-                    }
+                latent_report = (
+                    format_latent_metrics(avg_metrics) if is_dlpo else ""
                 )
+                postfix = {
+                    "loss": f"{train_loss:.3f}",
+                    "it/s": f"{it_sec:.3f}",
+                }
+                if is_dlpo:
+                    postfix["latent"] = f"{float(avg_metrics['latent_loss']):.3f}"
+                pbar.set_postfix(postfix)
                 tqdm.write(
                     f"\nIter {it}: "
                     f"loss {train_loss:.3f}, "
                     f"chosen_r {train_rewards[0]:.3f}, "
                     f"rejected_r {train_rewards[1]:.3f}, "
                     f"acc {avg_metrics['accuracies']:.3f}, "
-                    f"margin {avg_metrics['margins']:.3f}, "
+                    f"margin {avg_metrics['margins']:.3f}"
+                    f"{latent_report}, "
                     f"lr {learning_rate:.3e}, "
                     f"it/s {it_sec:.3f}, "
                     f"tok/s {tokens_sec:.3f}, "
