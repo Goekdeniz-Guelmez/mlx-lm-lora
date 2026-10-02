@@ -19,7 +19,9 @@ from mlx_lm.models.cache import (
 from mlx_lm.tuner.callbacks import TrainingCallback
 from tqdm import tqdm
 
+from ..recurrent_patch import enable_memory_safe_recurrences, model_uses_recurrence
 from .datasets import CacheDataset
+from .long_context import iter_cached_sft_chunks
 
 _CHUNKED_NLL_CHUNK_SIZE = 256
 
@@ -133,6 +135,12 @@ class SFTTrainingArgs:
         default=None,
         metadata={
             "help": "The examples are processsed sequentially in seq_step_size chunks."
+        },
+    )
+    recurrence_chunk_size: int = field(
+        default=64,
+        metadata={
+            "help": "Chunk size used by memory-safe recurrent training fallbacks."
         },
     )
     qat_enable: bool = field(
@@ -384,7 +392,11 @@ def evaluate_sft(
     iterate_batches: callable = iterate_batches,
     efficient: bool = False,
     seq_step_size: int = 512,
+    recurrence_chunk_size: int = 64,
 ):
+    if model_uses_recurrence(model):
+        enable_memory_safe_recurrences(chunk_size=recurrence_chunk_size)
+
     model.eval()
     all_losses = mx.array(0.0)
     ntokens = mx.array(0)
@@ -403,12 +415,8 @@ def evaluate_sft(
     ):
         if efficient and cache is not None:
             seq_length = batch[0].shape[1]
-            for s in range(0, seq_length, seq_step_size):
-                end = min(s + seq_step_size, seq_length)
-                # If next chunk would have only 1 token, absorb it into this chunk
-                if 0 < (seq_length - end) < 2:
-                    end = seq_length
-                local_batch = (batch[0][:, s:end], batch[1])
+            for start, end in iter_cached_sft_chunks(seq_length, seq_step_size):
+                local_batch = (batch[0][:, start:end], batch[1])
                 losses, toks = loss(model, *local_batch, cache)
                 all_losses += losses * toks
                 ntokens += toks
@@ -439,6 +447,11 @@ def train_sft(
     iterate_batches: callable = iterate_batches,
     training_callback: TrainingCallback = None,
 ):
+    # Direct API users (including the SFT notebook) bypass train.py, so apply
+    # the same automatic protection used by the command-line entry point.
+    if model_uses_recurrence(model):
+        enable_memory_safe_recurrences(chunk_size=args.recurrence_chunk_size)
+
     mx.set_wired_limit(mx.device_info()["max_recommended_working_set_size"])
     world = mx.distributed.init()
     world_size = world.size()
@@ -493,21 +506,23 @@ def train_sft(
         seq_length = batch[0].shape[1]
         seq_grad_accum = None
 
-        for s in range(0, seq_length, seq_step_size):
-            end = min(s + seq_step_size, seq_length)
-            # If next chunk would have only 1 token, absorb it into this chunk
-            if 0 < (seq_length - end) < 2:
-                end = seq_length
-            local_batch = (batch[0][:, s:end], batch[1])
+        for start, end in iter_cached_sft_chunks(seq_length, seq_step_size):
+            local_batch = (batch[0][:, start:end], batch[1])
             (lvalue, toks), grad = loss_value_and_grad(model, *local_batch, cache)
+            prev_n_tokens = n_tokens
             losses += toks * lvalue
             n_tokens += toks
 
-            # Simple gradient summation (no weighted averaging)
             if seq_grad_accum is None:
                 seq_grad_accum = grad
             else:
-                seq_grad_accum = tree_map(lambda g, acc: g + acc, grad, seq_grad_accum)
+                scale_grad = toks / n_tokens
+                scale_accum = prev_n_tokens / n_tokens
+                seq_grad_accum = tree_map(
+                    lambda g, acc: scale_grad * g + scale_accum * acc,
+                    grad,
+                    seq_grad_accum,
+                )
 
             # Reset prompt cache before the last eval
             if end >= seq_length:
@@ -520,8 +535,7 @@ def train_sft(
 
         lvalue = losses / n_tokens
         toks = n_tokens
-        num_chunks = (seq_length + seq_step_size - 1) // seq_step_size
-        grad = tree_map(lambda g: g / num_chunks, seq_grad_accum)
+        grad = seq_grad_accum
 
         # Handle gradient accumulation across steps
         if prev_grad is not None:
@@ -573,6 +587,9 @@ def train_sft(
                 num_batches=args.val_batches,
                 max_seq_length=args.max_seq_length,
                 iterate_batches=iterate_batches,
+                recurrence_chunk_size=args.recurrence_chunk_size,
+                efficient=efficient,
+                seq_step_size=seq_step_size,
             )
             model.train()
             val_time = time.perf_counter() - tic

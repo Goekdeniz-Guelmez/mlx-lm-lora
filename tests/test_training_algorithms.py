@@ -1,6 +1,7 @@
 import unittest
 
 import mlx.core as mx
+import mlx.nn as nn
 
 from mlx_lm_lora.trainer import (
     cpo_trainer,
@@ -15,6 +16,7 @@ from mlx_lm_lora.trainer import (
     sft_trainer,
     xpo_trainer,
 )
+from mlx_lm_lora.trainer.long_context import iter_cached_sft_chunks
 
 
 def _scalar(value):
@@ -39,6 +41,7 @@ class SFTTrainerTest(unittest.TestCase):
         args = sft_trainer.SFTTrainingArgs()
         self.assertEqual(args.loss_type, "nll")
         self.assertEqual(args.gradient_accumulation_steps, 1)
+        self.assertEqual(args.recurrence_chunk_size, 64)
         self.assertFalse(args.qat_enable)
 
     def test_get_sft_loss_selects_supported_losses(self):
@@ -88,6 +91,18 @@ class SFTTrainerTest(unittest.TestCase):
 
         self.assertEqual(sft_trainer._find_cache_offset([None, [Cache()]]), 7)
         self.assertIsNone(sft_trainer._find_cache_offset(None))
+
+    def test_sequence_chunks_preserve_every_next_token_target(self):
+        bounds = list(iter_cached_sft_chunks(2049, 512))
+        self.assertEqual(
+            bounds,
+            [(0, 512), (511, 1024), (1023, 1536), (1535, 2049)],
+        )
+
+        predicted_targets = [
+            target for start, end in bounds for target in range(start + 1, end)
+        ]
+        self.assertEqual(predicted_targets, list(range(1, 2049)))
 
     def test_reset_prompt_cache_calls_reset_protocol(self):
         class Cache:
@@ -276,12 +291,71 @@ class OnlineDPOTrainerTest(unittest.TestCase):
         self.assertEqual(prompts, [[1], [2, 3]])
         self.assertEqual(texts, ["one", "two"])
 
+    def test_online_scoring_masks_only_next_token_targets(self):
+        tokens, mask = online_dpo_trainer._pad_online_sequences(
+            [mx.array([1, 2, 3]), mx.array([4])]
+        )
+        self.assertEqual(tokens.shape, (2, 3))
+        self.assertTrue(
+            mx.array_equal(mask, mx.array([[True, True], [False, False]])).item()
+        )
+
+    def test_online_preference_microbatches_preserve_gradients(self):
+        class TableModel(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.weight = mx.array(
+                    [[0.0, 1.0, -1.0], [1.0, 0.0, -1.0], [0.0, -1.0, 1.0]]
+                )
+
+            def __call__(self, inputs):
+                return self.weight[inputs]
+
+        model = TableModel()
+        reference = TableModel()
+        chosen = [mx.array([0, 1, 2]), mx.array([1, 2])]
+        rejected = [mx.array([0, 2]), mx.array([2, 1, 0])]
+
+        def loss_fn(model, chosen, rejected, loss_type, beta, delta):
+            scores = online_dpo_trainer._score_preference_batch(
+                model, reference, chosen, rejected, loss_type
+            )
+            return online_dpo_trainer.online_dpo_loss(
+                *scores, beta=beta, delta=delta, loss_type=loss_type
+            )
+
+        compute = nn.value_and_grad(model, loss_fn)
+        kwargs = {"loss_type": "sigmoid", "beta": 0.1, "delta": 2.0}
+        full, full_grad = compute(model, chosen, rejected, **kwargs)
+        chunked, chunked_grad = online_dpo_trainer._preference_microbatches(
+            compute, model, chosen, rejected, 1, kwargs
+        )
+        self.assertAlmostEqual(_scalar(chunked[0]), _scalar(full[0]), places=6)
+        self.assertTrue(
+            mx.allclose(chunked_grad["weight"], full_grad["weight"], atol=1e-6).item()
+        )
+
 
 class ORPOTrainerTest(unittest.TestCase):
     def test_orpo_defaults(self):
         args = orpo_trainer.ORPOTrainingArgs()
         self.assertEqual(args.beta, 0.1)
         self.assertEqual(args.reward_scaling, 1.0)
+
+    def test_get_logps_excludes_right_padding_target(self):
+        class FixedLogitsModel:
+            def __call__(self, inputs, cache=None):
+                del cache
+                return mx.array([[[0.0, 0.0, 2.0], [2.0, 0.0, 0.0], [2.0, 0.0, 0.0]]])
+
+        tokens = mx.array([[1, 2, 0, 0]])
+        mask = mx.array([[1.0, 1.0, 0.0, 0.0]])
+        logps, _ = orpo_trainer.get_logps(FixedLogitsModel(), tokens, mask)
+
+        expected = -nn.losses.cross_entropy(
+            mx.array([[[0.0, 0.0, 2.0]]]), mx.array([[2]]), reduction="none"
+        )
+        self.assertTrue(mx.allclose(logps, expected[:, 0]).item())
 
     def test_orpo_loss_is_finite_with_nonfinite_inputs(self):
         loss, reward, tokens, metrics = orpo_trainer.orpo_loss(
@@ -296,8 +370,56 @@ class ORPOTrainerTest(unittest.TestCase):
         )
         self.assertTrue(mx.isfinite(loss).item())
         self.assertTrue(mx.all(mx.isfinite(reward)).item())
-        self.assertEqual(_scalar(tokens), 10.0)
+        self.assertEqual(_scalar(tokens), 6.0)
         self.assertIn("rejected_logits_mean", metrics)
+
+    def test_orpo_loss_matches_sft_plus_odds_ratio_objective(self):
+        chosen_logps = mx.array([-0.2])
+        rejected_logps = mx.array([-1.0])
+        beta = 0.1
+        loss, _, _, _ = orpo_trainer.orpo_loss(
+            chosen_logps=chosen_logps,
+            chosen_logits_mean=mx.array(0.0),
+            rejected_logps=rejected_logps,
+            rejected_logits_mean=mx.array(0.0),
+            chosen_masks=mx.ones((1, 2)),
+            rejected_masks=mx.ones((1, 2)),
+            preference_scores=mx.ones((1,)),
+            beta=beta,
+        )
+        log_odds = (chosen_logps - rejected_logps) - (
+            mx.log1p(-mx.exp(chosen_logps)) - mx.log1p(-mx.exp(rejected_logps))
+        )
+        expected = -chosen_logps - beta * nn.log_sigmoid(log_odds)
+        self.assertTrue(mx.allclose(loss, expected.mean()).item())
+
+    def test_orpo_model_forward_produces_nonzero_gradients(self):
+        class ToyModel(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.embedding = nn.Embedding(4, 4)
+
+            def __call__(self, tokens, cache=None):
+                del cache
+                return self.embedding(tokens)
+
+        model = ToyModel()
+        chosen = mx.array([[0, 1, 2]])
+        rejected = mx.array([[0, 2, 1]])
+        masks = mx.ones((1, 3))
+        loss_and_grad = nn.value_and_grad(model, orpo_trainer.orpo_loss_from_model)
+
+        _, gradients = loss_and_grad(
+            model,
+            chosen,
+            rejected,
+            masks,
+            masks,
+            mx.ones((1,)),
+        )
+
+        gradient = gradients["embedding"]["weight"]
+        self.assertGreater(_scalar(mx.sum(mx.abs(gradient))), 0.0)
 
     def test_orpo_batch_iterator_includes_preference_scores(self):
         data = [
@@ -307,6 +429,37 @@ class ORPOTrainerTest(unittest.TestCase):
         batch = next(orpo_trainer.iterate_orpo_batches(data, 2, 8))
         self.assertEqual(batch[0].shape, (2, 8))
         self.assertTrue(mx.allclose(batch[4], mx.array([0.75, 0.25])).item())
+
+    def test_orpo_batch_iterator_masks_only_response_targets(self):
+        data = [
+            {
+                "chosen": [1, 2, 3],
+                "rejected": [1, 2, 4, 5],
+                "chosen_prompt_length": 2,
+                "rejected_prompt_length": 2,
+            },
+            {
+                "chosen": [6, 7, 8, 9],
+                "rejected": [6, 7, 10],
+                "chosen_prompt_length": 1,
+                "rejected_prompt_length": 1,
+            },
+        ]
+        _, _, chosen_masks, rejected_masks, _ = next(
+            orpo_trainer.iterate_orpo_batches(data, 2, 8)
+        )
+        self.assertTrue(
+            mx.array_equal(
+                chosen_masks,
+                mx.array([[0, 0, 1, 0, 0, 0, 0, 0], [0, 1, 1, 1, 0, 0, 0, 0]]),
+            ).item()
+        )
+        self.assertTrue(
+            mx.array_equal(
+                rejected_masks,
+                mx.array([[0, 0, 1, 1, 0, 0, 0, 0], [0, 1, 1, 0, 0, 0, 0, 0]]),
+            ).item()
+        )
 
 
 class PPOTrainerTest(unittest.TestCase):
@@ -372,6 +525,31 @@ class RLHFReinforceTrainerTest(unittest.TestCase):
             set(metrics),
             {"rewards", "kl_penalty", "advantages", "policy_logps", "ref_logps"},
         )
+
+    def test_selected_logp_reinforce_loss_matches_targeted_logits_loss(self):
+        policy = mx.array([[[2.0, 0.0], [0.5, 1.5]]])
+        reference = mx.array([[[1.5, 0.5], [1.0, 1.0]]])
+        targets = mx.array([[1, 0]])
+        masks = mx.ones((1, 2), dtype=mx.bool_)
+        policy_logps = -nn.losses.cross_entropy(policy, targets, reduction="none")
+        reference_logps = -nn.losses.cross_entropy(reference, targets, reduction="none")
+        expected = rlhf_reinforce_trainer.rlhf_reinforce_loss(
+            policy,
+            reference,
+            mx.array([1.0]),
+            masks,
+            beta=0.1,
+            targets=targets,
+        )
+        actual = rlhf_reinforce_trainer._rlhf_reinforce_logp_loss(
+            policy_logps,
+            reference_logps,
+            mx.array([1.0]),
+            masks,
+            beta=0.1,
+        )
+        self.assertAlmostEqual(_scalar(actual[0]), _scalar(expected[0]), places=6)
+        self.assertEqual(_scalar(actual[1]), _scalar(expected[1]))
 
     def test_get_model_logits_shifts_inputs_and_masks(self):
         class Model:

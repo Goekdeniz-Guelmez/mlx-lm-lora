@@ -12,7 +12,9 @@ from mlx_lm.models.cache import make_prompt_cache
 from mlx_lm.tuner.callbacks import TrainingCallback
 from tqdm import tqdm
 
+from ..recurrent_patch import enable_memory_safe_recurrences, model_uses_recurrence
 from .dpo_trainer import DPOTrainingArgs as CPOTrainingArgs
+from .long_context import iter_cached_sft_chunks
 from .sft_trainer import grad_checkpoint, reset_prompt_cache
 
 
@@ -75,6 +77,35 @@ def cpo_loss(
 
     mx.clear_cache()
     return mx.mean(losses), reward, num_tokens, metrics
+
+
+def cpo_loss_from_model(
+    model,
+    chosen,
+    rejected,
+    chosen_masks,
+    rejected_masks,
+    beta: float,
+    delta: float,
+    loss=cpo_loss,
+    loss_type: str = "sigmoid",
+):
+    """Compute CPO loss with model forwards in the differentiated function."""
+    policy_chosen_scores = get_token_scores(model, chosen, chosen_masks)
+    policy_rejected_scores = get_token_scores(model, rejected, rejected_masks)
+    policy_chosen_score = compute_score(policy_chosen_scores, chosen_masks, loss_type)
+    policy_rejected_score = compute_score(
+        policy_rejected_scores, rejected_masks, loss_type
+    )
+    return loss(
+        policy_chosen_score=policy_chosen_score,
+        policy_rejected_score=policy_rejected_score,
+        chosen_masks=chosen_masks,
+        rejected_masks=rejected_masks,
+        beta=beta,
+        delta=delta,
+        loss_type=loss_type,
+    )
 
 
 def iterate_cpo_batches(dataset, batch_size, max_seq_length, train=False):
@@ -194,7 +225,7 @@ def evaluate_cpo(
             for k, v in metrics.items():
                 all_metrics[k] += v * toks
 
-        mx.eval(all_losses, all_rewards, ntokens)
+        mx.eval(all_losses, all_rewards, ntokens, *all_metrics.values())
     all_losses = mx.distributed.all_sum(all_losses)
     all_rewards = mx.distributed.all_sum(all_rewards)
     ntokens = mx.distributed.all_sum(ntokens)
@@ -216,6 +247,8 @@ def train_cpo(
     loss_fn: callable = cpo_loss,
     training_callback: TrainingCallback = None,
 ):
+    if model_uses_recurrence(model):
+        enable_memory_safe_recurrences(chunk_size=args.recurrence_chunk_size)
     mx.set_wired_limit(mx.device_info()["max_recommended_working_set_size"])
     world = mx.distributed.init()
     world_size = world.size()
@@ -241,19 +274,10 @@ def train_cpo(
     def step(batch, prev_grad, do_update):
         chosen, rejected, chosen_masks, rejected_masks = batch
 
-        policy_chosen_scores = get_token_scores(model, chosen, chosen_masks)
-        policy_rejected_scores = get_token_scores(model, rejected, rejected_masks)
-
-        policy_chosen_score = compute_score(
-            policy_chosen_scores, chosen_masks, args.loss_type
-        )
-        policy_rejected_score = compute_score(
-            policy_rejected_scores, rejected_masks, args.loss_type
-        )
-
         (lvalue, reward, toks, metrics), grad = loss_value_and_grad(
-            policy_chosen_score,
-            policy_rejected_score,
+            model,
+            chosen,
+            rejected,
             chosen_masks=chosen_masks,
             rejected_masks=rejected_masks,
         )
@@ -270,14 +294,14 @@ def train_cpo(
 
         return lvalue, reward, toks, metrics, grad
 
-    def loss_wrapper(
-        policy_chosen_score, policy_rejected_score, chosen_masks, rejected_masks
-    ):
-        return loss_fn(
-            policy_chosen_score=policy_chosen_score,
-            policy_rejected_score=policy_rejected_score,
-            chosen_masks=chosen_masks,
-            rejected_masks=rejected_masks,
+    def loss_wrapper(model, chosen, rejected, chosen_masks, rejected_masks):
+        return cpo_loss_from_model(
+            model,
+            chosen,
+            rejected,
+            chosen_masks,
+            rejected_masks,
+            loss=loss_fn,
             beta=args.beta,
             delta=args.delta,
             loss_type=args.loss_type,
@@ -295,14 +319,9 @@ def train_cpo(
             if curr_cache is not None:
                 reset_prompt_cache(curr_cache)
 
-            step_size = seq_step_size
-            for s in range(0, seq_length, step_size):
-                end = min(s + step_size, seq_length)
-                if 0 < (seq_length - end) < 2:
-                    end = seq_length
-
-                chunk = tokens[:, s:end]
-                chunk_mask = masks[:, s:end]
+            for start, end in iter_cached_sft_chunks(seq_length, seq_step_size):
+                chunk = tokens[:, start:end]
+                chunk_mask = masks[:, start:end]
 
                 chunk_scores = get_token_scores(
                     curr_model, chunk, chunk_mask, cache=curr_cache
@@ -368,14 +387,9 @@ def train_cpo(
             seq_length = tokens.shape[1]
             reset_prompt_cache(cache)
 
-            step_size = seq_step_size
-            for s in range(0, seq_length, step_size):
-                end = min(s + step_size, seq_length)
-                if 0 < (seq_length - end) < 2:
-                    end = seq_length
-
-                chunk = tokens[:, s:end]
-                chunk_mask = masks[:, s:end]
+            for start, end in iter_cached_sft_chunks(seq_length, seq_step_size):
+                chunk = tokens[:, start:end]
+                chunk_mask = masks[:, start:end]
 
                 def local_loss_fn(model):
                     local_sum = get_token_scores(

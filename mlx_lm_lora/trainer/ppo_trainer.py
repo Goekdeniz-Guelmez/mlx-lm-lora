@@ -10,11 +10,13 @@ from mlx.utils import tree_flatten, tree_map
 from mlx_lm.tuner.callbacks import TrainingCallback
 from tqdm import tqdm
 
-from .dpo_trainer import get_token_scores
+from ..recurrent_patch import enable_memory_safe_recurrences, model_uses_recurrence
 from .judge import HumanPairwiseJudge, LLMPairwiseJudge
 from .online_dpo_trainer import (
     OnlineDPOTrainingArgs,
-    compute_score,
+    _preference_microbatches,
+    _score_preference_batch,
+    _validate_micro_batch_size,
     generate_for_online_dpo,
     iterate_online_dpo_batches,
 )
@@ -28,6 +30,7 @@ class PPOTrainingArgs(OnlineDPOTrainingArgs):
     )
 
 
+@mx.compile
 def ppo_loss(
     policy_chosen_score: mx.array,
     policy_rejected_score: mx.array,
@@ -106,7 +109,6 @@ def ppo_loss(
         "rejected_logits_mean": mx.mean(policy_rejected_score),
     }
 
-    mx.clear_cache()
     return total_loss, reward, num_tokens, metrics
 
 
@@ -127,12 +129,16 @@ def evaluate_ppo(
     tokenizer=None,
     max_tokens: int = 512,
     temperature: float = 0.8,
+    micro_batch_size: Optional[int] = None,
 ):
     model.eval()
+    if ref_model is not None:
+        ref_model.eval()
     all_losses = 0
     all_rewards = mx.zeros((2,))
     all_metrics = None
     ntokens = 0
+    micro_batch_size = _validate_micro_batch_size(micro_batch_size, batch_size)
 
     index_iterator = iter(range(num_batches)) if num_batches != -1 else iter(int, 1)
 
@@ -147,7 +153,12 @@ def evaluate_ppo(
         prompts, prompt_texts = batch
 
         completions = generate_for_online_dpo(
-            model, tokenizer, prompts, temperature=temperature, max_tokens=max_tokens
+            model,
+            tokenizer,
+            prompts,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            batch_size=micro_batch_size,
         )
 
         if judge_model == "human":
@@ -173,80 +184,39 @@ def evaluate_ppo(
                 chosen.append(prompt_text + completion_pair[1])
                 rejected.append(prompt_text + completion_pair[0])
 
-        chosen_tokens = [mx.array(tokenizer.encode(text)) for text in chosen]
-        rejected_tokens = [mx.array(tokenizer.encode(text)) for text in rejected]
-
-        chosen_masks = [mx.ones(len(tokens)) for tokens in chosen_tokens]
-        rejected_masks = [mx.ones(len(tokens)) for tokens in rejected_tokens]
-
-        # Fix the get_token_scores calls - convert to proper batch format
-        policy_chosen_scores = []
-        policy_rejected_scores = []
-
-        for tokens, mask in zip(chosen_tokens, chosen_masks):
-            batch_tokens = tokens.reshape(1, -1)  # Shape: (1, seq_len)
-            batch_mask = mask.reshape(1, -1)  # Shape: (1, seq_len)
-            score = get_token_scores(model, batch_tokens, batch_mask)
-            policy_chosen_scores.append(score)
-
-        for tokens, mask in zip(rejected_tokens, rejected_masks):
-            batch_tokens = tokens.reshape(1, -1)
-            batch_mask = mask.reshape(1, -1)
-            score = get_token_scores(model, batch_tokens, batch_mask)
-            policy_rejected_scores.append(score)
-
-        policy_chosen_score = mx.array(
-            [
-                compute_score(score, mask, loss_type)
-                for score, mask in zip(policy_chosen_scores, chosen_masks)
-            ]
+        chosen_tokens = [tokenizer.encode(text) for text in chosen]
+        rejected_tokens = [tokenizer.encode(text) for text in rejected]
+        scores = []
+        for start in range(0, len(chosen_tokens), micro_batch_size):
+            stop = start + micro_batch_size
+            scores.append(
+                _score_preference_batch(
+                    model,
+                    ref_model,
+                    chosen_tokens[start:stop],
+                    rejected_tokens[start:stop],
+                    loss_type,
+                )
+            )
+        combined_scores = tuple(
+            mx.concatenate([score[index] for score in scores], axis=0)
+            for index in range(6)
         )
-        policy_rejected_score = mx.array(
-            [
-                compute_score(score, mask, loss_type)
-                for score, mask in zip(policy_rejected_scores, rejected_masks)
-            ]
+        (
+            policy_chosen_score,
+            policy_rejected_score,
+            reference_chosen_logprobs,
+            reference_rejected_logprobs,
+            chosen_mask_counts,
+            rejected_mask_counts,
+        ) = (
+            *combined_scores[:4],
+            combined_scores[4].squeeze(-1),
+            combined_scores[5].squeeze(-1),
         )
-
         if ref_model is None:
             reference_chosen_logprobs = mx.zeros_like(policy_chosen_score)
             reference_rejected_logprobs = mx.zeros_like(policy_rejected_score)
-        else:
-            ref_chosen_scores = []
-            ref_rejected_scores = []
-
-            for tokens, mask in zip(chosen_tokens, chosen_masks):
-                batch_tokens = tokens.reshape(1, -1)
-                batch_mask = mask.reshape(1, -1)
-                score = mx.stop_gradient(
-                    get_token_scores(ref_model, batch_tokens, batch_mask)
-                )
-                ref_chosen_scores.append(score)
-
-            for tokens, mask in zip(rejected_tokens, rejected_masks):
-                batch_tokens = tokens.reshape(1, -1)
-                batch_mask = mask.reshape(1, -1)
-                score = mx.stop_gradient(
-                    get_token_scores(ref_model, batch_tokens, batch_mask)
-                )
-                ref_rejected_scores.append(score)
-
-            reference_chosen_logprobs = mx.array(
-                [
-                    compute_score(score, mask, loss_type)
-                    for score, mask in zip(ref_chosen_scores, chosen_masks)
-                ]
-            )
-            reference_rejected_logprobs = mx.array(
-                [
-                    compute_score(score, mask, loss_type)
-                    for score, mask in zip(ref_rejected_scores, rejected_masks)
-                ]
-            )
-
-        # Convert masks to token counts
-        chosen_mask_counts = mx.array([mask.sum() for mask in chosen_masks])
-        rejected_mask_counts = mx.array([mask.sum() for mask in rejected_masks])
 
         # Compute loss
         loss_value, reward, toks, metrics = loss_fn(
@@ -270,7 +240,7 @@ def evaluate_ppo(
             for k, v in metrics.items():
                 all_metrics[k] += v * toks
 
-    mx.eval(all_losses, all_rewards, ntokens)
+        mx.eval(all_losses, all_rewards, ntokens, *all_metrics.values())
 
     # Distributed reduction
     all_losses = mx.distributed.all_sum(all_losses)
@@ -300,6 +270,8 @@ def train_ppo(
     loss_fn: callable = ppo_loss,
     training_callback: TrainingCallback = None,
 ):
+    if model_uses_recurrence(model):
+        enable_memory_safe_recurrences(chunk_size=args.recurrence_chunk_size)
     mx.set_wired_limit(mx.device_info()["max_recommended_working_set_size"])
     world = mx.distributed.init()
     world_size = world.size()
@@ -315,6 +287,11 @@ def train_ppo(
         raise ValueError("gradient_accumulation_steps must be at least 1")
 
     state = [model.state, optimizer.state, mx.random.state]
+    micro_batch_size = _validate_micro_batch_size(
+        args.micro_batch_size, args.batch_size
+    )
+    if ref_model is not None:
+        ref_model.eval()
 
     def step(batch, prev_grad, do_update):
         prompts, prompt_texts = batch
@@ -326,6 +303,7 @@ def train_ppo(
             prompts,
             max_tokens=args.max_completion_length,
             temperature=args.temperature,
+            batch_size=micro_batch_size,
         )
 
         # Judge the completions
@@ -354,87 +332,19 @@ def train_ppo(
                 rejected.append(prompt_text + completion_pair[0])
 
         # Tokenize chosen and rejected
-        chosen_tokens = [mx.array(tokenizer.encode(text)) for text in chosen]
-        rejected_tokens = [mx.array(tokenizer.encode(text)) for text in rejected]
-
-        # Create masks
-        chosen_masks = [mx.ones(len(tokens)) for tokens in chosen_tokens]
-        rejected_masks = [mx.ones(len(tokens)) for tokens in rejected_tokens]
-
-        # Get policy scores
-        policy_chosen_scores = []
-        policy_rejected_scores = []
-
-        for tokens, mask in zip(chosen_tokens, chosen_masks):
-            batch_tokens = tokens.reshape(1, -1)
-            batch_mask = mask.reshape(1, -1)
-            score = get_token_scores(model, batch_tokens, batch_mask)
-            policy_chosen_scores.append(score)
-
-        for tokens, mask in zip(rejected_tokens, rejected_masks):
-            batch_tokens = tokens.reshape(1, -1)
-            batch_mask = mask.reshape(1, -1)
-            score = get_token_scores(model, batch_tokens, batch_mask)
-            policy_rejected_scores.append(score)
-
-        policy_chosen_score = mx.array(
-            [
-                compute_score(score, mask, args.loss_type)
-                for score, mask in zip(policy_chosen_scores, chosen_masks)
-            ]
-        )
-        policy_rejected_score = mx.array(
-            [
-                compute_score(score, mask, args.loss_type)
-                for score, mask in zip(policy_rejected_scores, rejected_masks)
-            ]
-        )
-
-        # Get reference scores
-        ref_chosen_scores = []
-        ref_rejected_scores = []
-
-        for tokens, mask in zip(chosen_tokens, chosen_masks):
-            batch_tokens = tokens.reshape(1, -1)
-            batch_mask = mask.reshape(1, -1)
-            score = mx.stop_gradient(
-                get_token_scores(ref_model, batch_tokens, batch_mask)
-            )
-            ref_chosen_scores.append(score)
-
-        for tokens, mask in zip(rejected_tokens, rejected_masks):
-            batch_tokens = tokens.reshape(1, -1)
-            batch_mask = mask.reshape(1, -1)
-            score = mx.stop_gradient(
-                get_token_scores(ref_model, batch_tokens, batch_mask)
-            )
-            ref_rejected_scores.append(score)
-
-        reference_chosen_logprobs = mx.array(
-            [
-                compute_score(score, mask, args.loss_type)
-                for score, mask in zip(ref_chosen_scores, chosen_masks)
-            ]
-        )
-        reference_rejected_logprobs = mx.array(
-            [
-                compute_score(score, mask, args.loss_type)
-                for score, mask in zip(ref_rejected_scores, rejected_masks)
-            ]
-        )
-
-        # Stack masks into proper 2D tensors
-        chosen_mask_array = mx.stack(chosen_masks)
-        rejected_mask_array = mx.stack(rejected_masks)
-
-        # Compute loss and gradients
-        (lvalue, reward, toks, metrics), grad = loss_value_and_grad(
-            policy_chosen_score,
-            policy_rejected_score,
-            reference_chosen_logprobs,
-            reference_rejected_logprobs,
-            chosen_mask_array,
-            rejected_mask_array,
+        chosen_tokens = [tokenizer.encode(text) for text in chosen]
+        rejected_tokens = [tokenizer.encode(text) for text in rejected]
+        (lvalue, reward, toks, metrics), grad = _preference_microbatches(
+            loss_value_and_grad,
+            model,
+            chosen_tokens,
+            rejected_tokens,
+            micro_batch_size,
+            {
+                "beta": args.beta,
+                "epsilon": args.epsilon,
+                "loss_type": args.loss_type,
+            },
         )
 
         if prev_grad is not None:
@@ -449,14 +359,15 @@ def train_ppo(
 
         return lvalue, reward, toks, metrics, grad
 
-    def loss_wrapper(
-        policy_chosen_score,
-        policy_rejected_score,
-        reference_chosen_score,
-        reference_rejected_score,
-        chosen_masks,
-        rejected_masks,
-    ):
+    def loss_wrapper(model, chosen, rejected, beta, epsilon, loss_type):
+        (
+            policy_chosen_score,
+            policy_rejected_score,
+            reference_chosen_score,
+            reference_rejected_score,
+            chosen_masks,
+            rejected_masks,
+        ) = _score_preference_batch(model, ref_model, chosen, rejected, loss_type)
         return loss_fn(
             policy_chosen_score=policy_chosen_score,
             policy_rejected_score=policy_rejected_score,
@@ -464,8 +375,8 @@ def train_ppo(
             reference_rejected_score=reference_rejected_score,
             chosen_masks=chosen_masks,
             rejected_masks=rejected_masks,
-            beta=args.beta,
-            epsilon=args.epsilon,
+            beta=beta,
+            epsilon=epsilon,
         )
 
     loss_value_and_grad = nn.value_and_grad(model, loss_wrapper)
@@ -529,6 +440,7 @@ def train_ppo(
                 judge_model=judge_model,
                 judge_tokenizer=judge_tokenizer,
                 max_tokens=args.max_completion_length,
+                micro_batch_size=args.micro_batch_size,
             )
             val_time = time.perf_counter() - stop
             if rank == 0:

@@ -14,6 +14,7 @@ from mlx.utils import tree_flatten, tree_map
 from mlx_lm.tuner.callbacks import TrainingCallback
 from tqdm import tqdm
 
+from ..recurrent_patch import enable_memory_safe_recurrences, model_uses_recurrence
 from .sft_trainer import SFTTrainingArgs, grad_checkpoint
 
 
@@ -173,10 +174,10 @@ def evaluate_ftpo(
             if totals is None
             else {k: totals[k] + v for k, v in metrics.items()}
         )
+        mx.eval(total_loss, *totals.values())
         count += 1
     if count == 0:
         raise ValueError("No FTPO evaluation batches available")
-    mx.eval(total_loss, *totals.values())
     return total_loss.item() / count, {k: v / count for k, v in totals.items()}
 
 
@@ -189,6 +190,8 @@ def train_ftpo(
     args: FTPOTrainingArgs = FTPOTrainingArgs(),
     training_callback: TrainingCallback = None,
 ):
+    if model_uses_recurrence(model):
+        enable_memory_safe_recurrences(chunk_size=args.recurrence_chunk_size)
     if ref_model is None:
         raise ValueError("FTPO requires a frozen reference model")
     if args.gradient_accumulation_steps < 1:

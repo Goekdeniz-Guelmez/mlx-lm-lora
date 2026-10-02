@@ -13,6 +13,8 @@ from mlx_lm.models.cache import make_prompt_cache
 from mlx_lm.tuner.callbacks import TrainingCallback
 from tqdm import tqdm
 
+from ..recurrent_patch import enable_memory_safe_recurrences, model_uses_recurrence
+from .long_context import iter_cached_sft_chunks
 from .sft_trainer import (
     SFTTrainingArgs,
     _install_qat_hooks,
@@ -328,7 +330,7 @@ def evaluate_dpo(
             for k, v in metrics.items():
                 all_metrics[k] += v * toks
 
-        mx.eval(all_losses, all_rewards, ntokens)
+        mx.eval(all_losses, all_rewards, ntokens, *all_metrics.values())
     all_losses = mx.distributed.all_sum(all_losses)
     all_rewards = mx.distributed.all_sum(all_rewards)
     ntokens = mx.distributed.all_sum(ntokens)
@@ -352,6 +354,8 @@ def train_dpo(
     training_callback: TrainingCallback = None,
     loss_type=None,
 ):
+    if model_uses_recurrence(model):
+        enable_memory_safe_recurrences(chunk_size=args.recurrence_chunk_size)
     mx.set_wired_limit(mx.device_info()["max_recommended_working_set_size"])
     world = mx.distributed.init()
     world_size = world.size()
@@ -475,14 +479,9 @@ def train_dpo(
             if curr_cache is not None:
                 reset_prompt_cache(curr_cache)
 
-            step_size = seq_step_size
-            for s in range(0, seq_length, step_size):
-                end = min(s + step_size, seq_length)
-                if 0 < (seq_length - end) < 2:
-                    end = seq_length
-
-                chunk = tokens[:, s:end]
-                chunk_mask = masks[:, s:end]
+            for start, end in iter_cached_sft_chunks(seq_length, seq_step_size):
+                chunk = tokens[:, start:end]
+                chunk_mask = masks[:, start:end]
 
                 chunk_scores = get_token_scores(
                     curr_model, chunk, chunk_mask, cache=curr_cache
@@ -567,14 +566,9 @@ def train_dpo(
             seq_length = tokens.shape[1]
             reset_prompt_cache(cache)
 
-            step_size = seq_step_size
-            for s in range(0, seq_length, step_size):
-                end = min(s + step_size, seq_length)
-                if 0 < (seq_length - end) < 2:
-                    end = seq_length
-
-                chunk = tokens[:, s:end]
-                chunk_mask = masks[:, s:end]
+            for start, end in iter_cached_sft_chunks(seq_length, seq_step_size):
+                chunk = tokens[:, start:end]
+                chunk_mask = masks[:, start:end]
 
                 def local_loss_fn(model):
                     local_sum = get_token_scores(
