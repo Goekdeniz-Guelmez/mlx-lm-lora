@@ -51,6 +51,7 @@ def enable_memory_safe_recurrences(chunk_size: int = 64) -> None:
 
     import mlx.core as mx
     from mlx_lm.models import gated_delta
+
     from .trainer.fast_vjp import enable_fast_vjps
 
     enable_fast_vjps()

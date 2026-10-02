@@ -121,9 +121,7 @@ def enable_fast_vjps() -> bool:
     # globals as well as the defining gated_delta module. Models loaded later
     # receive the wrapper through the normal import.
     for module in model_modules:
-        if (
-            getattr(module, "gated_delta_update", None) is original
-        ):
+        if getattr(module, "gated_delta_update", None) is original:
             module.gated_delta_update = patched
 
     return True
