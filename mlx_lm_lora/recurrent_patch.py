@@ -38,17 +38,23 @@ def model_uses_recurrence(model) -> bool:
 
 
 def enable_memory_safe_recurrences(chunk_size: int = 64) -> None:
-    """Install checkpointed training fallbacks for supported recurrent layers.
+    """Install fast recurrent VJPs and checkpointed training fallbacks.
 
     Covers scalar and vector-gated delta (Qwen3.5/Next and Kimi Linear), and
     recurrent GLA (Bailing MoE Linear).  Shared SSM models already use a
-    chunked fallback; their temporary block is reduced to the same size.
+    chunked fallback; their temporary block is reduced to the same size. When
+    MLX provides its fast gated-delta VJP, unmasked gated-delta calls use it;
+    masked and unsupported calls retain the checkpointed fallback.
     """
     if chunk_size < 1:
         raise ValueError("recurrent chunk size must be a positive integer")
 
     import mlx.core as mx
     from mlx_lm.models import gated_delta
+
+    from .trainer.fast_vjp import enable_fast_vjps
+
+    enable_fast_vjps()
 
     if not getattr(gated_delta, "_mlx_lm_lora_memory_safe", False):
         step = gated_delta._gated_delta_step_ops
