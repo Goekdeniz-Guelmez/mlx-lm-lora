@@ -27,7 +27,7 @@ With MLX-LM-LoRA you can, train Large Language Models locally on Apple Silicon u
 - **DoRA**: Weight-Decomposed Low-Rank Adaptation
 - **Full-precision**: Train all model parameters
 - **Quantized training**: QLoRA with 4-bit, 6-bit, or 8-bit quantization
-- **Quantization Aware Training (QAT)**: Apply quantization projection during training for SFT, DPO, and ORPO
+- **Quantization Aware Training (QAT)**: Apply fake quantization during training for SFT, DPO, ORPO, and DSLA
 
 **Training Algorithms:**
 
@@ -51,8 +51,8 @@ With MLX-LM-LoRA you can, train Large Language Models locally on Apple Silicon u
 
 **Quantization Aware Training (QAT):**
 
-- Enable QAT for SFT, DPO, and ORPO with minimal post-update quantization projection.
-- Supports 4-16 bit, group or per-tensor, and configurable start/interval.
+- Enable QAT for SFT, DPO, ORPO, and DSLA with fake quantization in forward passes.
+- Supports 2-16 bit, group or per-tensor scaling, and a configurable activation step.
 - Use QAT to simulate quantization effects during training for better quantized model performance.
 
 **Training Your Custom Preference Model:**
@@ -149,18 +149,20 @@ Command-line flags will override corresponding values in the config file.
 
 ### Quantization Aware Training (QAT)
 
-QAT projects trainable weights onto a quantized grid after each optimizer update, simulating quantization effects during training. This improves quantized model performance and robustness.
+QAT applies symmetric fake quantization to linear weights during forward passes,
+using a straight-through estimator for gradients. Optimizers retain full-precision
+weights while the model sees quantization noise during training.
 
-**Supported for:** SFT, DPO, ORPO
+**Supported for:** SFT, DPO, ORPO, DSLA
 
 **QAT Flags:**
 
 - `--qat-enable`    Enable QAT projection during training
 - `--qat-bits`     Bit-width for QAT (default: 8)
 - `--qat-group-size`  Group size for QAT (default: 64, 0=per-tensor)
-- `--qat-mode`     QAT mode (default: affine)
+- `--qat-mode`     Accepted argument (default: affine); the current hook always uses symmetric quantization
 - `--qat-start-step`  Start QAT after this optimizer step (default: 1)
-- `--qat-interval`   Apply QAT every N optimizer steps (default: 1)
+- `--qat-interval`   Accepted argument (default: 1), currently unused; fake quantization runs on every forward pass once activated
 
 **Example (SFT):**
 
@@ -287,7 +289,8 @@ mlx_lm_lora.train \
 Use the standard `prompt`, `chosen`, and `rejected` preference-pair format, with
 an optional `system` field. The rendered generation prompt must be an exact token
 prefix of both responses. DSLA masks prompt and padding targets from the output
-loss, while pooling every response hidden state, including the final token.
+loss. The default `answer_mean` pooling includes every response hidden state,
+including the final token.
 
 | Setting | Default | Purpose |
 |---|---|---|
@@ -310,6 +313,9 @@ DSLA supports compiled optimizer updates, LoRA/DoRA/full fine-tuning, gradient
 accumulation, gradient checkpointing, recurrent training safeguards and fast VJPs
 when available, QAT, distributed gradient averaging, callbacks, and adapter
 checkpoints. QAT is scoped to policy projections so the reference remains fixed.
+For DSLA QAT, `--qat-bits`, `--qat-group-size`, and `--qat-start-step` control the
+symmetric forward-pass quantizer; `--qat-mode` and `--qat-interval` currently have
+no effect.
 Cached `--efficient-long-context` sequence splitting is currently unsupported;
 use `--grad-checkpoint` and `--recurrence-chunk-size` to reduce memory.
 
@@ -759,16 +765,16 @@ python -m mlx_lm_lora.train_judge \
 
 # Quantization Aware Training (QAT)
 
-QAT projects trainable weights onto a quantized grid after each optimizer update, simulating quantization effects during training. This improves quantized model performance and robustness. QAT is supported for SFT, DPO, and ORPO.
+QAT applies symmetric fake quantization to linear weights during forward passes, with a straight-through estimator for gradients. Optimizers retain full-precision weights. QAT is supported for SFT, DPO, ORPO, and DSLA.
 
 **QAT Flags:**
 
 - `--qat-enable`    Enable QAT projection during training
 - `--qat-bits`     Bit-width for QAT (default: 8)
 - `--qat-group-size`  Group size for QAT (default: 64, 0=per-tensor)
-- `--qat-mode`     QAT mode (default: affine)
+- `--qat-mode`     Accepted argument (default: affine); the current hook always uses symmetric quantization
 - `--qat-start-step`  Start QAT after this optimizer step (default: 1)
-- `--qat-interval`   Apply QAT every N optimizer steps (default: 1)
+- `--qat-interval`   Accepted argument (default: 1), currently unused; fake quantization runs on every forward pass once activated
 
 See [QAT section above](#quantization-aware-training-qat) for usage examples.
 --load-in-4bits                  # 4-bit quantization
@@ -779,9 +785,9 @@ See [QAT section above](#quantization-aware-training-qat) for usage examples.
 --qat-enable                      # Enable QAT projection during training
 --qat-bits 4                      # Bit-width for QAT (default: 8)
 --qat-group-size 64               # Group size for QAT (default: 64, 0=per-tensor)
---qat-mode affine                 # QAT mode (default: affine)
+--qat-mode affine                 # Accepted; current quantizer is symmetric
 --qat-start-step 1                # Start QAT after this optimizer step (default: 1)
---qat-interval 1                  # Apply QAT every N optimizer steps (default: 1)
+--qat-interval 1                  # Accepted; current forward hook ignores this
 
 # Monitoring
 --steps-per-report 10            # Steps between loss reports
@@ -814,6 +820,18 @@ See [QAT section above](#quantization-aware-training-qat) for usage examples.
 ```shell
 --beta 0.1                        # Temperature parameter
 --reward-scaling 1.0              # Reward scaling factor
+```
+
+**DSLA:**
+
+```shell
+--dsla-loss orpo                  # dpo, orpo, cpo
+--latent-weight 0.1               # Weight of latent supervision
+--latent-margin 0.05              # Target similarity margin
+--latent-gamma 10                 # Soft-margin sharpness
+--latent-variant both             # similarity, direction, both
+--latent-pooling answer_mean      # answer_mean, last_token, last_k_mean, prompt_answer_mean
+--latent-layer final              # final, middle, late, or a zero-based block index
 ```
 
 **Group-Based Methods:**
@@ -1155,6 +1173,15 @@ mlx_lm_lora.train --model <model> --train-mode sft --data <data>
 
 # DPO
 mlx_lm_lora.train --model <model> --train-mode dpo --data <data> --beta 0.1
+
+# DSLA with DPO (loads a frozen reference)
+mlx_lm_lora.train --model <model> --train --train-mode dsla --dsla-loss dpo --data <data> --batch-size 2
+
+# DSLA with ORPO (reference-free)
+mlx_lm_lora.train --model <model> --train --train-mode dsla --dsla-loss orpo --data <data> --batch-size 2
+
+# DSLA with CPO (reference-free extension)
+mlx_lm_lora.train --model <model> --train --train-mode dsla --dsla-loss cpo --data <data> --batch-size 2
 
 # CPO
 mlx_lm_lora.train --model <model> --train-mode cpo --data <data> --beta 0.1
