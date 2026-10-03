@@ -33,6 +33,7 @@ With MLX-LM-LoRA you can, train Large Language Models locally on Apple Silicon u
 
 - **SFT**: Supervised Fine-Tuning
 - **DPO**: Direct Preference Optimization
+- **DSLA**: Directional and Similarity-aware Latent Alignment with a selectable DPO, ORPO, or CPO preference objective
 - **FTPO / Antidoom**: Final-token preference optimization for repairing repetition loops
 - **CPO**: Contrastive Preference Optimization
 - **ORPO**: Odds Ratio Preference Optimization
@@ -87,6 +88,7 @@ With MLX-LM-LoRA you can, train Large Language Models locally on Apple Silicon u
 - [Training Methods](#training-methods)
   - [Supervised Fine-Tuning (SFT)](#supervised-fine-tuning-sft)
   - [Direct Preference Optimization (DPO)](#direct-preference-optimization-dpo)
+  - [Directional and Similarity-aware Latent Alignment (DSLA)](#directional-and-similarity-aware-latent-alignment-dsla)
   - [Contrastive Preference Optimization (CPO)](#contrastive-preference-optimization-cpo)
   - [Odds Ratio Preference Optimization (ORPO)](#odds-ratio-preference-optimization-orpo)
   - [Group Relative Policy Optimization (GRPO)](#group-relative-policy-optimization-grpo)
@@ -262,6 +264,59 @@ mlx_lm_lora.train \
 {"prompt": "User question", "chosen": "Good response", "rejected": "Bad response"}
 {"system": "You are helpful", "prompt": "Question", "chosen": "Good", "rejected": "Bad"}
 ```
+
+---
+
+### Directional and Similarity-aware Latent Alignment (DSLA)
+
+DSLA is a standalone trainer that adds prompt-response similarity and batch-direction
+supervision to a preference objective. Select the objective with `--dsla-loss`:
+`dpo`, `orpo`, or `cpo`. DPO and ORPO follow the DSLA preprint; CPO and alternative
+DPO/CPO margin losses extend the same latent regularizer to those objectives.
+
+```shell
+mlx_lm_lora.train \
+  --model <model> \
+  --train --train-mode dsla --dsla-loss orpo \
+  --data <preference_dataset> \
+  --batch-size 2 \
+  --latent-weight 0.1 --latent-margin 0.05 --latent-gamma 10 \
+  --latent-variant both --latent-pooling answer_mean --latent-layer final
+```
+
+Use the standard `prompt`, `chosen`, and `rejected` preference-pair format, with
+an optional `system` field. The rendered generation prompt must be an exact token
+prefix of both responses. DSLA masks prompt and padding targets from the output
+loss, while pooling every response hidden state, including the final token.
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `--dsla-loss` | `dpo` | Preference objective: `dpo`, `orpo`, or `cpo` |
+| `--beta` | `0.1` | DPO/CPO margin scale or ORPO preference-term weight |
+| `--dpo-cpo-loss-type` | `sigmoid` | DPO/CPO loss: `sigmoid`, `hinge`, `ipo`, or `dpop` |
+| `--latent-weight` | `0.1` | Weight of the latent objective |
+| `--latent-margin` | `0.05` | Target prompt-response similarity margin |
+| `--latent-gamma` | `10` | Soft-margin sharpness |
+| `--latent-variant` | `both` | `similarity`, `direction`, or their average (`both`) |
+| `--latent-pooling` | `answer_mean` | `answer_mean`, `last_token`, `last_k_mean` (last 8 tokens), or `prompt_answer_mean` |
+| `--latent-layer` | `final` | Final normalized hidden states, `middle`, `late`, or a zero-based block index |
+
+DSLA-DPO uses a frozen reference model, loaded from `--reference-model-path` or
+the original model. DSLA-ORPO and DSLA-CPO are reference-free. Python callers use
+`DSLATrainingArgs(loss_type="orpo")`, `train_dsla`, and `evaluate_dsla` from
+`mlx_lm_lora.trainer.dsla_trainer`.
+
+DSLA supports compiled optimizer updates, LoRA/DoRA/full fine-tuning, gradient
+accumulation, gradient checkpointing, recurrent training safeguards and fast VJPs
+when available, QAT, distributed gradient averaging, callbacks, and adapter
+checkpoints. QAT is scoped to policy projections so the reference remains fixed.
+Cached `--efficient-long-context` sequence splitting is currently unsupported;
+use `--grad-checkpoint` and `--recurrence-chunk-size` to reduce memory.
+
+The direction is estimated independently for each worker's microbatch. Use at
+least two pairs per worker for agreement across pairs. Accumulating gradients
+from singleton microbatches does not combine their latent directions. Batch
+size one remains supported for similarity supervision.
 
 ---
 
@@ -1075,6 +1130,7 @@ Use multiple reward functions:
 |--------|------|-----------------|-------------|---------------------|-------------|
 | SFT | Supervised | ❌ | ❌ | ❌ | Simple, fast training |
 | DPO | Preference | ✅ | ❌ | ❌ | No reward model needed |
+| DSLA | Preference + latent | DPO only | ❌ | ❌ | Explicit similarity and direction supervision |
 | CPO | Preference | ✅ | ❌ | ❌ | Better for structured tasks |
 | ORPO | Preference | ❌ | ❌ | ❌ | Monolithic optimization |
 | GRPO | Policy | ❌ | ❌ | ✅ | Group-based learning |
