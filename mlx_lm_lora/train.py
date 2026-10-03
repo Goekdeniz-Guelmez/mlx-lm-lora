@@ -18,38 +18,34 @@ from mlx_lm.tuner.utils import (
 )
 from mlx_lm.utils import load, load_tokenizer
 
-from .trainer.cpo_trainer import CPOTrainingArgs, evaluate_cpo, train_cpo
+from .trainer.cpo_trainer import evaluate_cpo
 from .trainer.datasets import CacheDataset, load_dataset
-from .trainer.dpo_trainer import DPOTrainingArgs, evaluate_dpo, train_dpo
-from .trainer.dsla_trainer import DSLATrainingArgs, evaluate_dsla, train_dsla
-from .trainer.ftpo_trainer import FTPOTrainingArgs, evaluate_ftpo, train_ftpo
+from .trainer.dpo_trainer import evaluate_dpo
+from .trainer.dsla_trainer import evaluate_dsla
+from .trainer.ftpo_trainer import FTPOTrainingArgs, evaluate_ftpo
 from .trainer.grpo_reward_functions import (
     get_default_reward_functions,
     get_reward_function,
     list_available_reward_functions,
 )
-from .trainer.grpo_trainer import GRPOTrainingArgs, evaluate_grpo, train_grpo
-from .trainer.klpo_trainer import KLPOTrainingArgs, evaluate_klpo, train_klpo
-from .trainer.online_dpo_trainer import (
-    OnlineDPOTrainingArgs,
-    evaluate_online_dpo,
-    train_online_dpo,
-)
-from .trainer.orpo_trainer import ORPOTrainingArgs, evaluate_orpo, train_orpo
-from .trainer.ppo_trainer import PPOTrainingArgs, evaluate_ppo, train_ppo
-from .trainer.rlhf_reinforce_trainer import (
-    RLHFReinforceTrainingArgs,
-    evaluate_rlhf_reinforce,
-    train_rlhf_reinforce,
-)
+from .trainer.grpo_trainer import evaluate_grpo
+from .trainer.klpo_trainer import evaluate_klpo
+from .trainer.online_dpo_trainer import evaluate_online_dpo
+from .trainer.orpo_trainer import evaluate_orpo
+from .trainer.ppo_trainer import evaluate_ppo
+from .trainer.rlhf_reinforce_trainer import evaluate_rlhf_reinforce
 from .trainer.sft_trainer import (
     SFTTrainingArgs,
     TrainingCallback,
     evaluate_sft,
     get_sft_loss,
-    train_sft,
 )
-from .trainer.xpo_trainer import XPOTrainingArgs, evaluate_xpo, train_xpo
+from .trainer.xpo_trainer import evaluate_xpo
+from .trainer.registry import (
+    TRAINING_MODES,
+    build_training_args,
+    needs_reference_model,
+)
 from .utils import from_pretrained, save_pretrained_merged, save_to_lmstudio_merged
 from .visuals import (
     Colors,
@@ -270,20 +266,7 @@ def build_parser():
         "--train-mode",
         type=str,
         default=None,
-        choices=[
-            "sft",
-            "dpo",
-            "dsla",
-            "ftpo",
-            "cpo",
-            "orpo",
-            "grpo",
-            "klpo",
-            "online_dpo",
-            "xpo",
-            "rlhf_reinforce",
-            "ppo",
-        ],
+        choices=tuple(TRAINING_MODES),
         help="Training mode",
     )
     parser.add_argument(
@@ -601,20 +584,29 @@ def build_parser():
     return parser
 
 
-def _dsla_training_args(args, **overrides):
+def _dsla_training_args(args, adapter_file=None):
     """Map CLI/config settings to the standalone DSLA trainer."""
-    values = {
-        name: getattr(args, name)
-        for name in DSLATrainingArgs.__dataclass_fields__
-        if hasattr(args, name)
-    }
-    values.update(
-        loss_type=args.dsla_loss,
-        steps_per_save=args.save_every,
-        seq_step_size=512 if args.efficient_long_context else None,
-    )
-    values.update(overrides)
-    return DSLATrainingArgs(**values)
+    return build_training_args(TRAINING_MODES["dsla"], args, adapter_file)
+
+
+def _configured_reward_functions(args, announce=False):
+    if args.reward_functions_file:
+        load_reward_functions_from_file(args.reward_functions_file)
+
+    reward_funcs = get_default_reward_functions()
+    if args.reward_functions:
+        func_names = [name.strip() for name in args.reward_functions.split(",")]
+        try:
+            reward_funcs = [get_reward_function(name) for name in func_names]
+        except KeyError as error:
+            print_error(f"Error: {error!s}")
+            print_info(
+                f"Available reward functions: {list_available_reward_functions()}"
+            )
+            return None
+        if announce:
+            print_success(f"Using custom reward functions: {', '.join(func_names)}")
+    return reward_funcs
 
 
 def train_model(
@@ -655,339 +647,35 @@ def train_model(
     opt_class = {"adam": optim.Adam, "adamw": optim.AdamW, "muon": optim.Muon}[
         args.optimizer.lower()
     ]
-    opt = opt_class(learning_rate=lr, **optimizer_config)
+    optimizer = opt_class(learning_rate=lr, **optimizer_config)
 
+    mode = TRAINING_MODES.get(args.train_mode)
+    if mode is None:
+        raise ValueError(f"The train mode {args.train_mode} does not exist.")
     print_info(f"Training mode: {Colors.YELLOW}{args.train_mode.upper()}{Colors.RESET}")
 
-    # Training mode dispatch
-    if args.train_mode == "dsla":
-        train_dsla(
-            model=model,
-            optimizer=opt,
-            train_dataset=train_set,
-            val_dataset=valid_set,
-            args=_dsla_training_args(args, adapter_file=adapter_file),
-            ref_model=reference_model,
-            training_callback=training_callback,
-        )
+    context = {
+        "tokenizer": tokenizer,
+        "ref_model": reference_model,
+        "judge_model": judge_model,
+        "judge_tokenizer": judge_tokenizer,
+        "judge_config": args.judge_config,
+    }
+    if mode.uses_reward_functions:
+        context["reward_funcs"] = _configured_reward_functions(args, announce=True)
+        if context["reward_funcs"] is None:
+            return
 
-    elif args.train_mode == "orpo":
-        train_orpo(
-            model=model,
-            optimizer=opt,
-            train_dataset=train_set,
-            val_dataset=valid_set,
-            args=ORPOTrainingArgs(
-                batch_size=args.batch_size,
-                iters=args.iters,
-                val_batches=args.val_batches,
-                steps_per_report=args.steps_per_report,
-                steps_per_eval=args.steps_per_eval,
-                steps_per_save=args.save_every,
-                adapter_file=adapter_file,
-                max_seq_length=args.max_seq_length,
-                grad_checkpoint=args.grad_checkpoint,
-                recurrence_chunk_size=args.recurrence_chunk_size,
-                beta=args.beta,
-                seq_step_size=512 if args.efficient_long_context else None,
-                reward_scaling=args.reward_scaling,
-                gradient_accumulation_steps=args.gradient_accumulation_steps,
-                qat_enable=args.qat_enable,
-                qat_bits=args.qat_bits,
-                qat_group_size=args.qat_group_size,
-                qat_mode=args.qat_mode,
-                qat_start_step=args.qat_start_step,
-                qat_interval=args.qat_interval,
-            ),
-            training_callback=training_callback,
-        )
-
-    elif args.train_mode == "ftpo":
-        train_ftpo(
-            model=model,
-            ref_model=reference_model,
-            optimizer=opt,
-            train_dataset=train_set,
-            val_dataset=valid_set,
-            args=FTPOTrainingArgs(
-                batch_size=args.batch_size,
-                iters=args.iters,
-                val_batches=args.val_batches,
-                steps_per_report=args.steps_per_report,
-                steps_per_eval=args.steps_per_eval,
-                steps_per_save=args.save_every,
-                adapter_file=adapter_file,
-                max_seq_length=args.max_seq_length,
-                grad_checkpoint=args.grad_checkpoint,
-                recurrence_chunk_size=args.recurrence_chunk_size,
-                gradient_accumulation_steps=args.gradient_accumulation_steps,
-                lambda_mse_target=args.lambda_mse_target,
-                tau_mse_target=args.tau_mse_target,
-                lambda_mse=args.lambda_mse,
-                clip_epsilon_logits=args.clip_epsilon_logits,
-            ),
-            training_callback=training_callback,
-        )
-
-    elif args.train_mode == "dpo":
-        train_dpo(
-            model=model,
-            ref_model=reference_model,
-            optimizer=opt,
-            train_dataset=train_set,
-            val_dataset=valid_set,
-            args=DPOTrainingArgs(
-                batch_size=args.batch_size,
-                iters=args.iters,
-                val_batches=args.val_batches,
-                steps_per_report=args.steps_per_report,
-                steps_per_eval=args.steps_per_eval,
-                steps_per_save=args.save_every,
-                adapter_file=adapter_file,
-                max_seq_length=args.max_seq_length,
-                grad_checkpoint=args.grad_checkpoint,
-                recurrence_chunk_size=args.recurrence_chunk_size,
-                beta=args.beta,
-                loss_type=args.dpo_cpo_loss_type,
-                delta=args.delta,
-                reference_model_path=args.reference_model_path,
-                seq_step_size=512 if args.efficient_long_context else None,
-                gradient_accumulation_steps=args.gradient_accumulation_steps,
-                qat_enable=args.qat_enable,
-                qat_bits=args.qat_bits,
-                qat_group_size=args.qat_group_size,
-                qat_mode=args.qat_mode,
-                qat_start_step=args.qat_start_step,
-                qat_interval=args.qat_interval,
-            ),
-            training_callback=training_callback,
-        )
-
-    elif args.train_mode in ["online_dpo", "ppo", "rlhf_reinforce", "xpo"]:
-        train_func = {
-            "online_dpo": (train_online_dpo, OnlineDPOTrainingArgs),
-            "ppo": (train_ppo, PPOTrainingArgs),
-            "rlhf_reinforce": (train_rlhf_reinforce, RLHFReinforceTrainingArgs),
-            "xpo": (train_xpo, XPOTrainingArgs),
-        }[args.train_mode]
-
-        train_args_kwargs = {
-            "batch_size": args.batch_size,
-            "iters": args.iters,
-            "val_batches": args.val_batches,
-            "steps_per_report": args.steps_per_report,
-            "steps_per_eval": args.steps_per_eval,
-            "steps_per_save": args.save_every,
-            "adapter_file": adapter_file,
-            "max_seq_length": args.max_seq_length,
-            "grad_checkpoint": args.grad_checkpoint,
-            "recurrence_chunk_size": args.recurrence_chunk_size,
-            "beta": args.beta,
-            "reference_model_path": args.reference_model_path,
-            "gradient_accumulation_steps": args.gradient_accumulation_steps,
-            "micro_batch_size": args.micro_batch_size,
-            "judge": args.judge,
-            "max_completion_length": args.max_completion_length,
-        }
-
-        if args.train_mode in ["online_dpo", "xpo"]:
-            train_args_kwargs.update(
-                {"loss_type": args.dpo_cpo_loss_type, "delta": args.delta}
-            )
-        if args.train_mode == "ppo":
-            train_args_kwargs.update(
-                {
-                    "loss_type": args.dpo_cpo_loss_type,
-                    "delta": args.delta,
-                    "epsilon": args.epsilon,
-                    "temperature": args.temperature,
-                }
-            )
-        if args.train_mode == "xpo":
-            train_args_kwargs["alpha"] = args.alpha
-        if args.train_mode == "online_dpo":
-            train_args_kwargs["temperature"] = args.temperature
-
-        train_func[0](
-            model=model,
-            tokenizer=tokenizer,
-            ref_model=reference_model,
-            judge_model=judge_model,
-            judge_tokenizer=judge_tokenizer,
-            judge_config=args.judge_config,
-            optimizer=opt,
-            train_dataset=train_set,
-            val_dataset=valid_set,
-            args=train_func[1](**train_args_kwargs),
-            training_callback=training_callback,
-        )
-
-    elif args.train_mode == "cpo":
-        train_cpo(
-            model=model,
-            optimizer=opt,
-            train_dataset=train_set,
-            val_dataset=valid_set,
-            args=CPOTrainingArgs(
-                batch_size=args.batch_size,
-                iters=args.iters,
-                val_batches=args.val_batches,
-                steps_per_report=args.steps_per_report,
-                steps_per_eval=args.steps_per_eval,
-                steps_per_save=args.save_every,
-                adapter_file=adapter_file,
-                max_seq_length=args.max_seq_length,
-                grad_checkpoint=args.grad_checkpoint,
-                recurrence_chunk_size=args.recurrence_chunk_size,
-                beta=args.beta,
-                loss_type=args.dpo_cpo_loss_type,
-                delta=args.delta,
-                seq_step_size=512 if args.efficient_long_context else None,
-                reference_model_path=args.reference_model_path,
-                gradient_accumulation_steps=args.gradient_accumulation_steps,
-            ),
-            training_callback=training_callback,
-        )
-
-    elif args.train_mode == "klpo":
-        if args.reward_functions_file:
-            load_reward_functions_from_file(args.reward_functions_file)
-
-        reward_funcs = get_default_reward_functions()
-        if args.reward_functions:
-            func_names = [name.strip() for name in args.reward_functions.split(",")]
-            try:
-                reward_funcs = [get_reward_function(name) for name in func_names]
-                print_success(f"Using custom reward functions: {', '.join(func_names)}")
-            except KeyError as e:
-                print_error(f"Error: {e!s}")
-                print_info(
-                    f"Available reward functions: {list_available_reward_functions()}"
-                )
-                return
-
-        train_klpo(
-            model=model,
-            tokenizer=tokenizer,
-            optimizer=opt,
-            train_dataset=train_set,
-            val_dataset=valid_set,
-            reward_funcs=reward_funcs,
-            args=KLPOTrainingArgs(
-                batch_size=args.batch_size,
-                iters=args.iters,
-                val_batches=args.val_batches,
-                steps_per_report=args.steps_per_report,
-                steps_per_eval=args.steps_per_eval,
-                steps_per_save=args.save_every,
-                adapter_file=adapter_file,
-                max_seq_length=args.max_seq_length,
-                max_completion_length=args.max_completion_length,
-                grad_checkpoint=args.grad_checkpoint,
-                recurrence_chunk_size=args.recurrence_chunk_size,
-                beta=args.beta,
-                route=args.klpo_route,
-                kl_estimator=args.klpo_kl_estimator,
-                mc_samples=args.klpo_mc_samples,
-                top_k=args.klpo_top_k,
-                tail_floor=args.klpo_tail_floor,
-                temperature=args.temperature,
-                gradient_accumulation_steps=args.gradient_accumulation_steps,
-                reward_weights=(
-                    [float(x) for x in args.reward_weights.strip("[]").split(",")]
-                    if args.reward_weights
-                    else None
-                ),
-            ),
-            training_callback=training_callback,
-        )
-
-    elif args.train_mode == "grpo":
-        if args.reward_functions_file:
-            load_reward_functions_from_file(args.reward_functions_file)
-
-        reward_funcs = get_default_reward_functions()
-        if args.reward_functions:
-            func_names = [name.strip() for name in args.reward_functions.split(",")]
-            try:
-                reward_funcs = [get_reward_function(name) for name in func_names]
-                print_success(f"Using custom reward functions: {', '.join(func_names)}")
-            except KeyError as e:
-                print_error(f"Error: {e!s}")
-                print_info(
-                    f"Available reward functions: {list_available_reward_functions()}"
-                )
-                return
-
-        train_grpo(
-            model=model,
-            ref_model=reference_model,
-            tokenizer=tokenizer,
-            optimizer=opt,
-            train_dataset=train_set,
-            val_dataset=valid_set,
-            reward_funcs=reward_funcs,
-            args=GRPOTrainingArgs(
-                batch_size=args.batch_size,
-                iters=args.iters,
-                val_batches=args.val_batches,
-                steps_per_report=args.steps_per_report,
-                steps_per_eval=args.steps_per_eval,
-                steps_per_save=args.save_every,
-                adapter_file=adapter_file,
-                max_seq_length=args.max_seq_length,
-                max_completion_length=args.max_completion_length,
-                grad_checkpoint=args.grad_checkpoint,
-                recurrence_chunk_size=args.recurrence_chunk_size,
-                beta=args.beta,
-                group_size=args.group_size,
-                epsilon=args.epsilon,
-                epsilon_high=args.epsilon_high,
-                reference_model_path=args.reference_model_path,
-                temperature=args.temperature,
-                gradient_accumulation_steps=args.gradient_accumulation_steps,
-                reward_weights=(
-                    [float(x) for x in args.reward_weights.strip("[]").split(",")]
-                    if args.reward_weights
-                    else None
-                ),
-                importance_sampling_level=args.importance_sampling_level,
-                grpo_loss_type=args.grpo_loss_type,
-            ),
-            training_callback=training_callback,
-        )
-
-    elif args.train_mode == "sft":
-        train_sft(
-            model=model,
-            args=SFTTrainingArgs(
-                loss_type=args.sft_loss_type,
-                batch_size=args.batch_size,
-                iters=args.iters,
-                val_batches=args.val_batches,
-                steps_per_report=args.steps_per_report,
-                steps_per_eval=args.steps_per_eval,
-                steps_per_save=args.save_every,
-                adapter_file=adapter_file,
-                max_seq_length=args.max_seq_length,
-                grad_checkpoint=args.grad_checkpoint,
-                gradient_accumulation_steps=args.gradient_accumulation_steps,
-                seq_step_size=512 if args.efficient_long_context else None,
-                recurrence_chunk_size=args.recurrence_chunk_size,
-                qat_enable=args.qat_enable,
-                qat_bits=args.qat_bits,
-                qat_group_size=args.qat_group_size,
-                qat_mode=args.qat_mode,
-                qat_start_step=args.qat_start_step,
-                qat_interval=args.qat_interval,
-            ),
-            optimizer=opt,
-            train_dataset=train_set,
-            val_dataset=valid_set,
-            training_callback=training_callback,
-        )
-    else:
-        raise ValueError(f"The train mode {args.train_mode} does not exist.")
+    train_kwargs = {
+        "model": model,
+        "optimizer": optimizer,
+        "train_dataset": train_set,
+        "val_dataset": valid_set,
+        "args": build_training_args(mode, args, adapter_file),
+        "training_callback": training_callback,
+    }
+    train_kwargs.update({name: context[name] for name in mode.train_inputs})
+    mode.train(**train_kwargs)
 
 
 def evaluate_model(
@@ -1226,20 +914,9 @@ def evaluate_model(
             )
 
     elif args.train_mode == "klpo":
-        if args.reward_functions_file:
-            load_reward_functions_from_file(args.reward_functions_file)
-
-        reward_funcs = get_default_reward_functions()
-        if args.reward_functions:
-            func_names = [name.strip() for name in args.reward_functions.split(",")]
-            try:
-                reward_funcs = [get_reward_function(name) for name in func_names]
-            except KeyError as e:
-                print_error(f"Error: {e!s}")
-                print_info(
-                    f"Available reward functions: {list_available_reward_functions()}"
-                )
-                return
+        reward_funcs = _configured_reward_functions(args)
+        if reward_funcs is None:
+            return
 
         test_loss, test_ntokens, test_metrics = evaluate_klpo(
             model=model,
@@ -1277,20 +954,9 @@ def evaluate_model(
             )
 
     elif args.train_mode == "grpo":
-        if args.reward_functions_file:
-            load_reward_functions_from_file(args.reward_functions_file)
-
-        reward_funcs = get_default_reward_functions()
-        if args.reward_functions:
-            func_names = [name.strip() for name in args.reward_functions.split(",")]
-            try:
-                reward_funcs = [get_reward_function(name) for name in func_names]
-            except KeyError as e:
-                print_error(f"Error: {e!s}")
-                print_info(
-                    f"Available reward functions: {list_available_reward_functions()}"
-                )
-                return
+        reward_funcs = _configured_reward_functions(args)
+        if reward_funcs is None:
+            return
 
         from .trainer.grpo_trainer import iterate_batches, loss_fn
 
@@ -1364,6 +1030,10 @@ def build_lora_config(args):
 
 
 def run(args, training_callback: TrainingCallback = None):
+    mode = TRAINING_MODES.get(args.train_mode)
+    if mode is None:
+        raise ValueError(f"The train mode {args.train_mode} does not exist.")
+
     np.random.seed(args.seed)
 
     if args.wandb is not None:
@@ -1392,15 +1062,11 @@ def run(args, training_callback: TrainingCallback = None):
         quantized_load=quantization_config,
     )
     reference_model = (
-        load_reference_model(args)
-        if args.train_mode
-        in ["dpo", "ftpo", "grpo", "online_dpo", "ppo", "rlhf_reinforce", "xpo"]
-        or (args.train_mode == "dsla" and args.dsla_loss == "dpo")
-        else None
+        load_reference_model(args) if needs_reference_model(mode, args) else None
     )
     judge_model, judge_tokenizer = (
         load_judge_model(args, reference_model)
-        if args.train_mode in ["online_dpo", "ppo", "rlhf_reinforce", "xpo"]
+        if mode.requires_judge
         else (None, None)
     )
 
