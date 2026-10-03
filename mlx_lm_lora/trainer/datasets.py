@@ -188,6 +188,11 @@ class DPODataset:
         self._chosen_data = []
         self._rejected_data = []
         self._prompt_lengths = []
+        template_kwargs = (
+            {"enable_thinking": False}
+            if strict_prompt_prefix and getattr(tokenizer, "has_thinking", False)
+            else {}
+        )
 
         for d in data:
             messages = (
@@ -207,16 +212,22 @@ class DPODataset:
 
             self._chosen_data.append(
                 tokenizer.apply_chat_template(
-                    chosen_messages, add_generation_prompt=False
+                    chosen_messages,
+                    add_generation_prompt=False,
+                    **template_kwargs,
                 )
             )
             self._rejected_data.append(
                 tokenizer.apply_chat_template(
-                    rejected_messages, add_generation_prompt=False
+                    rejected_messages,
+                    add_generation_prompt=False,
+                    **template_kwargs,
                 )
             )
             prompt_tokens = tokenizer.apply_chat_template(
-                base_messages, add_generation_prompt=True
+                base_messages,
+                add_generation_prompt=True,
+                **template_kwargs,
             )
             if strict_prompt_prefix and (
                 self._chosen_data[-1][: len(prompt_tokens)] != prompt_tokens
