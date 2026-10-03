@@ -7,6 +7,13 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from transformers import PreTrainedTokenizer
 
 
+def _chat_template_prefix_kwargs(tokenizer, required: bool):
+    """Align thinking-capable chat templates with completed response prefixes."""
+    if required and getattr(tokenizer, "has_thinking", False):
+        return {"enable_thinking": False}
+    return {}
+
+
 class GRPODataset:
     def __init__(
         self,
@@ -188,10 +195,8 @@ class DPODataset:
         self._chosen_data = []
         self._rejected_data = []
         self._prompt_lengths = []
-        template_kwargs = (
-            {"enable_thinking": False}
-            if strict_prompt_prefix and getattr(tokenizer, "has_thinking", False)
-            else {}
+        template_kwargs = _chat_template_prefix_kwargs(
+            tokenizer, required=strict_prompt_prefix
         )
 
         for d in data:
@@ -307,6 +312,9 @@ class ORPODataset:
         self._chosen_prompt_lengths = []
         self._rejected_prompt_lengths = []
         self._scores = []
+        # ORPO uses this separately rendered prompt length to mask response
+        # tokens, so it needs the same token-prefix alignment as DSLA.
+        template_kwargs = _chat_template_prefix_kwargs(tokenizer, required=True)
 
         for d in data:
             prompt_content = d.get(prompt_key, d.get("question", ""))
@@ -355,10 +363,14 @@ class ORPODataset:
                     rejected_messages.extend(d[rejected_key])
 
                 chosen_text = tokenizer.apply_chat_template(
-                    chosen_messages, add_generation_prompt=False
+                    chosen_messages,
+                    add_generation_prompt=False,
+                    **template_kwargs,
                 )
                 rejected_text = tokenizer.apply_chat_template(
-                    rejected_messages, add_generation_prompt=False
+                    rejected_messages,
+                    add_generation_prompt=False,
+                    **template_kwargs,
                 )
                 prompt_messages = base_messages + [
                     {"role": "user", "content": prompt_content}
@@ -372,13 +384,15 @@ class ORPODataset:
                     [
                         {"role": "user", "content": prompt_content},
                         {"role": "assistant", "content": chosen_content},
-                    ]
+                    ],
+                    **template_kwargs,
                 )
                 rejected_text = tokenizer.apply_chat_template(
                     [
                         {"role": "user", "content": prompt_content},
                         {"role": "assistant", "content": rejected_content},
-                    ]
+                    ],
+                    **template_kwargs,
                 )
                 prompt_messages = [{"role": "user", "content": prompt_content}]
 
@@ -386,7 +400,9 @@ class ORPODataset:
             self._rejected_data.append(rejected_text)
             prompt_length = len(
                 tokenizer.apply_chat_template(
-                    prompt_messages, add_generation_prompt=True
+                    prompt_messages,
+                    add_generation_prompt=True,
+                    **template_kwargs,
                 )
             )
             self._chosen_prompt_lengths.append(prompt_length)
