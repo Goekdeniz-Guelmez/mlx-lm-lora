@@ -23,7 +23,7 @@ setup(
     license="Apache-2.0",
     install_requires=requirements,
     packages=["mlx_lm_lora", "mlx_lm_lora.trainer"],
-    python_requires=">=3.8",
+    python_requires=">=3.11",
     entry_points={
         "console_scripts": [
             "mlx_lm_lora.train = mlx_lm_lora.train:main",
