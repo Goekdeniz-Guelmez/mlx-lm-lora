@@ -121,6 +121,7 @@ TRAINING_CONFIG_KEYS = frozenset(
         "steps_per_eval",
         "resume_adapter_file",
         "adapter_path",
+        "merged_model_path",
         "save_every",
         "test",
         "test_batches",
@@ -518,7 +519,8 @@ def normalize_training_config(
     """Validate and normalize a training request for one tenant.
 
     The returned mapping can be passed directly to ``mlx_lm_lora.train.main``.
-    Output paths are always absolute paths under the selected tenant workspace.
+    Adapter and merged-model paths are absolute paths under the selected tenant
+    workspace, except when the caller explicitly selects LM Studio export.
     Model and dataset Hub identifiers remain unchanged. Dataset identifiers
     must refer to Hugging Face repositories; explicit local model and auxiliary
     inputs must be under the tenant workspace or optional shared read-only root.
@@ -739,11 +741,67 @@ def normalize_training_config(
                 else _resolve_inside(workspace, Path(adapter_path))
             )
 
-    if normalized.get("lm_studio_name"):
-        raise ValueError(
-            "lm_studio_name is not supported by MCP because it writes outside "
-            "the tenant workspace; use adapter_path instead"
+    if normalized.get("fuse") is False:
+        raise ValueError("MCP training jobs always save a merged full model")
+    normalized["fuse"] = True
+
+    lm_studio_name = normalized.get("lm_studio_name")
+    if lm_studio_name is not None:
+        lm_studio_name = validate_tenant_id(lm_studio_name)
+        if config.get("merged_model_path"):
+            raise ValueError(
+                "Choose either merged_model_path or lm_studio_name, not both"
+            )
+        if (
+            tenants.settings.allowed_tenants is not None
+            or tenants.settings.auth_tokens
+            or tenants.settings.auth_issuer_url
+        ):
+            raise ValueError(
+                "lm_studio_name is only available on a local single-tenant server"
+            )
+        lm_models_root = Path.home() / ".lmstudio" / "models"
+        if not lm_models_root.is_dir():
+            raise ValueError(f"LM Studio models root not found at {lm_models_root}")
+        model_output_path = _resolve_inside(
+            lm_models_root,
+            lm_models_root / "mlx_lm_lora" / lm_studio_name,
         )
+        if model_output_path.exists():
+            raise ValueError(
+                f"LM Studio model destination already exists: {model_output_path}"
+            )
+        normalized["lm_studio_name"] = lm_studio_name
+        normalized["merged_model_path"] = str(model_output_path)
+    else:
+        merged_model_path = normalized.get("merged_model_path")
+        if merged_model_path is None or merged_model_path == "":
+            normalized["merged_model_path"] = str(
+                workspace / "artifacts" / "merged" / job_id
+            )
+        elif not isinstance(merged_model_path, str):
+            raise ValueError("merged_model_path must be a path string")
+        elif merged_model_path.startswith("tenant://"):
+            normalized["merged_model_path"] = str(
+                tenants.tenant_path(tenant_id, merged_model_path)
+            )
+        else:
+            normalized["merged_model_path"] = str(
+                _resolve_inside(workspace, workspace / merged_model_path)
+                if not Path(merged_model_path).expanduser().is_absolute()
+                else _resolve_inside(workspace, Path(merged_model_path))
+            )
+        adapter_path_obj = Path(normalized["adapter_path"]).resolve(strict=False)
+        merged_model_path_obj = Path(normalized["merged_model_path"]).resolve(
+            strict=False
+        )
+        if (
+            adapter_path_obj == merged_model_path_obj
+            or adapter_path_obj in merged_model_path_obj.parents
+            or merged_model_path_obj in adapter_path_obj.parents
+        ):
+            raise ValueError("adapter_path and merged_model_path must be separate")
+
     normalized["train"] = True
     return normalized
 
@@ -758,6 +816,7 @@ class JobRecord:
     submitted_at: str
     run_dir: str
     adapter_path: str
+    merged_model_path: str | None = None
     started_at: str | None = None
     completed_at: str | None = None
     error: str | None = None
@@ -794,6 +853,7 @@ class TrainingJobManager:
             submitted_at=_utc_now(),
             run_dir=str(run_dir),
             adapter_path=str(normalized["adapter_path"]),
+            merged_model_path=str(normalized["merged_model_path"]),
         )
         _write_json(run_dir / "request.json", normalized)
         _write_json(run_dir / "status.json", record.as_dict())
@@ -1018,7 +1078,7 @@ def create_server(settings: ServerSettings | None = None) -> Any:
             "training_types": list(TRAINING_TYPES),
             "training_config_keys": sorted(
                 TRAINING_CONFIG_KEYS
-                - {"config", "lm_studio_name", "list_reward_functions"}
+                - {"config", "list_reward_functions"}
             ),
             "config_choices": {
                 key: list(choices) for key, choices in TRAINING_CONFIG_CHOICES.items()
@@ -1051,7 +1111,6 @@ def create_server(settings: ServerSettings | None = None) -> Any:
             "dataset_source": "Hugging Face dataset repository ID only.",
             "unsupported_options": {
                 "config": "Pass options directly in the config object.",
-                "lm_studio_name": "Use a tenant-scoped adapter_path.",
                 "list_reward_functions": "Use mlx_lm_lora_list_reward_functions.",
             },
         }
@@ -1095,6 +1154,8 @@ def create_server(settings: ServerSettings | None = None) -> Any:
             "notes": [
                 "The train flag is forced to true when a job is started.",
                 "The default adapter_path is isolated under the tenant artifact directory.",
+                "MCP jobs always save a merged full model under merged_model_path; "
+                "use lm_studio_name to save it into LM Studio instead.",
             ],
         }
 

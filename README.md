@@ -302,8 +302,17 @@ Every tenant is isolated below `MLX_LM_LORA_TENANT_ROOT` (default:
 <tenant-root>/<tenant-id>/
 ├── inputs/       # tenant-local auxiliary files, such as rewards or adapters
 ├── runs/         # request.json, status.json, and training.log per job
-└── artifacts/    # adapters and fused models
+└── artifacts/
+    ├── <job-id>/         # adapter checkpoint
+    └── merged/<job-id>/  # complete fused model, ready for MLX loading
 ```
+
+MCP training always writes a complete merged model to
+`artifacts/merged/<job-id>/`. The job status includes
+`merged_model_path`. To send a model directly to LM Studio instead, set
+`lm_studio_name` in the training config; it is saved under
+`~/.lmstudio/models/mlx_lm_lora/<name>/`. LM Studio export is available on a
+local single-tenant server and will not overwrite an existing model directory.
 
 Tenant IDs are restricted to 1–64 letters, numbers, `.`, `_`, and `-`. The
 `data` field must be a Hugging Face dataset repository ID such as
@@ -320,7 +329,7 @@ The server exposes these tools:
 - `mlx_lm_lora_list_reward_functions` — registered GRPO/KLPO rewards and defaults without loading models or custom files.
 - `mlx_lm_lora_validate_training_config` — validate a config without training.
 - `mlx_lm_lora_start_training` — queue a training job and return its `job_id`.
-- `mlx_lm_lora_get_training_status` — inspect a tenant's job status and artifact path.
+- `mlx_lm_lora_get_training_status` — inspect a tenant's job status, adapter path, and merged model path.
 - `mlx_lm_lora_list_training_runs` — list recent jobs for one tenant.
 - `mlx_lm_lora_get_training_log` — read a bounded log tail for one job.
 - `mlx_lm_lora_cancel_training` — cancel a job that has not started yet.
@@ -1089,6 +1098,7 @@ See [QAT section above](#quantization-aware-training-qat) for usage examples.
 
 # Checkpointing
 --adapter-path ./adapters        # Save/load path for adapters
+--merged-model-path ./merged    # Full fused model output (unique ./merged_models/<model>-<id> by default)
 --save-every 100                 # Save frequency
 --resume-adapter-file <path>     # Resume from checkpoint
 --fuse                           # Fuse and save trained model

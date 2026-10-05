@@ -48,5 +48,6 @@ sequence limit; lowering memory by truncating away targets defeats the task.
 Compare held-out loss/perplexity and task generations under the same data,
 seed, and token budget. For DFT, compare the same evaluation objective across
 runs rather than interpreting its weighted training loss as ordinary NLL.
-Use `fuse: false` when the requested output is an adapter rather than a merged
-model; the default fusion behavior is explained in [config.md](config.md).
+MCP always saves a complete merged model under `merged_model_path`; the local
+single-tenant option `lm_studio_name` saves it directly into LM Studio. See
+[config.md](config.md) for the output paths.

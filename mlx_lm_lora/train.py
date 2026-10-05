@@ -3,6 +3,7 @@ import importlib.util
 import math
 import re
 import sys
+import uuid
 from pathlib import Path
 
 import mlx.core as mx
@@ -103,6 +104,7 @@ CONFIG_DEFAULTS = {
     "steps_per_eval": 200,
     "resume_adapter_file": None,
     "adapter_path": "adapters",
+    "merged_model_path": None,
     "save_every": 100,
     "test": False,
     "test_batches": 500,
@@ -226,6 +228,12 @@ def build_parser():
         "--lm-studio-name",
         type=str,
         help="The name to use when sending the trained model to LM Studio.",
+    )
+    parser.add_argument(
+        "--merged-model-path",
+        type=str,
+        default=None,
+        help="Directory for the fused full model (defaults to a unique folder under ./merged_models).",
     )
 
     parser.add_argument(
@@ -1452,10 +1460,11 @@ def run(args, training_callback: TrainingCallback = None):
                 de_quantize=True,
             )
         else:
+            merged_model_path = args.merged_model_path
             save_pretrained_merged(
                 model=model,
                 tokenizer=tokenizer,
-                save_path=args.adapter_path,
+                save_path=merged_model_path,
                 de_quantize=(
                     False
                     if (
@@ -1468,7 +1477,7 @@ def run(args, training_callback: TrainingCallback = None):
                 ),
             )
             print_success(
-                f"Model fused and saved to {Colors.CYAN}{args.adapter_path}{Colors.RESET}"
+                f"Model fused and saved to {Colors.CYAN}{merged_model_path}{Colors.RESET}"
             )
 
 
@@ -1499,6 +1508,14 @@ def main(args=None):
         if getattr(args, k, None) is None:
             setattr(args, k, v)
 
+    if args.merged_model_path is None or args.merged_model_path == "":
+        model_name = re.sub(
+            r"[^A-Za-z0-9._-]+", "-", Path(args.model.rstrip("/")).name
+        ).strip("._-") or "model"
+        args.merged_model_path = str(
+            Path("merged_models") / f"{model_name}-{uuid.uuid4().hex[:12]}"
+        )
+
     print_section("Configuration Summary")
     print(f"{Colors.WHITE}Model:{Colors.RESET} {args.model}")
     print(f"{Colors.WHITE}Training Mode:{Colors.RESET} {args.train_mode.upper()}")
@@ -1506,6 +1523,13 @@ def main(args=None):
     print(f"{Colors.WHITE}Batch Size:{Colors.RESET} {args.batch_size}")
     print(f"{Colors.WHITE}Learning Rate:{Colors.RESET} {args.learning_rate}")
     print(f"{Colors.WHITE}Optimizer:{Colors.RESET} {args.optimizer}")
+    if args.lm_studio_name is not None:
+        print(
+            f"{Colors.WHITE}Merged Model:{Colors.RESET} "
+            f"LM Studio / {args.lm_studio_name}"
+        )
+    elif args.fuse and args.train:
+        print(f"{Colors.WHITE}Merged Model:{Colors.RESET} {args.merged_model_path}")
     if args.train_mode == "sft" and args.qat_enable:
         print(
             f"{Colors.WHITE}QAT:{Colors.RESET} enabled "

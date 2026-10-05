@@ -7,7 +7,9 @@ the server boundary.
 ## Select a tenant
 
 Use `configured_tenant_id` from capabilities for a pinned single-tenant
-server. An authenticated shared server can derive the tenant from its token;
+server. A local single-tenant server without a configured ID generates a
+process-scoped ID, returned as `default_tenant_id`, and reuses it across tool
+calls. An authenticated shared server derives the tenant from its token;
 otherwise pass the user's explicit `tenant_id` outside the `config` object.
 The server rejects mismatches with the pinned/authenticated tenant and enforces
 its allow-list. Do not silently switch tenants to make a request succeed.
@@ -37,7 +39,9 @@ The path is relative to the selected tenant workspace. Relative `./` or `../`
 inputs must also remain inside that workspace after resolution. Absolute
 model/auxiliary inputs must lie under the tenant workspace or optional shared
 input root. Outputs must stay inside the tenant workspace, never the shared
-root. Path validation is separate from checking whether an input file exists.
+root. The explicit `lm_studio_name` option is the only output exception and is
+available only on a local single-tenant server. Path validation is separate
+from checking whether an input file exists.
 
 The shared root allows local model/auxiliary inputs; it does not make local
 `data` paths valid. Datasets must remain Hub repository IDs. Read
@@ -46,7 +50,8 @@ The shared root allows local model/auxiliary inputs; it does not make local
 ## Track the job
 
 `mlx_lm_lora_start_training` returns a tenant-owned `job_id`, status, run
-location, and artifact path. Reuse that tenant and job ID for status/log calls.
+location, adapter path, and merged model path. Reuse that tenant and job ID for
+status/log calls.
 States are `queued`, `running`, `succeeded`, `failed`, and `cancelled`.
 
 `mlx_lm_lora_list_training_runs` lists recent jobs (default 20, maximum 100).

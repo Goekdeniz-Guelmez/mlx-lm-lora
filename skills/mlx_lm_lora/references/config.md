@@ -7,8 +7,9 @@ when versions differ. Algorithm-specific options belong in each mode guide.
 ## Request shape
 
 Training tools receive `config` and an optional `tenant_id` as separate tool
-arguments. `model` and `data` are required. MCP forces `train: true` and chooses
-an isolated artifact directory when `adapter_path` is omitted.
+arguments. `model` and `data` are required. MCP forces `train: true` and
+`fuse: true`. When `adapter_path` or `merged_model_path` is omitted, it
+chooses isolated per-job directories in the selected tenant workspace.
 
 ```json
 {
@@ -77,11 +78,14 @@ These are effective defaults for the MCP dictionary entrypoint.
 | `test_batches` | `500` | Test batches; `-1` uses all |
 | `fuse` | `true` | Merge and save the trained model after training/testing |
 | `resume_adapter_file` | `null` | Resume weights; does not restore optimizer/job state |
-| `adapter_path` | Per-job tenant artifact directory | Adapter and fused-model output |
+| `adapter_path` | Per-job tenant artifact directory | Adapter checkpoint output |
+| `merged_model_path` | Tenant artifacts/merged/<job-id> | Complete fused model output |
 
-For an adapter-only run, explicitly set `fuse: false`. For distributed trainer
-use, the batch must be divisible by the worker count; MCP queues one training
-job at a time on the host.
+MCP jobs always save a merged model; `fuse: false` is rejected. Set
+`lm_studio_name` to save directly to LM Studio instead of the tenant
+`merged_model_path`. That option is limited to local single-tenant servers.
+For distributed trainer use, the batch must be divisible by the worker count;
+MCP queues one training job at a time on the host.
 
 Omit unused optional fields. Use JSON booleans and numbers rather than string
 spellings, except fields with a specific string format such as reward names
@@ -90,8 +94,8 @@ in [quantization.md](quantization.md).
 
 ## Validation boundaries
 
-MCP accepts explicit option values, not a YAML `config` file. `lm_studio_name`
-is unsupported because it writes outside the tenant workspace. Use
+MCP accepts explicit option values, not a YAML `config` file. An explicit
+`lm_studio_name` writes to the local LM Studio models directory. Use
 `mlx_lm_lora_list_reward_functions` instead of putting
 `list_reward_functions: true` in a training config.
 
