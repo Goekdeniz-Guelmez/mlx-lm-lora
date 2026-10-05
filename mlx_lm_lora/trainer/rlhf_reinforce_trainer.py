@@ -1,12 +1,11 @@
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Optional
 
 import mlx.core as mx
 import mlx.nn as nn
 from mlx.nn.utils import average_gradients
-from mlx.utils import tree_flatten, tree_map
+from mlx.utils import tree_map
 from mlx_lm.tuner.callbacks import TrainingCallback
 from tqdm import tqdm
 
@@ -20,6 +19,7 @@ from .online_dpo_trainer import (
     iterate_online_dpo_batches,
 )
 from .sft_trainer import SFTTrainingArgs, grad_checkpoint
+from .training_utils import save_adapters
 
 
 @dataclass
@@ -533,18 +533,7 @@ def train_rlhf_reinforce(
 
         # Save adapter weights
         if it % args.steps_per_save == 0:
-            adapter_weights = dict(tree_flatten(model.trainable_parameters()))
-            mx.save_safetensors(str(args.adapter_file), adapter_weights)
-            checkpoint = (
-                Path(args.adapter_file).parent / f"{it:07d}_adapters.safetensors"
-            )
-            mx.save_safetensors(str(checkpoint), adapter_weights)
-            tqdm.write(
-                f"Iter {it}: Saved adapter weights to "
-                f"{args.adapter_file} and {checkpoint}."
-            )
+            save_adapters(model, args.adapter_file, it)
 
     # Save final weights
-    adapter_weights = dict(tree_flatten(model.trainable_parameters()))
-    mx.save_safetensors(str(args.adapter_file), adapter_weights)
-    tqdm.write(f"Saved final weights to {args.adapter_file}.")
+    save_adapters(model, args.adapter_file)

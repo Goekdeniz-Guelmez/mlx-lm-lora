@@ -11,41 +11,22 @@ import mlx.optimizers as optim
 import numpy as np
 import yaml
 from mlx_lm.tuner.callbacks import WandBCallback
-from mlx_lm.tuner.utils import (
-    build_schedule,
-    load_adapters,
-    print_trainable_parameters,
-)
+from mlx_lm.tuner.utils import build_schedule, load_adapters, print_trainable_parameters
 from mlx_lm.utils import load, load_tokenizer
 
-from .trainer.cpo_trainer import evaluate_cpo
 from .trainer.datasets import CacheDataset, load_dataset
-from .trainer.dpo_trainer import evaluate_dpo
-from .trainer.dsla_trainer import evaluate_dsla
-from .trainer.ftpo_trainer import FTPOTrainingArgs, evaluate_ftpo
 from .trainer.grpo_reward_functions import (
     get_default_reward_functions,
     get_reward_function,
     list_available_reward_functions,
 )
-from .trainer.grpo_trainer import evaluate_grpo
-from .trainer.klpo_trainer import evaluate_klpo
-from .trainer.online_dpo_trainer import evaluate_online_dpo
-from .trainer.orpo_trainer import evaluate_orpo
-from .trainer.ppo_trainer import evaluate_ppo
-from .trainer.rlhf_reinforce_trainer import evaluate_rlhf_reinforce
-from .trainer.sft_trainer import (
-    SFTTrainingArgs,
-    TrainingCallback,
-    evaluate_sft,
-    get_sft_loss,
-)
-from .trainer.xpo_trainer import evaluate_xpo
 from .trainer.registry import (
     TRAINING_MODES,
+    build_evaluation_kwargs,
     build_training_args,
     needs_reference_model,
 )
+from .trainer.sft_trainer import SFTTrainingArgs, TrainingCallback
 from .utils import from_pretrained, save_pretrained_merged, save_to_lmstudio_merged
 from .visuals import (
     Colors,
@@ -678,6 +659,44 @@ def train_model(
     mode.train(**train_kwargs)
 
 
+def _print_evaluation_results(name, mode, results):
+    if len(mode.eval_result_fields) == 1:
+        results = (results,)
+    values = {
+        field: value
+        for field, value in zip(mode.eval_result_fields, results)
+        if field is not None
+    }
+    loss = values["loss"]
+    label = mode.eval_label or name.upper()
+    rewards = values.get("rewards")
+    if mode.eval_simple_loss:
+        print(f"{Colors.BOLD}{label} Test loss:{Colors.RESET} {loss:.3f}")
+        if rewards is not None:
+            print(f"Chosen reward: {rewards[0]:.3f}, rejected reward: {rewards[1]:.3f}")
+    else:
+        lines = [
+            f"{Colors.BOLD}Test Results:{Colors.RESET}",
+            f"  {Colors.YELLOW}Loss:{Colors.RESET} {loss:.3f}",
+            f"  {Colors.YELLOW}Perplexity:{Colors.RESET} {math.exp(loss):.3f}",
+        ]
+        if rewards is not None:
+            lines.append(
+                f"  {Colors.YELLOW}Rewards:{Colors.RESET} {rewards[0]:.3f}, {rewards[1]:.3f}"
+            )
+        if "tokens" in values:
+            lines.append(f"  {Colors.YELLOW}Tokens:{Colors.RESET} {values['tokens']}")
+        print("\n".join(lines))
+        if "metrics" in values:
+            print(f"\n{Colors.CYAN}{label} Test Metrics:{Colors.RESET}")
+
+    for metric_name, metric_value in values.get("metrics", {}).items():
+        metric_label = f"{metric_name}:"
+        if not (mode.eval_simple_loss and rewards is not None):
+            metric_label = f"{Colors.WHITE}{metric_label}{Colors.RESET}"
+        print(f"  {metric_label} {float(metric_value):.3f}")
+
+
 def evaluate_model(
     args,
     model: nn.Module,
@@ -687,332 +706,30 @@ def evaluate_model(
     judge_tokenizer=None,
     test_set: CacheDataset = None,
 ):
-    """Evaluate model on test set based on training mode"""
-
+    """Evaluate and report test results using the registered algorithm."""
     print_section(f"Evaluating {args.train_mode.upper()} Model")
+    mode = TRAINING_MODES.get(args.train_mode)
+    if mode is None:
+        return
 
-    if args.train_mode == "dsla":
-        test_loss, test_rewards, _, test_metrics = evaluate_dsla(
-            model=model,
-            dataset=test_set,
-            args=_dsla_training_args(args),
-            ref_model=reference_model,
-            num_batches=args.test_batches,
-        )
-        print(f"{Colors.BOLD}DSLA Test loss:{Colors.RESET} {test_loss:.3f}")
-        print(
-            f"Chosen reward: {test_rewards[0]:.3f}, rejected reward: {test_rewards[1]:.3f}"
-        )
-        for metric_name, metric_value in test_metrics.items():
-            print(f"  {metric_name}: {float(metric_value):.3f}")
-
-    elif args.train_mode == "orpo":
-        test_loss, test_rewards, _, test_metrics = evaluate_orpo(
-            model=model,
-            dataset=test_set,
-            batch_size=args.batch_size,
-            num_batches=args.test_batches,
-            max_seq_length=args.max_seq_length,
-            beta=args.beta,
-        )
-        test_ppl = math.exp(test_loss)
-        print(
-            f"{Colors.BOLD}Test Results:{Colors.RESET}\n"
-            f"  {Colors.YELLOW}Loss:{Colors.RESET} {test_loss:.3f}\n"
-            f"  {Colors.YELLOW}Perplexity:{Colors.RESET} {test_ppl:.3f}\n"
-            f"  {Colors.YELLOW}Rewards:{Colors.RESET} {test_rewards[0]:.3f}, {test_rewards[1]:.3f}"
-        )
-        print(f"\n{Colors.CYAN}ORPO Test Metrics:{Colors.RESET}")
-        for metric_name, metric_value in test_metrics.items():
-            print(
-                f"  {Colors.WHITE}{metric_name}:{Colors.RESET} {float(metric_value):.3f}"
-            )
-
-    elif args.train_mode == "ftpo":
-        test_loss, test_metrics = evaluate_ftpo(
-            model=model,
-            ref_model=reference_model,
-            dataset=test_set,
-            batch_size=args.batch_size,
-            num_batches=args.test_batches,
-            max_seq_length=args.max_seq_length,
-            args=FTPOTrainingArgs(
-                lambda_mse_target=args.lambda_mse_target,
-                tau_mse_target=args.tau_mse_target,
-                lambda_mse=args.lambda_mse,
-                clip_epsilon_logits=args.clip_epsilon_logits,
-            ),
-        )
-        print(f"{Colors.BOLD}FTPO Test loss:{Colors.RESET} {test_loss:.3f}")
-        for metric_name, metric_value in test_metrics.items():
-            print(
-                f"  {Colors.WHITE}{metric_name}:{Colors.RESET} {float(metric_value):.3f}"
-            )
-
-    elif args.train_mode == "dpo":
-        test_loss, _, _, test_metrics = evaluate_dpo(
-            model=model,
-            ref_model=reference_model,
-            dataset=test_set,
-            batch_size=args.batch_size,
-            num_batches=args.test_batches,
-            max_seq_length=args.max_seq_length,
-            beta=args.beta,
-            delta=args.delta,
-            loss_type=args.dpo_cpo_loss_type,
-        )
-        test_ppl = math.exp(test_loss)
-        print(
-            f"{Colors.BOLD}Test Results:{Colors.RESET}\n"
-            f"  {Colors.YELLOW}Loss:{Colors.RESET} {test_loss:.3f}\n"
-            f"  {Colors.YELLOW}Perplexity:{Colors.RESET} {test_ppl:.3f}"
-        )
-        print(f"\n{Colors.CYAN}DPO Test Metrics:{Colors.RESET}")
-        for metric_name, metric_value in test_metrics.items():
-            print(
-                f"  {Colors.WHITE}{metric_name}:{Colors.RESET} {float(metric_value):.3f}"
-            )
-
-    elif args.train_mode == "cpo":
-        test_loss, _, _, test_metrics = evaluate_cpo(
-            model=model,
-            dataset=test_set,
-            batch_size=args.batch_size,
-            num_batches=args.test_batches,
-            max_seq_length=args.max_seq_length,
-            beta=args.beta,
-            delta=args.delta,
-            loss_type=args.dpo_cpo_loss_type,
-        )
-        test_ppl = math.exp(test_loss)
-        print(
-            f"{Colors.BOLD}Test Results:{Colors.RESET}\n"
-            f"  {Colors.YELLOW}Loss:{Colors.RESET} {test_loss:.3f}\n"
-            f"  {Colors.YELLOW}Perplexity:{Colors.RESET} {test_ppl:.3f}"
-        )
-        print(f"\n{Colors.CYAN}CPO Test Metrics:{Colors.RESET}")
-        for metric_name, metric_value in test_metrics.items():
-            print(
-                f"  {Colors.WHITE}{metric_name}:{Colors.RESET} {float(metric_value):.3f}"
-            )
-
-    elif args.train_mode == "online_dpo":
-        test_loss, _, _, test_metrics = evaluate_online_dpo(
-            model=model,
-            ref_model=reference_model,
-            dataset=test_set,
-            batch_size=args.batch_size,
-            num_batches=args.test_batches,
-            beta=args.beta,
-            delta=args.delta,
-            max_seq_length=args.max_seq_length,
-            loss_type=args.dpo_cpo_loss_type,
-            judge_config=args.judge_config,
-            judge_model=judge_model,
-            judge_tokenizer=judge_tokenizer,
-            tokenizer=tokenizer,
-            max_tokens=args.max_completion_length,
-            temperature=args.temperature,
-        )
-        test_ppl = math.exp(test_loss)
-        print(
-            f"{Colors.BOLD}Test Results:{Colors.RESET}\n"
-            f"  {Colors.YELLOW}Loss:{Colors.RESET} {test_loss:.3f}\n"
-            f"  {Colors.YELLOW}Perplexity:{Colors.RESET} {test_ppl:.3f}"
-        )
-        print(f"\n{Colors.CYAN}Online DPO Test Metrics:{Colors.RESET}")
-        for metric_name, metric_value in test_metrics.items():
-            print(
-                f"  {Colors.WHITE}{metric_name}:{Colors.RESET} {float(metric_value):.3f}"
-            )
-
-    elif args.train_mode == "ppo":
-        test_loss, _, _, test_metrics = evaluate_ppo(
-            model=model,
-            ref_model=reference_model,
-            dataset=test_set,
-            batch_size=args.batch_size,
-            num_batches=args.test_batches,
-            beta=args.beta,
-            epsilon=args.epsilon,
-            max_seq_length=args.max_seq_length,
-            loss_type=args.dpo_cpo_loss_type,
-            judge_config=args.judge_config,
-            judge_model=judge_model,
-            judge_tokenizer=judge_tokenizer,
-            tokenizer=tokenizer,
-            max_tokens=args.max_completion_length,
-            temperature=args.temperature,
-        )
-        test_ppl = math.exp(test_loss)
-        print(
-            f"{Colors.BOLD}Test Results:{Colors.RESET}\n"
-            f"  {Colors.YELLOW}Loss:{Colors.RESET} {test_loss:.3f}\n"
-            f"  {Colors.YELLOW}Perplexity:{Colors.RESET} {test_ppl:.3f}"
-        )
-        print(f"\n{Colors.CYAN}PPO Test Metrics:{Colors.RESET}")
-        for metric_name, metric_value in test_metrics.items():
-            print(
-                f"  {Colors.WHITE}{metric_name}:{Colors.RESET} {float(metric_value):.3f}"
-            )
-
-    elif args.train_mode == "rlhf_reinforce":
-        test_loss, _, test_metrics = evaluate_rlhf_reinforce(
-            model=model,
-            ref_model=reference_model,
-            dataset=test_set,
-            batch_size=args.batch_size,
-            num_batches=args.test_batches,
-            beta=args.beta,
-            max_seq_length=args.max_seq_length,
-            judge_config=args.judge_config,
-            judge_model=judge_model,
-            judge_tokenizer=judge_tokenizer,
-            tokenizer=tokenizer,
-            max_tokens=args.max_completion_length,
-        )
-        test_ppl = math.exp(test_loss)
-        print(
-            f"{Colors.BOLD}Test Results:{Colors.RESET}\n"
-            f"  {Colors.YELLOW}Loss:{Colors.RESET} {test_loss:.3f}\n"
-            f"  {Colors.YELLOW}Perplexity:{Colors.RESET} {test_ppl:.3f}"
-        )
-        print(f"\n{Colors.CYAN}RLHF Reinforce Test Metrics:{Colors.RESET}")
-        for metric_name, metric_value in test_metrics.items():
-            print(
-                f"  {Colors.WHITE}{metric_name}:{Colors.RESET} {float(metric_value):.3f}"
-            )
-
-    elif args.train_mode == "xpo":
-        test_loss, _, _, test_metrics = evaluate_xpo(
-            model=model,
-            ref_model=reference_model,
-            dataset=test_set,
-            batch_size=args.batch_size,
-            num_batches=args.test_batches,
-            beta=args.beta,
-            delta=args.delta,
-            max_seq_length=args.max_seq_length,
-            loss_type=args.dpo_cpo_loss_type,
-            judge_config=args.judge_config,
-            alpha=args.alpha,
-            judge_model=judge_model,
-            judge_tokenizer=judge_tokenizer,
-            tokenizer=tokenizer,
-            max_tokens=args.max_completion_length,
-        )
-        test_ppl = math.exp(test_loss)
-        print(
-            f"{Colors.BOLD}Test Results:{Colors.RESET}\n"
-            f"  {Colors.YELLOW}Loss:{Colors.RESET} {test_loss:.3f}\n"
-            f"  {Colors.YELLOW}Perplexity:{Colors.RESET} {test_ppl:.3f}"
-        )
-        print(f"\n{Colors.CYAN}XPO Test Metrics:{Colors.RESET}")
-        for metric_name, metric_value in test_metrics.items():
-            print(
-                f"  {Colors.WHITE}{metric_name}:{Colors.RESET} {float(metric_value):.3f}"
-            )
-
-    elif args.train_mode == "klpo":
-        reward_funcs = _configured_reward_functions(args)
-        if reward_funcs is None:
+    context = {
+        "tokenizer": tokenizer,
+        "ref_model": reference_model,
+        "judge_model": judge_model,
+        "judge_tokenizer": judge_tokenizer,
+        "judge_config": getattr(args, "judge_config", None),
+    }
+    if mode.uses_reward_functions:
+        context["reward_funcs"] = _configured_reward_functions(args)
+        if context["reward_funcs"] is None:
             return
 
-        test_loss, test_ntokens, test_metrics = evaluate_klpo(
-            model=model,
-            dataset=test_set,
-            tokenizer=tokenizer,
-            batch_size=args.batch_size,
-            num_batches=args.test_batches,
-            beta=args.beta,
-            route=args.klpo_route,
-            kl_estimator=args.klpo_kl_estimator,
-            mc_samples=args.klpo_mc_samples,
-            top_k=args.klpo_top_k,
-            tail_floor=args.klpo_tail_floor,
-            max_seq_length=args.max_seq_length,
-            max_tokens=args.max_completion_length,
-            temperature=args.temperature,
-            reward_funcs=reward_funcs,
-            reward_weights=(
-                [float(x) for x in args.reward_weights.strip("[]").split(",")]
-                if args.reward_weights
-                else None
-            ),
-        )
-        test_ppl = math.exp(test_loss)
-        print(
-            f"{Colors.BOLD}Test Results:{Colors.RESET}\n"
-            f"  {Colors.YELLOW}Loss:{Colors.RESET} {test_loss:.3f}\n"
-            f"  {Colors.YELLOW}Perplexity:{Colors.RESET} {test_ppl:.3f}\n"
-            f"  {Colors.YELLOW}Tokens:{Colors.RESET} {test_ntokens}"
-        )
-        print(f"\n{Colors.CYAN}KLPO Test Metrics:{Colors.RESET}")
-        for metric_name, metric_value in test_metrics.items():
-            print(
-                f"  {Colors.WHITE}{metric_name}:{Colors.RESET} {float(metric_value):.3f}"
-            )
-
-    elif args.train_mode == "grpo":
-        reward_funcs = _configured_reward_functions(args)
-        if reward_funcs is None:
-            return
-
-        from .trainer.grpo_trainer import iterate_batches, loss_fn
-
-        test_loss, test_ntokens, test_metrics = evaluate_grpo(
-            model=model,
-            dataset=test_set,
-            loss_fn=loss_fn,
-            ref_model=reference_model,
-            reward_funcs=reward_funcs,
-            tokenizer=tokenizer,
-            group_size=args.group_size,
-            batch_size=args.batch_size,
-            num_batches=args.test_batches,
-            max_seq_length=args.max_seq_length,
-            max_tokens=args.max_completion_length,
-            beta=args.beta,
-            epsilon=args.epsilon,
-            epsilon_high=args.epsilon_high,
-            iterate_batches=iterate_batches,
-            grpo_loss_type=args.grpo_loss_type,
-            end_answer_token=getattr(args, "end_answer_token", None),
-            temperature=args.temperature,
-            top_p=getattr(args, "top_p", 1.0),
-            top_k=getattr(args, "top_k", -1),
-            min_p=getattr(args, "min_p", 0.0),
-        )
-        test_ppl = math.exp(test_loss)
-        print(
-            f"{Colors.BOLD}Test Results:{Colors.RESET}\n"
-            f"  {Colors.YELLOW}Loss:{Colors.RESET} {test_loss:.3f}\n"
-            f"  {Colors.YELLOW}Perplexity:{Colors.RESET} {test_ppl:.3f}\n"
-            f"  {Colors.YELLOW}Tokens:{Colors.RESET} {test_ntokens}"
-        )
-        print(f"\n{Colors.CYAN}GRPO Test Metrics:{Colors.RESET}")
-        for metric_name, metric_value in test_metrics.items():
-            print(
-                f"  {Colors.WHITE}{metric_name}:{Colors.RESET} {float(metric_value):.3f}"
-            )
-
-    elif args.train_mode == "sft":
-        test_loss, test_ntokens = evaluate_sft(
-            model=model,
-            dataset=test_set,
-            batch_size=args.batch_size,
-            num_batches=args.test_batches,
-            max_seq_length=args.max_seq_length,
-            loss=get_sft_loss(args.sft_loss_type),
-            recurrence_chunk_size=args.recurrence_chunk_size,
-        )
-        test_ppl = math.exp(test_loss)
-        print(
-            f"{Colors.BOLD}Test Results:{Colors.RESET}\n"
-            f"  {Colors.YELLOW}Loss:{Colors.RESET} {test_loss:.3f}\n"
-            f"  {Colors.YELLOW}Perplexity:{Colors.RESET} {test_ppl:.3f}\n"
-            f"  {Colors.YELLOW}Tokens:{Colors.RESET} {test_ntokens}"
-        )
+    eval_kwargs = build_evaluation_kwargs(mode, args)
+    eval_kwargs.update({name: context[name] for name in mode.train_inputs})
+    results = mode.evaluate(
+        model=model, dataset=test_set, num_batches=args.test_batches, **eval_kwargs
+    )
+    _print_evaluation_results(args.train_mode, mode, results)
 
 
 def build_lora_config(args):
@@ -1065,9 +782,7 @@ def run(args, training_callback: TrainingCallback = None):
         load_reference_model(args) if needs_reference_model(mode, args) else None
     )
     judge_model, judge_tokenizer = (
-        load_judge_model(args, reference_model)
-        if mode.requires_judge
-        else (None, None)
+        load_judge_model(args, reference_model) if mode.requires_judge else (None, None)
     )
 
     print_info("Loading datasets")

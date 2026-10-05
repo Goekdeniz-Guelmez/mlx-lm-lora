@@ -1,20 +1,28 @@
-"""Training mode registration and shared CLI-to-trainer configuration."""
+"""Algorithm registration and shared CLI-to-trainer configuration."""
 
 from dataclasses import dataclass, fields
 from typing import Any, Callable, Dict, Optional, Tuple, Type
 
-from .cpo_trainer import CPOTrainingArgs, train_cpo
-from .dpo_trainer import DPOTrainingArgs, train_dpo
-from .dsla_trainer import DSLATrainingArgs, train_dsla
-from .ftpo_trainer import FTPOTrainingArgs, train_ftpo
-from .grpo_trainer import GRPOTrainingArgs, train_grpo
-from .klpo_trainer import KLPOTrainingArgs, train_klpo
-from .online_dpo_trainer import OnlineDPOTrainingArgs, train_online_dpo
-from .orpo_trainer import ORPOTrainingArgs, train_orpo
-from .ppo_trainer import PPOTrainingArgs, train_ppo
-from .rlhf_reinforce_trainer import RLHFReinforceTrainingArgs, train_rlhf_reinforce
-from .sft_trainer import SFTTrainingArgs, train_sft
-from .xpo_trainer import XPOTrainingArgs, train_xpo
+from .cpo_trainer import CPOTrainingArgs, evaluate_cpo, train_cpo
+from .dpo_trainer import DPOTrainingArgs, evaluate_dpo, train_dpo
+from .dsla_trainer import DSLATrainingArgs, evaluate_dsla, train_dsla
+from .ftpo_trainer import FTPOTrainingArgs, evaluate_ftpo, train_ftpo
+from .grpo_trainer import GRPOTrainingArgs, evaluate_grpo, train_grpo
+from .klpo_trainer import KLPOTrainingArgs, evaluate_klpo, train_klpo
+from .online_dpo_trainer import (
+    OnlineDPOTrainingArgs,
+    evaluate_online_dpo,
+    train_online_dpo,
+)
+from .orpo_trainer import ORPOTrainingArgs, evaluate_orpo, train_orpo
+from .ppo_trainer import PPOTrainingArgs, evaluate_ppo, train_ppo
+from .rlhf_reinforce_trainer import (
+    RLHFReinforceTrainingArgs,
+    evaluate_rlhf_reinforce,
+    train_rlhf_reinforce,
+)
+from .sft_trainer import SFTTrainingArgs, evaluate_sft, get_sft_loss, train_sft
+from .xpo_trainer import XPOTrainingArgs, evaluate_xpo, train_xpo
 
 _QAT_OPTIONS = (
     "qat_enable",
@@ -26,11 +34,18 @@ _QAT_OPTIONS = (
 )
 _NO_LONG_CONTEXT_WITH_QAT = ("seq_step_size",) + _QAT_OPTIONS
 _ONLINE_INHERITED_OPTIONS = _NO_LONG_CONTEXT_WITH_QAT + ("judge_system",)
+_EVALUATION_BATCH_OPTIONS = ("batch_size", "max_seq_length")
+_PREFERENCE_EVALUATION_OPTIONS = _EVALUATION_BATCH_OPTIONS + (
+    "beta",
+    "delta",
+    "loss_type",
+)
+_ROLLOUT_EVALUATION_OPTIONS = _EVALUATION_BATCH_OPTIONS + ("beta", "max_tokens")
 
 
 @dataclass(frozen=True)
 class TrainingMode:
-    """Connect a public mode name to its trainer and required inputs."""
+    """Connect a public mode to its trainers, CLI options, and result fields."""
 
     args_type: Type
     train: Callable
@@ -43,15 +58,27 @@ class TrainingMode:
     requires_reference_model: bool = False
     conditional_reference_model: Optional[Tuple[str, Any]] = None
     requires_judge: bool = False
+    evaluate: Optional[Callable] = None
+    eval_options: Tuple[str, ...] = _EVALUATION_BATCH_OPTIONS
+    eval_defaults: Optional[Dict[str, Any]] = None
+    # None omits args; () uses all training options; other tuples select fields.
+    eval_arg_fields: Optional[Tuple[str, ...]] = None
+    # A single result field denotes a scalar evaluator return value.
+    eval_result_fields: Tuple[Optional[str], ...] = ("loss", None, None, "metrics")
+    eval_label: Optional[str] = None
+    eval_simple_loss: bool = False
 
 
-# This table drives parser choices, trainer dispatch, and model requirements.
+# This table drives parser choices, training/evaluation, and model requirements.
 TRAINING_MODES = {
     "sft": TrainingMode(
         SFTTrainingArgs,
         train_sft,
         arg_aliases={"loss_type": "sft_loss_type"},
         passes_seq_step_size=True,
+        evaluate=evaluate_sft,
+        eval_options=_EVALUATION_BATCH_OPTIONS + ("loss", "recurrence_chunk_size"),
+        eval_result_fields=("loss",),
     ),
     "dpo": TrainingMode(
         DPOTrainingArgs,
@@ -60,6 +87,8 @@ TRAINING_MODES = {
         arg_aliases={"loss_type": "dpo_cpo_loss_type"},
         passes_seq_step_size=True,
         requires_reference_model=True,
+        evaluate=evaluate_dpo,
+        eval_options=_PREFERENCE_EVALUATION_OPTIONS,
     ),
     "dsla": TrainingMode(
         DSLATrainingArgs,
@@ -68,6 +97,11 @@ TRAINING_MODES = {
         arg_aliases={"loss_type": "dsla_loss"},
         passes_seq_step_size=True,
         conditional_reference_model=("dsla_loss", "dpo"),
+        evaluate=evaluate_dsla,
+        eval_options=(),
+        eval_arg_fields=(),
+        eval_result_fields=("loss", "rewards", None, "metrics"),
+        eval_simple_loss=True,
     ),
     "ftpo": TrainingMode(
         FTPOTrainingArgs,
@@ -75,6 +109,15 @@ TRAINING_MODES = {
         train_inputs=("ref_model",),
         excluded_args=_NO_LONG_CONTEXT_WITH_QAT,
         requires_reference_model=True,
+        evaluate=evaluate_ftpo,
+        eval_arg_fields=(
+            "lambda_mse_target",
+            "tau_mse_target",
+            "lambda_mse",
+            "clip_epsilon_logits",
+        ),
+        eval_result_fields=("loss", "metrics"),
+        eval_simple_loss=True,
     ),
     "cpo": TrainingMode(
         CPOTrainingArgs,
@@ -82,8 +125,17 @@ TRAINING_MODES = {
         arg_aliases={"loss_type": "dpo_cpo_loss_type"},
         excluded_args=_QAT_OPTIONS,
         passes_seq_step_size=True,
+        evaluate=evaluate_cpo,
+        eval_options=_PREFERENCE_EVALUATION_OPTIONS,
     ),
-    "orpo": TrainingMode(ORPOTrainingArgs, train_orpo, passes_seq_step_size=True),
+    "orpo": TrainingMode(
+        ORPOTrainingArgs,
+        train_orpo,
+        passes_seq_step_size=True,
+        evaluate=evaluate_orpo,
+        eval_options=_EVALUATION_BATCH_OPTIONS + ("beta",),
+        eval_result_fields=("loss", "rewards", None, "metrics"),
+    ),
     "grpo": TrainingMode(
         GRPOTrainingArgs,
         train_grpo,
@@ -91,6 +143,26 @@ TRAINING_MODES = {
         excluded_args=_NO_LONG_CONTEXT_WITH_QAT + ("top_p", "top_k", "min_p"),
         uses_reward_functions=True,
         requires_reference_model=True,
+        evaluate=evaluate_grpo,
+        eval_options=_ROLLOUT_EVALUATION_OPTIONS
+        + (
+            "group_size",
+            "epsilon",
+            "epsilon_high",
+            "grpo_loss_type",
+            "end_answer_token",
+            "temperature",
+            "top_p",
+            "top_k",
+            "min_p",
+        ),
+        eval_defaults={
+            "end_answer_token": None,
+            "top_p": 1.0,
+            "top_k": -1,
+            "min_p": 0.0,
+        },
+        eval_result_fields=("loss", "tokens", "metrics"),
     ),
     "klpo": TrainingMode(
         KLPOTrainingArgs,
@@ -105,6 +177,18 @@ TRAINING_MODES = {
         },
         excluded_args=_NO_LONG_CONTEXT_WITH_QAT,
         uses_reward_functions=True,
+        evaluate=evaluate_klpo,
+        eval_options=_ROLLOUT_EVALUATION_OPTIONS
+        + (
+            "route",
+            "kl_estimator",
+            "mc_samples",
+            "top_k",
+            "tail_floor",
+            "temperature",
+            "reward_weights",
+        ),
+        eval_result_fields=("loss", "tokens", "metrics"),
     ),
     "online_dpo": TrainingMode(
         OnlineDPOTrainingArgs,
@@ -120,6 +204,9 @@ TRAINING_MODES = {
         excluded_args=_ONLINE_INHERITED_OPTIONS,
         requires_reference_model=True,
         requires_judge=True,
+        evaluate=evaluate_online_dpo,
+        eval_options=_PREFERENCE_EVALUATION_OPTIONS + ("max_tokens", "temperature"),
+        eval_label="Online DPO",
     ),
     "xpo": TrainingMode(
         XPOTrainingArgs,
@@ -135,6 +222,8 @@ TRAINING_MODES = {
         excluded_args=_ONLINE_INHERITED_OPTIONS + ("temperature",),
         requires_reference_model=True,
         requires_judge=True,
+        evaluate=evaluate_xpo,
+        eval_options=_PREFERENCE_EVALUATION_OPTIONS + ("max_tokens", "alpha"),
     ),
     "rlhf_reinforce": TrainingMode(
         RLHFReinforceTrainingArgs,
@@ -149,6 +238,9 @@ TRAINING_MODES = {
         excluded_args=_ONLINE_INHERITED_OPTIONS,
         requires_reference_model=True,
         requires_judge=True,
+        evaluate=evaluate_rlhf_reinforce,
+        eval_options=_ROLLOUT_EVALUATION_OPTIONS,
+        eval_label="RLHF Reinforce",
     ),
     "ppo": TrainingMode(
         PPOTrainingArgs,
@@ -164,6 +256,9 @@ TRAINING_MODES = {
         excluded_args=_ONLINE_INHERITED_OPTIONS,
         requires_reference_model=True,
         requires_judge=True,
+        evaluate=evaluate_ppo,
+        eval_options=_ROLLOUT_EVALUATION_OPTIONS
+        + ("epsilon", "loss_type", "temperature"),
     ),
 }
 
@@ -180,9 +275,7 @@ def build_training_args(
     if not mode.passes_seq_step_size:
         mode_fields.discard("seq_step_size")
     values = {
-        name: getattr(cli_args, name)
-        for name in mode_fields
-        if hasattr(cli_args, name)
+        name: getattr(cli_args, name) for name in mode_fields if hasattr(cli_args, name)
     }
 
     if "steps_per_save" in mode_fields:
@@ -199,11 +292,50 @@ def build_training_args(
 
     raw_weights = getattr(cli_args, "reward_weights", None)
     if "reward_weights" in mode_fields and raw_weights is not None:
-        if isinstance(raw_weights, str):
-            raw_weights = raw_weights.strip("[]").split(",")
-        values["reward_weights"] = [float(weight) for weight in raw_weights]
+        values["reward_weights"] = _reward_weights(raw_weights)
 
     return mode.args_type(**values)
+
+
+def _reward_weights(raw_weights):
+    if raw_weights is None:
+        return None
+    if isinstance(raw_weights, str):
+        raw_weights = raw_weights.strip("[]").split(",")
+    return [float(weight) for weight in raw_weights]
+
+
+def build_evaluation_kwargs(mode: TrainingMode, cli_args: Any) -> Dict[str, Any]:
+    """Map evaluation options without overriding omitted evaluator defaults."""
+    aliases = {"max_tokens": "max_completion_length", "loss": "sft_loss_type"}
+    aliases.update(mode.arg_aliases or {})
+    defaults = mode.eval_defaults or {}
+    values = {}
+    for name in mode.eval_options:
+        source = aliases.get(name, name)
+        values[name] = (
+            getattr(cli_args, source, defaults[name])
+            if name in defaults
+            else getattr(cli_args, source)
+        )
+
+    if "loss" in values:
+        values["loss"] = get_sft_loss(values["loss"])
+    if "reward_weights" in values:
+        values["reward_weights"] = (
+            _reward_weights(values["reward_weights"])
+            if values["reward_weights"]
+            else None
+        )
+    if mode.eval_arg_fields is not None:
+        values["args"] = (
+            mode.args_type(
+                **{name: getattr(cli_args, name) for name in mode.eval_arg_fields}
+            )
+            if mode.eval_arg_fields
+            else build_training_args(mode, cli_args)
+        )
+    return values
 
 
 def needs_reference_model(mode: TrainingMode, cli_args: Any) -> bool:

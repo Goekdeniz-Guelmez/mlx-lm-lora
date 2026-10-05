@@ -43,6 +43,26 @@ If your PR adds or changes behavior, add tests that cover:
 
 Keep tests deterministic and avoid relying on network access, external services, or machine-specific state.
 
+## Adding a Training Algorithm
+
+Implement the algorithm's argument dataclass, training function, and evaluator in
+`mlx_lm_lora/trainer/`. Register them together in `trainer/registry.py` using
+`TrainingMode`: declare additional model/tokenizer inputs, CLI field aliases,
+evaluation options, and returned result fields. The CLI uses this entry for mode
+choices, model requirements, training, and evaluation; no dispatch branches in
+`train.py` are needed. Omitted options retain the trainer or evaluator defaults,
+so preserve intentional differences between algorithms.
+
+Add algorithm-specific CLI defaults/options and dataset handling where needed.
+Cover numerical behavior in trainer tests and option forwarding in
+`tests/test_registry.py`, especially sampling, long-context, and memory settings.
+
+Reuse `preference_utils.py` for DPO/CPO scoring and cached chunks,
+`rollout_utils.py` for reward evaluation and bounded rollout scoring, and
+`training_utils.save_adapters` for checkpoint saves. Keep each algorithm's loss,
+normalization, and execution strategy explicit; preserve the evaluation boundary
+after every backward chunk or scoring microbatch so activations can be released.
+
 ## Pull Request Checklist
 
 - [ ] Tests pass locally.

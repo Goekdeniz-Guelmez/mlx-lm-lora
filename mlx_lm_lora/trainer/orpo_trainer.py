@@ -1,26 +1,27 @@
 import time
 from dataclasses import dataclass, field
 from functools import partial
-from pathlib import Path
 from typing import Any, Optional
 
 import mlx.core as mx
 import mlx.nn as nn
 import numpy as np
 from mlx.nn.utils import average_gradients
-from mlx.utils import tree_flatten, tree_map
+from mlx.utils import tree_map
 from mlx_lm.models.cache import make_prompt_cache
 from mlx_lm.tuner.callbacks import TrainingCallback
 from tqdm import tqdm
 
 from ..recurrent_patch import enable_memory_safe_recurrences, model_uses_recurrence
 from .long_context import iter_cached_sft_chunks
+from .preference_utils import evaluate_preference_batches
 from .sft_trainer import (
     SFTTrainingArgs,
     _install_qat_hooks,
     grad_checkpoint,
     reset_prompt_cache,
 )
+from .training_utils import save_adapters
 
 
 @dataclass
@@ -220,58 +221,12 @@ def evaluate_orpo(
     model, dataset, batch_size, num_batches, beta: float, max_seq_length=2048
 ):
     model.eval()
-    all_losses = 0
-    all_rewards = mx.zeros((2,))
-    all_metrics = None
-    ntokens = 0
-
-    index_iterator = iter(range(num_batches)) if num_batches != -1 else iter(int, 1)
-    for _, batch in zip(
-        index_iterator,
-        iterate_orpo_batches(
-            dataset=dataset,
-            batch_size=batch_size,
-            max_seq_length=max_seq_length,
-        ),
-    ):
-        chosen, rejected, chosen_masks, rejected_masks, preference_scores = batch
-
-        chosen_logps, chosen_logits_mean = get_logps(model, chosen, chosen_masks)
-        rejected_logps, rejected_logits_mean = get_logps(
-            model, rejected, rejected_masks
-        )
-
-        lvalue, reward, toks, metrics = orpo_loss(
-            chosen_logps,
-            chosen_logits_mean,
-            rejected_logps,
-            rejected_logits_mean,
-            chosen_masks=chosen_masks,
-            rejected_masks=rejected_masks,
-            preference_scores=preference_scores,
-            beta=beta,
-        )
-        all_losses += lvalue * toks
-        all_rewards += reward * toks
-        ntokens += toks
-
-        if all_metrics is None:
-            all_metrics = {k: v * toks for k, v in metrics.items()}
-        else:
-            for k, v in metrics.items():
-                all_metrics[k] += v * toks
-
-        mx.eval(all_losses, all_rewards, ntokens, *all_metrics.values())
-    all_losses = mx.distributed.all_sum(all_losses)
-    all_rewards = mx.distributed.all_sum(all_rewards)
-    ntokens = mx.distributed.all_sum(ntokens)
-    all_metrics = {k: mx.distributed.all_sum(v) for k, v in all_metrics.items()}
-
-    avg_metrics = {k: (v / ntokens).item() for k, v in all_metrics.items()}
-    avg_rewards = (all_rewards / ntokens).tolist()
-    avg_loss = (all_losses / ntokens).item()
-
-    return avg_loss, avg_rewards, ntokens, avg_metrics
+    return evaluate_preference_batches(
+        iterate_orpo_batches(dataset, batch_size, max_seq_length),
+        num_batches,
+        partial(orpo_loss_from_model, model, beta=beta),
+        weight_rewards=True,
+    )
 
 
 def train_orpo(
@@ -668,17 +623,6 @@ def train_orpo(
             start = time.perf_counter()
 
         if it % args.steps_per_save == 0:
-            adapter_weights = dict(tree_flatten(model.trainable_parameters()))
-            mx.save_safetensors(str(args.adapter_file), adapter_weights)
-            checkpoint = (
-                Path(args.adapter_file).parent / f"{it:07d}_adapters.safetensors"
-            )
-            mx.save_safetensors(str(checkpoint), adapter_weights)
-            tqdm.write(
-                f"Iter {it}: Saved adapter weights to "
-                f"{args.adapter_file} and {checkpoint}."
-            )
+            save_adapters(model, args.adapter_file, it)
 
-    adapter_weights = dict(tree_flatten(model.trainable_parameters()))
-    mx.save_safetensors(str(args.adapter_file), adapter_weights)
-    tqdm.write(f"Saved final weights to {args.adapter_file}.")
+    save_adapters(model, args.adapter_file)

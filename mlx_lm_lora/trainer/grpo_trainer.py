@@ -1,6 +1,5 @@
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Iterator, List, Optional, Sequence, Tuple, Union
 
 import mlx.core as mx
@@ -26,7 +25,9 @@ from .online_rl_utils import (
     build_shared_prompt_cache,
     fork_prompt_cache,
 )
+from .rollout_utils import evaluate_rewards, rollout_microbatches
 from .sft_trainer import SFTTrainingArgs, average_gradients, grad_checkpoint
+from .training_utils import save_adapters
 
 
 @dataclass
@@ -301,52 +302,14 @@ def calculate_rewards_and_advantages(
     graph of scalar updates, repeated searches, and synchronizations for them.
     None/NaN denotes an inapplicable reward; infinities are errors.
     """
-    if not reward_funcs or not all_completion_texts:
-        raise ValueError("At least one reward function and completion are required.")
-    if reward_weights is not None and len(reward_weights) != len(reward_funcs):
-        raise ValueError(
-            "Number of reward weights must match number of reward functions"
-        )
-    weights = np.asarray(
-        reward_weights if reward_weights is not None else [1.0] * len(reward_funcs),
-        dtype=np.float64,
+    rewards, metrics = evaluate_rewards(
+        reward_funcs,
+        expanded_prompts,
+        all_completion_texts,
+        expanded_answers,
+        expanded_types,
+        reward_weights,
     )
-    if not np.isfinite(weights).all():
-        raise ValueError("Reward weights must be finite.")
-    columns, metrics = [], {}
-    for reward_func in reward_funcs:
-        raw = reward_func(
-            prompts=expanded_prompts,
-            completions=all_completion_texts,
-            answer=expanded_answers,
-            types=expanded_types,
-        )
-        if raw is None:
-            raw = [None] * len(all_completion_texts)
-        if len(raw) != len(all_completion_texts):
-            raise ValueError(
-                f"{reward_func.__name__} must return one reward per completion."
-            )
-        values = np.asarray([np.nan if r is None else float(r) for r in raw])
-        if np.isinf(values).any():
-            raise ValueError(f"{reward_func.__name__} returned an infinite reward.")
-        valid = values[~np.isnan(values)]
-        name = reward_func.__name__
-        metrics[f"{name}_mean"] = float(valid.mean()) if valid.size else 0.0
-        metrics[f"{name}_std"] = float(valid.std()) if valid.size else 0.0
-        metrics[f"{name}_coverage"] = valid.size / values.size
-        columns.append(values)
-    rewards = np.stack(columns, axis=1)
-    missing = np.isnan(rewards).all(axis=1)
-    if missing.any():
-        idx = int(np.flatnonzero(missing)[0])
-        raise RuntimeError(
-            "All reward functions returned None or NaN for completion "
-            f"{idx}. At least one valid reward is required."
-        )
-    rewards = (np.nan_to_num(rewards, nan=0.0) * weights).sum(axis=1)
-    if not np.isfinite(rewards).all():
-        raise ValueError("Weighted rewards must be finite.")
     groups = {idx: [] for idx in unique_prompt_indices}
     if len(batch_indices) != len(rewards):
         raise ValueError("batch_indices must match the number of rewards.")
@@ -750,70 +713,16 @@ def _grpo_microbatches(compute, model, chunk_size, *, with_grad=False, **kwargs)
     Weight each microbatch by the loss's actual denominator so chunking does
     not change the objective for unequal completion lengths or empty rows.
     """
-    completions = kwargs.pop("completions")
-    texts = kwargs.pop("completion_texts")
-    indices = kwargs.pop("batch_indices")
-    advantages = kwargs.pop("advantages")
-    sample_count = len(completions)
-    token_count = sum(c.size for c in completions)
-    loss_type = kwargs["grpo_loss_type"]
-    total_loss, total_tokens, all_metrics, accumulated = 0, 0, None, None
-    for start in range(0, sample_count, chunk_size):
-        stop = min(start + chunk_size, sample_count)
-        row_weight = (stop - start) / sample_count
-        token_weight = sum(c.size for c in completions[start:stop]) / max(
-            token_count, 1
-        )
-        weight = token_weight if loss_type == "bnpo" else row_weight
-        result = compute(
-            model,
-            completions=completions[start:stop],
-            completion_texts=texts[start:stop],
-            batch_indices=indices[start:stop],
-            advantages=advantages[start:stop],
-            **kwargs,
-        )
-        if with_grad:
-            (loss, tokens, metrics), grads = result
-            grads = tree_map(lambda g: g * weight, grads)
-            accumulated = (
-                grads
-                if accumulated is None
-                else tree_map(lambda a, b: a + b, accumulated, grads)
-            )
-            del grads
-        else:
-            loss, tokens, metrics = result
-        del result
-        total_loss = total_loss + loss * weight
-        total_tokens = total_tokens + tokens
-        weighted_metrics = {
-            key: value
-            * (
-                token_weight
-                if key.startswith("clip_ratio") or key == "kl_clip_ratio"
-                else row_weight
-            )
-            for key, value in metrics.items()
-        }
-        if all_metrics is None:
-            all_metrics = weighted_metrics
-            all_metrics["max_generated_tokens"] = metrics["max_generated_tokens"]
-            all_metrics["min_generated_tokens"] = metrics["min_generated_tokens"]
-        else:
-            for key, value in weighted_metrics.items():
-                if key == "max_generated_tokens":
-                    all_metrics[key] = mx.maximum(all_metrics[key], metrics[key])
-                elif key == "min_generated_tokens":
-                    all_metrics[key] = mx.minimum(all_metrics[key], metrics[key])
-                else:
-                    all_metrics[key] = all_metrics[key] + value
-        del loss, tokens, metrics, weighted_metrics
-        # A real evaluation boundary releases each microbatch's activations
-        # before building the next graph. Cache clearing cannot achieve this.
-        mx.eval(total_loss, total_tokens, all_metrics, accumulated)
-    result = total_loss, total_tokens, all_metrics
-    return (result, accumulated) if with_grad else result
+    return rollout_microbatches(
+        compute,
+        model,
+        chunk_size,
+        sample_keys=("completions", "completion_texts", "batch_indices", "advantages"),
+        with_grad=with_grad,
+        token_weighted_loss=kwargs["grpo_loss_type"] == "bnpo",
+        token_weighted_metrics=True,
+        **kwargs,
+    )
 
 
 def _grpo_value_and_grad(loss_value_and_grad, model, chunk_size, **kwargs):
@@ -1152,18 +1061,6 @@ def train_grpo(
             start = time.perf_counter()
 
         if it % args.steps_per_save == 0:
-            adapter_weights = dict(tree_flatten(model.trainable_parameters()))
-            mx.save_safetensors(str(args.adapter_file), adapter_weights)
-            checkpoint = (
-                Path(args.adapter_file).parent / f"{it:07d}_adapters.safetensors"
-            )
-            mx.save_safetensors(str(checkpoint), adapter_weights)
-            tqdm.write(
-                f"\n"
-                f"Iter {it}: Saved adapter weights to "
-                f"{args.adapter_file} and {checkpoint}."
-            )
+            save_adapters(model, args.adapter_file, it)
 
-    adapter_weights = dict(tree_flatten(model.trainable_parameters()))
-    mx.save_safetensors(str(args.adapter_file), adapter_weights)
-    tqdm.write(f"Saved final weights to {args.adapter_file}.")
+    save_adapters(model, args.adapter_file)
