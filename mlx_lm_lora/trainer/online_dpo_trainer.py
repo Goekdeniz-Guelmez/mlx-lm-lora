@@ -18,6 +18,11 @@ from transformers import PreTrainedTokenizer
 from ..recurrent_patch import enable_memory_safe_recurrences, model_uses_recurrence
 from .grpo_trainer import _select_token_logps
 from .judge import HumanPairwiseJudge, LLMPairwiseJudge
+from .online_rl_utils import (
+    bucket_sequence_length,
+    build_shared_prompt_cache,
+    fork_prompt_cache,
+)
 from .sft_trainer import SFTTrainingArgs, grad_checkpoint
 
 
@@ -87,7 +92,7 @@ def _pad_online_sequences(
         for value in sequences
     ]
     lengths = [int(value.size) for value in arrays]
-    width = max(2, max(lengths))
+    width = max(2, bucket_sequence_length(max(lengths)))
     tokens = mx.stack(
         [mx.pad(value.astype(mx.int32), (0, width - value.size)) for value in arrays]
     )
@@ -102,41 +107,33 @@ def _online_token_logps(model, tokens, target_mask):
 
 
 def _score_preference_batch(model, ref_model, chosen, rejected, loss_type):
-    """Score a preference microbatch in two bounded batched model calls."""
-    chosen_tokens, chosen_mask = _pad_online_sequences(chosen)
-    rejected_tokens, rejected_mask = _pad_online_sequences(rejected)
-
-    chosen_policy = compute_score(
-        _online_token_logps(model, chosen_tokens, chosen_mask), chosen_mask, loss_type
+    """Score both sides of a preference batch with one forward per model."""
+    pair_count = len(chosen)
+    tokens, target_mask = _pad_online_sequences([*chosen, *rejected])
+    policy_scores = compute_score(
+        _online_token_logps(model, tokens, target_mask), target_mask, loss_type
     )
-    rejected_policy = compute_score(
-        _online_token_logps(model, rejected_tokens, rejected_mask),
-        rejected_mask,
-        loss_type,
-    )
+    chosen_policy = policy_scores[:pair_count]
+    rejected_policy = policy_scores[pair_count:]
     if ref_model is None:
         chosen_reference = mx.stop_gradient(chosen_policy)
         rejected_reference = mx.stop_gradient(rejected_policy)
     else:
-        chosen_reference = mx.stop_gradient(
+        reference_scores = mx.stop_gradient(
             compute_score(
-                _online_token_logps(ref_model, chosen_tokens, chosen_mask),
-                chosen_mask,
+                _online_token_logps(ref_model, tokens, target_mask),
+                target_mask,
                 loss_type,
             )
         )
-        rejected_reference = mx.stop_gradient(
-            compute_score(
-                _online_token_logps(ref_model, rejected_tokens, rejected_mask),
-                rejected_mask,
-                loss_type,
-            )
-        )
+        chosen_reference = reference_scores[:pair_count]
+        rejected_reference = reference_scores[pair_count:]
 
     # The loss only needs target counts. Avoid retaining dense mask arrays in
     # the preference graph, and use the same target convention as scoring.
-    chosen_counts = chosen_mask.sum(axis=-1).astype(mx.float32)
-    rejected_counts = rejected_mask.sum(axis=-1).astype(mx.float32)
+    target_counts = target_mask.sum(axis=-1).astype(mx.float32)
+    chosen_counts = target_counts[:pair_count]
+    rejected_counts = target_counts[pair_count:]
     return (
         chosen_policy,
         rejected_policy,
@@ -228,29 +225,51 @@ def generate_for_online_dpo(
     )
     stop_tokens = [[token] for token in tokenizer.eos_token_ids]
     generation_batch_size = max(1, batch_size or len(prompts))
-    prompt_texts = [
-        tokenizer.decode(prompt) if isinstance(prompt, list) else prompt
-        for prompt in prompts
-    ]
+    prompt_sequences = []
+    for prompt in prompts:
+        if isinstance(prompt, str):
+            prompt_sequences.append(tokenizer.encode(prompt))
+        elif isinstance(prompt, mx.array):
+            prompt_sequences.append(prompt.tolist())
+        else:
+            prompt_sequences.append(list(prompt))
     completions = []
     was_training = model.training
     model.eval()
     try:
-        for start in range(0, len(prompt_texts), generation_batch_size):
-            current_prompts = prompt_texts[start : start + generation_batch_size]
-            expanded_prompts = [
-                prompt for prompt in current_prompts for _ in range(2)
-            ]
+        for start in range(0, len(prompt_sequences), generation_batch_size):
+            current_prompts = prompt_sequences[start : start + generation_batch_size]
+            templates = {}
+            generation_prompts = []
+            generation_histories = []
+            caches = []
+            for prompt in current_prompts:
+                key = tuple(prompt)
+                if key not in templates:
+                    templates[key] = build_shared_prompt_cache(model, prompt)
+                template = templates[key]
+                for _ in range(2):
+                    cache = fork_prompt_cache(model, template)
+                    if cache is None:
+                        generation_prompts.append(prompt)
+                        generation_histories.append([])
+                    else:
+                        generation_prompts.append(prompt[-1:])
+                        generation_histories.append(prompt[:-1])
+                    caches.append(cache)
             generator = BatchGenerator(
                 model,
                 stop_tokens=stop_tokens,
                 sampler=sampler,
-                completion_batch_size=len(expanded_prompts),
-                prefill_batch_size=len(expanded_prompts),
+                completion_batch_size=len(generation_prompts),
+                prefill_batch_size=len(generation_prompts),
             )
             try:
                 uids = generator.insert(
-                    expanded_prompts, [max_tokens] * len(expanded_prompts)
+                    generation_prompts,
+                    [max_tokens] * len(generation_prompts),
+                    caches=caches,
+                    all_tokens=generation_histories,
                 )
                 tokens = {uid: [] for uid in uids}
                 while responses := generator.next_generated():
@@ -278,6 +297,7 @@ def compute_score(scores, mask, loss_type):
     return scores.sum(-1) / token_count if loss_type == "ipo" else scores.sum(-1)
 
 
+@mx.compile
 def online_dpo_loss(
     policy_chosen_score: mx.array,
     policy_rejected_score: mx.array,
@@ -353,9 +373,7 @@ def iterate_online_dpo_batches(dataset, batch_size, max_seq_length, train=False)
 
         for i in indices:
             batch = [dataset[j] for j in batch_idx[i]]
-            prompts = [
-                list(x["prompt"][:max_seq_length]) for x in batch
-            ]
+            prompts = [list(x["prompt"][:max_seq_length]) for x in batch]
             prompt_text = [x["prompt_text"] for x in batch]
 
             yield prompts, prompt_text
@@ -435,8 +453,12 @@ def evaluate_online_dpo(
                 chosen.append(prompt_text + completion_pair[1])
                 rejected.append(prompt_text + completion_pair[0])
 
-        chosen_tokens = [mx.array(tokenizer.encode(text), dtype=mx.int32) for text in chosen]
-        rejected_tokens = [mx.array(tokenizer.encode(text), dtype=mx.int32) for text in rejected]
+        chosen_tokens = [
+            mx.array(tokenizer.encode(text), dtype=mx.int32) for text in chosen
+        ]
+        rejected_tokens = [
+            mx.array(tokenizer.encode(text), dtype=mx.int32) for text in rejected
+        ]
         for start in range(0, len(chosen_tokens), micro_batch_size):
             stop = min(start + micro_batch_size, len(chosen_tokens))
             (
@@ -565,8 +587,12 @@ def train_online_dpo(
                 chosen.append(prompt_text + completion_pair[1])
                 rejected.append(prompt_text + completion_pair[0])
 
-        chosen_tokens = [mx.array(tokenizer.encode(text), dtype=mx.int32) for text in chosen]
-        rejected_tokens = [mx.array(tokenizer.encode(text), dtype=mx.int32) for text in rejected]
+        chosen_tokens = [
+            mx.array(tokenizer.encode(text), dtype=mx.int32) for text in chosen
+        ]
+        rejected_tokens = [
+            mx.array(tokenizer.encode(text), dtype=mx.int32) for text in rejected
+        ]
         (lvalue, reward, toks, metrics), grad = _preference_microbatches(
             loss_value_and_grad,
             model,
@@ -600,9 +626,7 @@ def train_online_dpo(
             reference_rejected_score,
             chosen_masks,
             rejected_masks,
-        ) = _score_preference_batch(
-            model, ref_model, chosen, rejected, loss_type
-        )
+        ) = _score_preference_batch(model, ref_model, chosen, rejected, loss_type)
         return loss_fn(
             policy_chosen_score=policy_chosen_score,
             policy_rejected_score=policy_rejected_score,

@@ -45,6 +45,7 @@ def get_current_alpha(
     return alpha_schedule[index]
 
 
+@mx.compile
 def xpo_loss(
     policy_chosen_score: mx.array,
     policy_rejected_score: mx.array,
@@ -229,8 +230,12 @@ def evaluate_xpo(
                 chosen.append(prompt_text + completion_pair[1])
                 rejected.append(prompt_text + completion_pair[0])
 
-        chosen_tokens = [mx.array(tokenizer.encode(text), dtype=mx.int32) for text in chosen]
-        rejected_tokens = [mx.array(tokenizer.encode(text), dtype=mx.int32) for text in rejected]
+        chosen_tokens = [
+            mx.array(tokenizer.encode(text), dtype=mx.int32) for text in chosen
+        ]
+        rejected_tokens = [
+            mx.array(tokenizer.encode(text), dtype=mx.int32) for text in rejected
+        ]
         for start in range(0, len(chosen_tokens), micro_batch_size):
             stop = min(start + micro_batch_size, len(chosen_tokens))
             (
@@ -272,7 +277,11 @@ def evaluate_xpo(
                 all_losses,
                 all_rewards,
                 ntokens,
-                *[value for value in all_metrics.values() if isinstance(value, mx.array)],
+                *[
+                    value
+                    for value in all_metrics.values()
+                    if isinstance(value, mx.array)
+                ],
             )
 
     # Distributed reduction
@@ -363,8 +372,12 @@ def train_xpo(
                 chosen.append(prompt_text + completion_pair[1])
                 rejected.append(prompt_text + completion_pair[0])
 
-        chosen_tokens = [mx.array(tokenizer.encode(text), dtype=mx.int32) for text in chosen]
-        rejected_tokens = [mx.array(tokenizer.encode(text), dtype=mx.int32) for text in rejected]
+        chosen_tokens = [
+            mx.array(tokenizer.encode(text), dtype=mx.int32) for text in chosen
+        ]
+        rejected_tokens = [
+            mx.array(tokenizer.encode(text), dtype=mx.int32) for text in rejected
+        ]
         (lvalue, reward, toks, metrics), grad = _preference_microbatches(
             loss_value_and_grad,
             model,
@@ -399,9 +412,7 @@ def train_xpo(
             reference_rejected_score,
             chosen_masks,
             rejected_masks,
-        ) = _score_preference_batch(
-            model, ref_model, chosen, rejected, loss_type
-        )
+        ) = _score_preference_batch(model, ref_model, chosen, rejected, loss_type)
         return loss_fn(
             policy_chosen_score=policy_chosen_score,
             policy_rejected_score=policy_rejected_score,

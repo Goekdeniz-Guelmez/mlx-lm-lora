@@ -21,6 +21,7 @@ from mlx_lm.utils import load, load_tokenizer
 from .trainer.cpo_trainer import CPOTrainingArgs, evaluate_cpo, train_cpo
 from .trainer.datasets import CacheDataset, load_dataset
 from .trainer.dpo_trainer import DPOTrainingArgs, evaluate_dpo, train_dpo
+from .trainer.dsla_trainer import DSLATrainingArgs, evaluate_dsla, train_dsla
 from .trainer.ftpo_trainer import FTPOTrainingArgs, evaluate_ftpo, train_ftpo
 from .trainer.grpo_reward_functions import (
     get_default_reward_functions,
@@ -91,7 +92,7 @@ CONFIG_DEFAULTS = {
     "data": "data/",
     "seed": 0,
     "num_layers": -1,
-    "batch_size": 4,
+    "batch_size": 1,
     "iters": None,
     "epochs": None,
     "gradient_accumulation_steps": 1,
@@ -117,6 +118,13 @@ CONFIG_DEFAULTS = {
     "beta": 0.1,
     "reward_scaling": 1.0,
     "dpo_cpo_loss_type": "sigmoid",
+    "dsla_loss": "dpo",
+    "latent_weight": 0.1,
+    "latent_margin": 0.05,
+    "latent_gamma": 10.0,
+    "latent_variant": "both",
+    "latent_pooling": "answer_mean",
+    "latent_layer": "final",
     "delta": 50.0,
     "reference_model_path": None,
     "lambda_mse_target": 0.05,
@@ -265,6 +273,7 @@ def build_parser():
         choices=[
             "sft",
             "dpo",
+            "dsla",
             "ftpo",
             "cpo",
             "orpo",
@@ -413,6 +422,24 @@ def build_parser():
     parser.add_argument(
         "--delta", type=float, help="Delta parameter for DPOP loss type.", default=50.0
     )
+    parser.add_argument(
+        "--dsla-loss",
+        choices=["dpo", "orpo", "cpo"],
+        default="dpo",
+        help="Underlying preference objective for --train-mode dsla.",
+    )
+    parser.add_argument("--latent-weight", type=float, default=0.1)
+    parser.add_argument("--latent-margin", type=float, default=0.05)
+    parser.add_argument("--latent-gamma", type=float, default=10.0)
+    parser.add_argument(
+        "--latent-variant", choices=["similarity", "direction", "both"], default="both"
+    )
+    parser.add_argument(
+        "--latent-pooling",
+        choices=["answer_mean", "last_token", "last_k_mean", "prompt_answer_mean"],
+        default="answer_mean",
+    )
+    parser.add_argument("--latent-layer", default="final")
     parser.add_argument(
         "--reference-model-path",
         type=str,
@@ -574,6 +601,22 @@ def build_parser():
     return parser
 
 
+def _dsla_training_args(args, **overrides):
+    """Map CLI/config settings to the standalone DSLA trainer."""
+    values = {
+        name: getattr(args, name)
+        for name in DSLATrainingArgs.__dataclass_fields__
+        if hasattr(args, name)
+    }
+    values.update(
+        loss_type=args.dsla_loss,
+        steps_per_save=args.save_every,
+        seq_step_size=512 if args.efficient_long_context else None,
+    )
+    values.update(overrides)
+    return DSLATrainingArgs(**values)
+
+
 def train_model(
     args,
     model: nn.Module,
@@ -588,10 +631,16 @@ def train_model(
 ):
     mx.random.seed(args.seed)
 
-    if args.iters is None and args.epochs is not None:
-        args.iters = calculate_iters(
-            train_set=train_set, batch_size=args.batch_size, epochs=args.epochs
-        )
+    if args.iters is None:
+        if args.epochs is not None:
+            args.iters = calculate_iters(
+                train_set=train_set, batch_size=args.batch_size, epochs=args.epochs
+            )
+        else:
+            args.iters = SFTTrainingArgs().iters
+            print_info(
+                f"Neither iters nor epochs was provided; defaulting to {args.iters} iterations."
+            )
 
     if args.resume_adapter_file is not None:
         print_warning(
@@ -611,7 +660,18 @@ def train_model(
     print_info(f"Training mode: {Colors.YELLOW}{args.train_mode.upper()}{Colors.RESET}")
 
     # Training mode dispatch
-    if args.train_mode == "orpo":
+    if args.train_mode == "dsla":
+        train_dsla(
+            model=model,
+            optimizer=opt,
+            train_dataset=train_set,
+            val_dataset=valid_set,
+            args=_dsla_training_args(args, adapter_file=adapter_file),
+            ref_model=reference_model,
+            training_callback=training_callback,
+        )
+
+    elif args.train_mode == "orpo":
         train_orpo(
             model=model,
             optimizer=opt,
@@ -943,7 +1003,22 @@ def evaluate_model(
 
     print_section(f"Evaluating {args.train_mode.upper()} Model")
 
-    if args.train_mode == "orpo":
+    if args.train_mode == "dsla":
+        test_loss, test_rewards, _, test_metrics = evaluate_dsla(
+            model=model,
+            dataset=test_set,
+            args=_dsla_training_args(args),
+            ref_model=reference_model,
+            num_batches=args.test_batches,
+        )
+        print(f"{Colors.BOLD}DSLA Test loss:{Colors.RESET} {test_loss:.3f}")
+        print(
+            f"Chosen reward: {test_rewards[0]:.3f}, rejected reward: {test_rewards[1]:.3f}"
+        )
+        for metric_name, metric_value in test_metrics.items():
+            print(f"  {metric_name}: {float(metric_value):.3f}")
+
+    elif args.train_mode == "orpo":
         test_loss, test_rewards, _, test_metrics = evaluate_orpo(
             model=model,
             dataset=test_set,
@@ -1320,6 +1395,7 @@ def run(args, training_callback: TrainingCallback = None):
         load_reference_model(args)
         if args.train_mode
         in ["dpo", "ftpo", "grpo", "online_dpo", "ppo", "rlhf_reinforce", "xpo"]
+        or (args.train_mode == "dsla" and args.dsla_loss == "dpo")
         else None
     )
     judge_model, judge_tokenizer = (

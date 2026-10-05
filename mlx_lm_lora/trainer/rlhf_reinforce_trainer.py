@@ -97,6 +97,7 @@ def rlhf_reinforce_loss(
     return loss, token_count, metrics
 
 
+@mx.compile
 def _rlhf_reinforce_logp_loss(
     policy_log_probs: mx.array,
     ref_log_probs: mx.array,
@@ -131,9 +132,7 @@ def get_model_logits(model, tokens, masks):
     return model(inputs), targets, target_masks
 
 
-def _rlhf_loss_from_sequences(
-    model, ref_model, sequences, rewards, beta, loss_fn
-):
+def _rlhf_loss_from_sequences(model, ref_model, sequences, rewards, beta, loss_fn):
     tokens, target_masks = _pad_online_sequences(sequences)
     policy_log_probs = _online_token_logps(model, tokens, target_masks)
     if ref_model is None:
@@ -180,9 +179,7 @@ def _rlhf_value_and_grad(
         stop = min(start + micro_batch_size, total)
         row_weight = (stop - start) / total
         token_weight = sum(token_counts[start:stop]) / total_tokens
-        result = loss_value_and_grad(
-            model, sequences[start:stop], rewards[start:stop]
-        )
+        result = loss_value_and_grad(model, sequences[start:stop], rewards[start:stop])
         (loss, tokens, metrics), grads = result
         grads = tree_map(lambda value, weight=token_weight: value * weight, grads)
         accumulated = (
@@ -225,9 +222,7 @@ def evaluate_rlhf_reinforce(
     all_losses = 0
     all_metrics = None
     ntokens = 0
-    micro_batch_size = _validate_micro_batch_size(
-        micro_batch_size, batch_size * 2
-    )
+    micro_batch_size = _validate_micro_batch_size(micro_batch_size, batch_size * 2)
 
     index_iterator = iter(range(num_batches)) if num_batches != -1 else iter(int, 1)
 
@@ -282,7 +277,9 @@ def evaluate_rlhf_reinforce(
             )
             all_losses += loss_value * toks
             ntokens += toks
-            weighted_metrics = {key: value * row_weight for key, value in metrics.items()}
+            weighted_metrics = {
+                key: value * row_weight for key, value in metrics.items()
+            }
             if all_metrics is None:
                 all_metrics = weighted_metrics
             else:

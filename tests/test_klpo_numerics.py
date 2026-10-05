@@ -88,7 +88,10 @@ class KLPONumericsTest(unittest.TestCase):
         rewards = mx.array([1.0])
         mask = mx.array([[True]])
 
-        for route, loss_fn in (("token", klpo._token_loss), ("sequence", klpo._sequence_loss)):
+        for route, loss_fn in (
+            ("token", klpo._token_loss),
+            ("sequence", klpo._sequence_loss),
+        ):
             with self.subTest(route=route):
                 loss, local_kl, _, _ = loss_fn(
                     current,
@@ -165,8 +168,12 @@ class KLPONumericsTest(unittest.TestCase):
             ),
         )
         full = (
-            mx.concatenate([head[0], mx.array([[[-2.0], [-2.2]], [[-2.5], [-1.9]]])], axis=-1),
-            mx.concatenate([head[1], mx.array([[[-2.1], [-2.0]], [[-2.4], [-2.1]]])], axis=-1),
+            mx.concatenate(
+                [head[0], mx.array([[[-2.0], [-2.2]], [[-2.5], [-1.9]]])], axis=-1
+            ),
+            mx.concatenate(
+                [head[1], mx.array([[[-2.1], [-2.0]], [[-2.4], [-2.1]]])], axis=-1
+            ),
         )
         for route in ("token", "sequence"):
             for estimator in ("binary", "mc", "topk", "full"):
