@@ -4,14 +4,13 @@ import math
 import time
 from dataclasses import dataclass, field
 from functools import wraps
-from pathlib import Path
 from typing import Mapping, Tuple
 
 import mlx.core as mx
 import mlx.nn as nn
 import numpy as np
 from mlx.nn.utils import average_gradients
-from mlx.utils import tree_flatten, tree_map
+from mlx.utils import tree_map
 from mlx_lm.tuner.callbacks import TrainingCallback
 from tqdm import tqdm
 
@@ -23,6 +22,7 @@ from .sft_trainer import (
     _symmetric_fake_quantize_tensor,
     grad_checkpoint,
 )
+from .training_utils import save_adapters
 
 
 @dataclass
@@ -702,18 +702,9 @@ def train_dsla(
                 )
                 start = time.perf_counter()
             if iteration % args.steps_per_save == 0 and rank == 0:
-                weights = dict(tree_flatten(model.trainable_parameters()))
-                mx.save_safetensors(str(args.adapter_file), weights)
-                checkpoint = (
-                    Path(args.adapter_file).parent
-                    / f"{iteration:07d}_adapters.safetensors"
-                )
-                mx.save_safetensors(str(checkpoint), weights)
+                save_adapters(model, args.adapter_file, iteration, report=False)
         if rank == 0:
-            mx.save_safetensors(
-                str(args.adapter_file), dict(tree_flatten(model.trainable_parameters()))
-            )
-            tqdm.write(f"Saved final weights to {args.adapter_file}.")
+            save_adapters(model, args.adapter_file)
 
     finally:
         for cls, original in qat_originals.items():

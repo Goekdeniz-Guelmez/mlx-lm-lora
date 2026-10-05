@@ -1,32 +1,27 @@
 import time
 from functools import partial
-from pathlib import Path
 from typing import Any, Optional
 
 import mlx.core as mx
 import mlx.nn as nn
-import numpy as np
 from mlx.nn.utils import average_gradients
-from mlx.utils import tree_flatten, tree_map
+from mlx.utils import tree_map
 from mlx_lm.models.cache import make_prompt_cache
 from mlx_lm.tuner.callbacks import TrainingCallback
 from tqdm import tqdm
 
 from ..recurrent_patch import enable_memory_safe_recurrences, model_uses_recurrence
 from .dpo_trainer import DPOTrainingArgs as CPOTrainingArgs
-from .long_context import iter_cached_sft_chunks
-from .sft_trainer import grad_checkpoint, reset_prompt_cache
-
-
-def get_token_scores(model, x, mask, cache=None):
-    inputs, targets = x[:, :-1], x[:, 1:]
-    logits = model(inputs, cache=cache).astype(mx.float32)
-    return -nn.losses.cross_entropy(logits, targets) * mask[:, :-1]
-
-
-def compute_score(scores, mask, loss_type):
-    token_count = mask.sum(-1)
-    return scores.sum(-1) / token_count if loss_type == "ipo" else scores.sum(-1)
+from .preference_utils import (
+    accumulate_score_gradients,
+    compute_score,
+    compute_scores_chunked,
+    evaluate_preference_batches,
+    get_token_scores,
+)
+from .preference_utils import iterate_preference_batches as iterate_cpo_batches
+from .sft_trainer import grad_checkpoint
+from .training_utils import save_adapters
 
 
 def cpo_loss(
@@ -108,65 +103,6 @@ def cpo_loss_from_model(
     )
 
 
-def iterate_cpo_batches(dataset, batch_size, max_seq_length, train=False):
-    idx = sorted(range(len(dataset)), key=lambda idx: len(dataset[idx]["chosen"]))
-
-    step = mx.distributed.init().size()
-    if batch_size % step != 0:
-        raise ValueError("Batch size must be divisible by workers")
-
-    batch_idx = [
-        idx[i : i + batch_size : step]
-        for i in range(0, len(idx) - batch_size + 1, batch_size)
-    ]
-
-    while True:
-        indices = (
-            np.random.permutation(len(batch_idx)) if train else range(len(batch_idx))
-        )
-        for i in indices:
-            batch = [dataset[j] for j in batch_idx[i]]
-
-            # Get and process lengths
-            chosen_lengths = [len(x["chosen"]) for x in batch]
-            rejected_lengths = [len(x["rejected"]) for x in batch]
-            max_length = min(
-                max(max(chosen_lengths), max(rejected_lengths)), max_seq_length
-            )
-
-            # Dynamic padding based on batch content
-            max_length_in_batch = max_length
-
-            chosen_arr = np.zeros((batch_size // step, max_length_in_batch), np.int32)
-            rejected_arr = np.zeros((batch_size // step, max_length_in_batch), np.int32)
-
-            chosen_masks = np.zeros(
-                (batch_size // step, max_length_in_batch), np.float32
-            )
-            rejected_masks = np.zeros(
-                (batch_size // step, max_length_in_batch), np.float32
-            )
-
-            for j in range(batch_size // step):
-                chosen_length = min(chosen_lengths[j], max_seq_length)
-                rejected_length = min(rejected_lengths[j], max_seq_length)
-
-                chosen_arr[j, :chosen_length] = batch[j]["chosen"][:chosen_length]
-                rejected_arr[j, :rejected_length] = batch[j]["rejected"][
-                    :rejected_length
-                ]
-
-                chosen_masks[j, :chosen_length] = 1.0
-                rejected_masks[j, :rejected_length] = 1.0
-
-            yield mx.array(chosen_arr), mx.array(rejected_arr), mx.array(
-                chosen_masks
-            ), mx.array(rejected_masks)
-
-        if not train:
-            break
-
-
 def evaluate_cpo(
     model,
     dataset,
@@ -179,63 +115,19 @@ def evaluate_cpo(
     loss_fn: callable = cpo_loss,
 ):
     model.eval()
-    all_losses = 0
-    all_rewards = mx.zeros((2,))
-    all_metrics = None
-    ntokens = 0
-
-    index_iterator = iter(range(num_batches)) if num_batches != -1 else iter(int, 1)
-
-    for _, batch in zip(
-        index_iterator,
-        iterate_cpo_batches(
-            dataset=dataset,
-            batch_size=batch_size,
-            max_seq_length=max_seq_length,
-        ),
-    ):
-        chosen, rejected, chosen_masks, rejected_masks = batch
-
-        policy_chosen_scores = get_token_scores(model, chosen, chosen_masks)
-        policy_rejected_scores = get_token_scores(model, rejected, rejected_masks)
-
-        policy_chosen_score = compute_score(
-            policy_chosen_scores, chosen_masks, loss_type
-        )
-        policy_rejected_score = compute_score(
-            policy_rejected_scores, rejected_masks, loss_type
-        )
-
-        loss_value, reward, toks, metrics = loss_fn(
-            policy_chosen_score=policy_chosen_score,
-            policy_rejected_score=policy_rejected_score,
-            chosen_masks=chosen_masks,
-            rejected_masks=rejected_masks,
-            loss_type=loss_type,
+    return evaluate_preference_batches(
+        iterate_cpo_batches(dataset, batch_size, max_seq_length),
+        num_batches,
+        partial(
+            cpo_loss_from_model,
+            model,
             beta=beta,
             delta=delta,
-        )
-        all_losses += loss_value * toks
-        all_rewards += reward
-        ntokens += toks
-
-        if all_metrics is None:
-            all_metrics = {k: v * toks for k, v in metrics.items()}
-        else:
-            for k, v in metrics.items():
-                all_metrics[k] += v * toks
-
-        mx.eval(all_losses, all_rewards, ntokens, *all_metrics.values())
-    all_losses = mx.distributed.all_sum(all_losses)
-    all_rewards = mx.distributed.all_sum(all_rewards)
-    ntokens = mx.distributed.all_sum(ntokens)
-    all_metrics = {k: mx.distributed.all_sum(v) for k, v in all_metrics.items()}
-
-    avg_metrics = {k: (v / ntokens).item() for k, v in all_metrics.items()}
-    avg_rewards = (all_rewards / ntokens).tolist()
-    avg_loss = (all_losses / ntokens).item()
-
-    return avg_loss, avg_rewards, ntokens, avg_metrics
+            loss=loss_fn,
+            loss_type=loss_type,
+        ),
+        weight_rewards=False,
+    )
 
 
 def train_cpo(
@@ -311,31 +203,14 @@ def train_cpo(
 
     def seq_split_step(batch, prev_grad, do_update):
         chosen, rejected, chosen_masks, rejected_masks = batch
-        batch_size = chosen.shape[0]
-
-        def compute_scores_chunked(curr_model, curr_cache, tokens, masks):
-            seq_length = tokens.shape[1]
-            score_sum = mx.zeros((batch_size,))
-            if curr_cache is not None:
-                reset_prompt_cache(curr_cache)
-
-            for start, end in iter_cached_sft_chunks(seq_length, seq_step_size):
-                chunk = tokens[:, start:end]
-                chunk_mask = masks[:, start:end]
-
-                chunk_scores = get_token_scores(
-                    curr_model, chunk, chunk_mask, cache=curr_cache
-                )
-                score_sum += chunk_scores.sum(-1)
-
-                if end >= seq_length:
-                    break
-
-            return score_sum
 
         # 1. Forward Pass (No Grad) - compute scores
-        c_score = compute_scores_chunked(model, cache, chosen, chosen_masks)
-        r_score = compute_scores_chunked(model, cache, rejected, rejected_masks)
+        c_score = compute_scores_chunked(
+            model, cache, chosen, chosen_masks, seq_step_size
+        )
+        r_score = compute_scores_chunked(
+            model, cache, rejected, rejected_masks, seq_step_size
+        )
 
         c_tokens_count = chosen_masks[:, :-1].sum(-1)
         r_tokens_count = rejected_masks[:, :-1].sum(-1)
@@ -380,36 +255,12 @@ def train_cpo(
             w_r = w_r / r_tokens_count
 
         # 3. Backward chunks
-        seq_grad_accum = None
-
-        def accum_chunk_grads(tokens, masks, weights):
-            nonlocal seq_grad_accum
-            seq_length = tokens.shape[1]
-            reset_prompt_cache(cache)
-
-            for start, end in iter_cached_sft_chunks(seq_length, seq_step_size):
-                chunk = tokens[:, start:end]
-                chunk_mask = masks[:, start:end]
-
-                def local_loss_fn(model):
-                    local_sum = get_token_scores(
-                        model, chunk, chunk_mask, cache=cache
-                    ).sum(-1)
-                    return (local_sum * weights).sum()
-
-                grad = mx.grad(local_loss_fn)(model)
-                if seq_grad_accum is None:
-                    seq_grad_accum = grad
-                else:
-                    seq_grad_accum = tree_map(lambda x, y: x + y, seq_grad_accum, grad)
-
-                mx.eval(seq_grad_accum)
-
-                if end >= seq_length:
-                    break
-
-        accum_chunk_grads(chosen, chosen_masks, w_c)
-        accum_chunk_grads(rejected, rejected_masks, w_r)
+        seq_grad_accum = accumulate_score_gradients(
+            model, cache, chosen, chosen_masks, w_c, seq_step_size
+        )
+        seq_grad_accum = accumulate_score_gradients(
+            model, cache, rejected, rejected_masks, w_r, seq_step_size, seq_grad_accum
+        )
 
         if prev_grad is not None:
             seq_grad_accum = tree_map(lambda x, y: x + y, seq_grad_accum, prev_grad)
@@ -580,17 +431,6 @@ def train_cpo(
             start = time.perf_counter()
 
         if it % args.steps_per_save == 0:
-            adapter_weights = dict(tree_flatten(model.trainable_parameters()))
-            mx.save_safetensors(str(args.adapter_file), adapter_weights)
-            checkpoint = (
-                Path(args.adapter_file).parent / f"{it:07d}_adapters.safetensors"
-            )
-            mx.save_safetensors(str(checkpoint), adapter_weights)
-            print(
-                f"Iter {it}: Saved adapter weights to "
-                f"{args.adapter_file} and {checkpoint}."
-            )
+            save_adapters(model, args.adapter_file, it)
 
-    adapter_weights = dict(tree_flatten(model.trainable_parameters()))
-    mx.save_safetensors(str(args.adapter_file), adapter_weights)
-    print(f"Saved final weights to {args.adapter_file}.")
+    save_adapters(model, args.adapter_file)

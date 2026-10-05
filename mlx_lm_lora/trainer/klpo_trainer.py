@@ -8,7 +8,6 @@ scoring, microbatch boundaries, distributed reductions, and checkpointing.
 import math
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
 
 import mlx.core as mx
 import numpy as np
@@ -27,7 +26,9 @@ from .grpo_reward_functions import (
     r1_strict_format_reward_func,
 )
 from .grpo_trainer import _prepare_grpo_inputs, iterate_grpo_batches
+from .rollout_utils import evaluate_rewards, rollout_microbatches
 from .sft_trainer import SFTTrainingArgs, average_gradients, grad_checkpoint
+from .training_utils import save_adapters
 
 
 @dataclass
@@ -656,54 +657,14 @@ def calculate_rewards(
     reward_weights=None,
 ):
     """Evaluate terminal rewards once without GRPO group normalization."""
-    if not reward_funcs or not completion_texts:
-        raise ValueError("At least one reward function and completion are required.")
-    if reward_weights is not None and len(reward_weights) != len(reward_funcs):
-        raise ValueError(
-            "Number of reward weights must match number of reward functions"
-        )
-    weights = np.asarray(
-        reward_weights if reward_weights is not None else [1.0] * len(reward_funcs),
-        dtype=np.float64,
+    rewards, metrics = evaluate_rewards(
+        reward_funcs,
+        expanded_prompts,
+        completion_texts,
+        expanded_answers,
+        expanded_types,
+        reward_weights,
     )
-    if not np.isfinite(weights).all():
-        raise ValueError("Reward weights must be finite.")
-    columns, metrics = [], {}
-    for reward_func in reward_funcs:
-        raw = reward_func(
-            prompts=expanded_prompts,
-            completions=completion_texts,
-            answer=expanded_answers,
-            types=expanded_types,
-        )
-        if raw is None:
-            raw = [None] * len(completion_texts)
-        if len(raw) != len(completion_texts):
-            raise ValueError(
-                f"{reward_func.__name__} must return one reward per completion."
-            )
-        values = np.asarray(
-            [np.nan if value is None else float(value) for value in raw]
-        )
-        if np.isinf(values).any():
-            raise ValueError(f"{reward_func.__name__} returned an infinite reward.")
-        valid = values[~np.isnan(values)]
-        metrics[f"{reward_func.__name__}_mean"] = (
-            float(valid.mean()) if valid.size else 0.0
-        )
-        metrics[f"{reward_func.__name__}_std"] = (
-            float(valid.std()) if valid.size else 0.0
-        )
-        metrics[f"{reward_func.__name__}_coverage"] = valid.size / values.size
-        columns.append(values)
-    rewards = np.stack(columns, axis=1)
-    if np.isnan(rewards).all(axis=1).any():
-        raise RuntimeError(
-            "All reward functions returned None or NaN for a completion."
-        )
-    rewards = (np.nan_to_num(rewards, nan=0.0) * weights).sum(axis=1)
-    if not np.isfinite(rewards).all():
-        raise ValueError("Weighted rewards must be finite.")
     metrics.update(reward_mean=float(rewards.mean()), reward_std=float(rewards.std()))
     return mx.array(rewards, dtype=mx.float32), {
         key: mx.array(value, dtype=mx.float32) for key, value in metrics.items()
@@ -723,58 +684,20 @@ def _rollout_rewards(batch, texts, indices, reward_funcs, reward_weights):
 
 
 def _klpo_microbatches(compute, model, chunk_size, *, with_grad=False, **kwargs):
-    completions = kwargs.pop("completions")
-    texts = kwargs.pop("completion_texts")
-    indices = kwargs.pop("batch_indices")
-    records = kwargs.pop("rollout_records")
-    rewards = kwargs.pop("rewards")
-    sample_count = len(completions)
-    total_loss, total_tokens, all_metrics, accumulated = 0, 0, None, None
-    for start in range(0, sample_count, chunk_size):
-        stop = min(start + chunk_size, sample_count)
-        weight = (stop - start) / sample_count
-        result = compute(
-            model,
-            completions=completions[start:stop],
-            completion_texts=texts[start:stop],
-            batch_indices=indices[start:stop],
-            rollout_records=records[start:stop],
-            rewards=rewards[start:stop],
-            **kwargs,
-        )
-        if with_grad:
-            (loss, tokens, metrics), grads = result
-            grads = tree_map(lambda value, weight=weight: value * weight, grads)
-            accumulated = (
-                grads
-                if accumulated is None
-                else tree_map(lambda left, right: left + right, accumulated, grads)
-            )
-        else:
-            loss, tokens, metrics = result
-        total_loss = total_loss + loss * weight
-        total_tokens = total_tokens + tokens
-        weighted = {
-            key: value * weight
-            for key, value in metrics.items()
-            if key not in {"max_generated_tokens", "min_generated_tokens"}
-        }
-        if all_metrics is None:
-            all_metrics = dict(weighted)
-            all_metrics["max_generated_tokens"] = metrics["max_generated_tokens"]
-            all_metrics["min_generated_tokens"] = metrics["min_generated_tokens"]
-        else:
-            for key, value in weighted.items():
-                all_metrics[key] = all_metrics[key] + value
-            all_metrics["max_generated_tokens"] = mx.maximum(
-                all_metrics["max_generated_tokens"], metrics["max_generated_tokens"]
-            )
-            all_metrics["min_generated_tokens"] = mx.minimum(
-                all_metrics["min_generated_tokens"], metrics["min_generated_tokens"]
-            )
-        mx.eval(total_loss, total_tokens, all_metrics, accumulated)
-    result = total_loss, total_tokens, all_metrics
-    return (result, accumulated) if with_grad else result
+    return rollout_microbatches(
+        compute,
+        model,
+        chunk_size,
+        sample_keys=(
+            "completions",
+            "completion_texts",
+            "batch_indices",
+            "rollout_records",
+            "rewards",
+        ),
+        with_grad=with_grad,
+        **kwargs,
+    )
 
 
 def _klpo_value_and_grad(loss_value_and_grad, model, chunk_size, **kwargs):
@@ -1125,16 +1048,6 @@ def train_klpo(
             start_time = time.perf_counter()
 
         if iteration % args.steps_per_save == 0:
-            adapter_weights = dict(tree_flatten(model.trainable_parameters()))
-            mx.save_safetensors(str(args.adapter_file), adapter_weights)
-            checkpoint = (
-                Path(args.adapter_file).parent / f"{iteration:07d}_adapters.safetensors"
-            )
-            mx.save_safetensors(str(checkpoint), adapter_weights)
-            tqdm.write(
-                f"Iter {iteration}: Saved adapter weights to {args.adapter_file} and {checkpoint}."
-            )
+            save_adapters(model, args.adapter_file, iteration)
 
-    adapter_weights = dict(tree_flatten(model.trainable_parameters()))
-    mx.save_safetensors(str(args.adapter_file), adapter_weights)
-    tqdm.write(f"Saved final weights to {args.adapter_file}.")
+    save_adapters(model, args.adapter_file)

@@ -3,19 +3,19 @@
 import time
 from dataclasses import dataclass, field
 from functools import partial
-from pathlib import Path
 from typing import Any, Optional
 
 import mlx.core as mx
 import mlx.nn as nn
 import numpy as np
 from mlx.nn.utils import average_gradients
-from mlx.utils import tree_flatten, tree_map
+from mlx.utils import tree_map
 from mlx_lm.tuner.callbacks import TrainingCallback
 from tqdm import tqdm
 
 from ..recurrent_patch import enable_memory_safe_recurrences, model_uses_recurrence
 from .sft_trainer import SFTTrainingArgs, grad_checkpoint
+from .training_utils import save_adapters
 
 
 @dataclass
@@ -290,10 +290,6 @@ def train_ftpo(
                 time.perf_counter(),
             )
         if iteration % args.steps_per_save == 0:
-            mx.save_safetensors(
-                str(args.adapter_file), dict(tree_flatten(model.trainable_parameters()))
-            )
+            save_adapters(model, args.adapter_file, report=False)
 
-    mx.save_safetensors(
-        str(args.adapter_file), dict(tree_flatten(model.trainable_parameters()))
-    )
+    save_adapters(model, args.adapter_file, report=False)

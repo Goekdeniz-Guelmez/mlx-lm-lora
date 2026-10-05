@@ -1,13 +1,12 @@
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Optional, Sequence, Union
 
 import mlx.core as mx
 import mlx.nn as nn
 import numpy as np
 from mlx.nn.utils import average_gradients
-from mlx.utils import tree_flatten, tree_map
+from mlx.utils import tree_map
 from mlx_lm.generate import BatchGenerator
 from mlx_lm.sample_utils import make_sampler
 from mlx_lm.tokenizer_utils import TokenizerWrapper
@@ -24,6 +23,7 @@ from .online_rl_utils import (
     fork_prompt_cache,
 )
 from .sft_trainer import SFTTrainingArgs, grad_checkpoint
+from .training_utils import save_adapters
 
 
 @dataclass
@@ -71,6 +71,27 @@ class OnlineDPOTrainingArgs(SFTTrainingArgs):
             )
         },
     )
+
+
+def _judged_pair_texts(
+    prompt_texts, completions, judge_model, judge_tokenizer, judge_config
+):
+    """Order each completion pair by the judge's preference, retaining prompts."""
+    if judge_model == "human":
+        judger = HumanPairwiseJudge()
+    else:
+        judger = LLMPairwiseJudge(
+            model=judge_model,
+            tokenizer=judge_tokenizer,
+            system_prompt=(judge_config or {}).get("system_prompt"),
+        )
+    judged = judger.judge(prompt_texts, completions=completions)
+    chosen, rejected = [], []
+    for prompt, pair, judgment in zip(prompt_texts, completions, judged):
+        preferred = 0 if judgment == 0 else 1
+        chosen.append(prompt + pair[preferred])
+        rejected.append(prompt + pair[1 - preferred])
+    return chosen, rejected
 
 
 def _validate_micro_batch_size(value: Optional[int], batch_size: int) -> int:
@@ -430,28 +451,9 @@ def evaluate_online_dpo(
             batch_size=micro_batch_size,
         )
 
-        if judge_model == "human":
-            judger = HumanPairwiseJudge()
-            judged = judger.judge(prompt_texts, completions=completions)
-        else:
-            judger = LLMPairwiseJudge(
-                model=judge_model,
-                tokenizer=judge_tokenizer,
-                system_prompt=(judge_config or {}).get("system_prompt", None),
-            )
-            judged = judger.judge(prompt_texts, completions=completions)
-
-        chosen = []
-        rejected = []
-        for i, (prompt_text, completion_pair, judgment) in enumerate(
-            zip(prompt_texts, completions, judged)
-        ):
-            if judgment == 0:
-                chosen.append(prompt_text + completion_pair[0])
-                rejected.append(prompt_text + completion_pair[1])
-            else:
-                chosen.append(prompt_text + completion_pair[1])
-                rejected.append(prompt_text + completion_pair[0])
+        chosen, rejected = _judged_pair_texts(
+            prompt_texts, completions, judge_model, judge_tokenizer, judge_config
+        )
 
         chosen_tokens = [
             mx.array(tokenizer.encode(text), dtype=mx.int32) for text in chosen
@@ -563,29 +565,9 @@ def train_online_dpo(
         )
 
         # Judge the completions
-        if judge_model == "human":
-            judger = HumanPairwiseJudge()
-            judged = judger.judge(prompt_texts, completions=completions)
-        else:
-            judger = LLMPairwiseJudge(
-                model=judge_model,
-                tokenizer=judge_tokenizer,
-                system_prompt=(judge_config or {}).get("system_prompt", None),
-            )
-            judged = judger.judge(prompt_texts, completions=completions)
-
-        # Process judged results to create chosen/rejected pairs
-        chosen = []
-        rejected = []
-        for i, (prompt_text, completion_pair, judgment) in enumerate(
-            zip(prompt_texts, completions, judged)
-        ):
-            if judgment == 0:  # First completion is preferred
-                chosen.append(prompt_text + completion_pair[0])
-                rejected.append(prompt_text + completion_pair[1])
-            else:  #  Second completion is preferred
-                chosen.append(prompt_text + completion_pair[1])
-                rejected.append(prompt_text + completion_pair[0])
+        chosen, rejected = _judged_pair_texts(
+            prompt_texts, completions, judge_model, judge_tokenizer, judge_config
+        )
 
         chosen_tokens = [
             mx.array(tokenizer.encode(text), dtype=mx.int32) for text in chosen
@@ -784,18 +766,7 @@ def train_online_dpo(
 
         # Save adapter weights
         if it % args.steps_per_save == 0:
-            adapter_weights = dict(tree_flatten(model.trainable_parameters()))
-            mx.save_safetensors(str(args.adapter_file), adapter_weights)
-            checkpoint = (
-                Path(args.adapter_file).parent / f"{it:07d}_adapters.safetensors"
-            )
-            mx.save_safetensors(str(checkpoint), adapter_weights)
-            tqdm.write(
-                f"Iter {it}: Saved adapter weights to "
-                f"{args.adapter_file} and {checkpoint}."
-            )
+            save_adapters(model, args.adapter_file, it)
 
     # Save final weights
-    adapter_weights = dict(tree_flatten(model.trainable_parameters()))
-    mx.save_safetensors(str(args.adapter_file), adapter_weights)
-    tqdm.write(f"Saved final weights to {args.adapter_file}.")
+    save_adapters(model, args.adapter_file)

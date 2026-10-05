@@ -1,14 +1,13 @@
 import time
 from dataclasses import dataclass, field
 from functools import partial
-from pathlib import Path
 from typing import Any, Optional
 
 import mlx.core as mx
 import mlx.nn as nn
 import numpy as np
 from mlx.nn.utils import average_gradients
-from mlx.utils import tree_flatten, tree_map
+from mlx.utils import tree_map
 from mlx_lm.models.cache import (
     ArraysCache,
     CacheList,
@@ -22,6 +21,7 @@ from tqdm import tqdm
 from ..recurrent_patch import enable_memory_safe_recurrences, model_uses_recurrence
 from .datasets import CacheDataset
 from .long_context import iter_cached_sft_chunks
+from .training_utils import save_adapters
 
 _CHUNKED_NLL_CHUNK_SIZE = 256
 
@@ -683,19 +683,7 @@ def train_sft(
             train_time = 0
 
         if it % args.steps_per_save == 0 and rank == 0:
-            adapter_weights = dict(tree_flatten(model.trainable_parameters()))
-            mx.save_safetensors(str(args.adapter_file), adapter_weights)
-            checkpoint = (
-                Path(args.adapter_file).parent / f"{it:07d}_adapters.safetensors"
-            )
-            mx.save_safetensors(str(checkpoint), adapter_weights)
-            tqdm.write(
-                f"\n"
-                f"Iter {it}: Saved adapter weights to "
-                f"{args.adapter_file} and {checkpoint}."
-            )
+            save_adapters(model, args.adapter_file, it)
 
     if rank == 0:
-        adapter_weights = dict(tree_flatten(model.trainable_parameters()))
-        mx.save_safetensors(str(args.adapter_file), adapter_weights)
-        tqdm.write(f"Saved final weights to {args.adapter_file}.")
+        save_adapters(model, args.adapter_file)
