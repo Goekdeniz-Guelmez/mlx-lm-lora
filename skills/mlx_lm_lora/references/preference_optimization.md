@@ -8,6 +8,7 @@ are already present in the dataset. The supported offline modes are:
 | Direct Preference Optimization | `"dpo"` | Required; defaults to the base model frozen before training | `prompt`, `chosen`, `rejected` |
 | Contrastive Preference Optimization | `"cpo"` | Not used | `prompt`, `chosen`, `rejected` |
 | Odds Ratio Preference Optimization | `"orpo"` | Not used | `prompt`, `chosen`, `rejected`; optional `preference_score` |
+| Directional and Similarity-aware Latent Alignment | `"dsla"` | DPO objective only; ORPO/CPO are reference-free | `prompt`, `chosen`, `rejected` |
 | Final Token Preference Optimization | `"ftpo"` | Required; defaults to the base model frozen before training | Antidoom fields: `context_with_chat_template`, `rejected_decoded`, `multi_chosen_decoded` |
 
 `online_dpo`, `xpo`, `rlhf_reinforce`, and `ppo` generate responses during
@@ -20,7 +21,7 @@ The examples below use MCP field names. Use `train: true`, preserve the model
 and dataset identifiers exactly, and do not send CLI spellings such as
 `--train-mode` in an MCP config.
 
-All four modes inherit these general training settings:
+These modes inherit these general training settings:
 
 | Field | Default | Use |
 | --- | ---: | --- |
@@ -29,7 +30,7 @@ All four modes inherit these general training settings:
 | `optimizer_config` | optimizer-specific empty mapping | Extra optimizer keyword arguments |
 | `learning_rate` | `1e-5` | Positive optimizer learning rate |
 | `lr_schedule` | `null` | MLX-LM schedule expression |
-| `batch_size` | `4` | Per-step batch size; keep it divisible by worker count |
+| `batch_size` | `1` | Per-step batch size; keep it divisible by worker count |
 | `iters` | `null` | Number of optimizer iterations |
 | `epochs` | `null` | Converted to iterations when `iters` is omitted |
 | `gradient_accumulation_steps` | `1` | Accumulate this many minibatches before updating |
@@ -50,11 +51,15 @@ All four modes inherit these general training settings:
 | `test_batches` | `500` | Test batches; `-1` means all |
 | `fuse` | `true` | Merge and save the trained adapter with the base model |
 
-For quantized loading, set exactly one of `load_in_4bits`, `load_in_6bits`, or
-`load_in_8bits` to `true`. QAT is available for SFT, DPO, and ORPO; its fields
+For quantized loading, set at most one of `load_in_4bits`, `load_in_6bits`,
+`load_in_8bits`, or `load_in_mxfp4` to `true`. QAT is available for SFT, DPO, ORPO, and DSLA; its fields
 are `qat_enable`, `qat_bits` (default `8`), `qat_group_size` (default `64`),
 `qat_mode: "affine"`, `qat_start_step` (default `1`), and `qat_interval`
 (default `1`). Do not add QAT fields to FTPO or CPO requests.
+
+For DSLA objectives, latent controls, and memory limitations, read
+[dsla.md](dsla.md). For recurrent fallback and online scoring controls, read
+[memory.md](memory.md).
 
 ## Shared DPO/CPO loss settings
 
@@ -285,7 +290,7 @@ Before starting an offline preference job:
 3. Choose `iters` or `epochs`; if both are supplied, `iters` wins.
 4. Keep `batch_size` at least as large as the distributed worker count and
    divisible by it.
-5. Set `reference_model_path` only for DPO or FTPO unless the request
+5. Set `reference_model_path` only for DPO, FTPO, or DSLA-DPO unless the request
    explicitly needs a compatible shared config.
 6. Validate on held-out preference data and on a general capability set before
    fusing the adapter.

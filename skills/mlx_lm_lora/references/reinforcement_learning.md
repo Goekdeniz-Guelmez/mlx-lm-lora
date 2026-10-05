@@ -10,12 +10,17 @@ The supported reinforcement modes are:
 | Dr. GRPO | `"grpo"` | Registered reward functions | Same as GRPO; set `grpo_loss_type: "dr_grpo"` |
 | BNPO | `"grpo"` | Registered reward functions | Same as GRPO; set `grpo_loss_type: "bnpo"` |
 | DAPO-style dual clipping | `"grpo"` | Registered reward functions | Same as GRPO; set `epsilon_high` |
+| KL-Regularized Policy Optimization | `"klpo"` | Registered reward functions; no separate reference model | `prompt`, `answer`; optional `system`, `type` |
 | RLHF REINFORCE with KL | `"rlhf_reinforce"` | Reward-model judge | Prompt-only data: `prompt` |
 | Proximal Policy Optimization | `"ppo"` | Pairwise judge/reward model | Prompt-only data: `prompt` |
 
 The repository also supports the online preference modes `"online_dpo"` and
 `"xpo"`; their settings are included at the end of this reference because
 they generate completions and require a judge.
+
+For KLPO regression routes and conditional KL estimators, read
+[klpo.md](klpo.md). For scoring microbatches and recurrent memory controls, read
+[memory.md](memory.md).
 
 ## Common configuration
 
@@ -33,7 +38,7 @@ otherwise:
 | `optimizer_config` | optimizer-specific empty mapping | Extra optimizer keyword arguments |
 | `learning_rate` | `1e-5` | Positive optimizer learning rate |
 | `lr_schedule` | `null` | MLX-LM schedule expression |
-| `batch_size` | `4` | Prompt batch size; keep it divisible by worker count |
+| `batch_size` | `1` | Prompt batch size; keep it divisible by worker count |
 | `iters` | `null` | Number of optimizer iterations |
 | `epochs` | `null` | Converted to iterations when `iters` is omitted |
 | `gradient_accumulation_steps` | `1` | Accumulate minibatches before updating |
@@ -54,7 +59,7 @@ otherwise:
 | `test_batches` | `500` | Test batches; `-1` means all |
 | `fuse` | `true` | Merge and save the trained adapter with the base model |
 
-`load_in_4bits`, `load_in_6bits`, and `load_in_8bits` are independent model
+`load_in_4bits`, `load_in_6bits`, `load_in_8bits`, and `load_in_mxfp4` are independent model
 loading choices; set at most one. QAT and `efficient_long_context` are not
 wired into the GRPO or online-RL dispatch paths, so do not add those fields to
 reinforcement requests.
@@ -89,7 +94,7 @@ GRPO-specific settings are:
 | --- | ---: | --- |
 | `group_size` | `4` | Number of sampled completions per prompt |
 | `max_completion_length` | `512` | Maximum generated completion tokens |
-| `temperature` | `0.8` | Sampling temperature |
+| `temperature` | `1.0` | Sampling temperature |
 | `beta` | `0.1` | KL penalty coefficient |
 | `epsilon` | `1e-4` | Lower clipping bound |
 | `epsilon_high` | `null` | Upper clipping bound; falls back to `epsilon` |
@@ -107,6 +112,9 @@ The current default reward registry contains:
 - `r1_strict_format_reward_func`
 - `r1_soft_format_reward_func`
 - `r1_count_xml`
+
+Call `mlx_lm_lora_list_reward_functions` to discover registered names and
+defaults. This tool does not load custom reward files.
 
 If `reward_functions` is omitted, all default functions are used. If a custom
 file is supplied, it must register the names later passed in
@@ -257,7 +265,7 @@ select the preferred response, and applies a clipped objective with a KL term.
 | `reference_model_path` | `null` | Frozen reference; defaults to the base model |
 | `beta` | `0.1` | KL penalty coefficient |
 | `epsilon` | `0.2` | PPO clipping bound |
-| `temperature` | `0.8` | Sampling temperature |
+| `temperature` | `1.0` | Sampling temperature |
 | `max_completion_length` | `512` | Maximum generated tokens |
 | `dpo_cpo_loss_type` | `"sigmoid"` | Scoring mode; `"ipo"` changes score normalization |
 | `delta` | `50.0` | Accepted for DPOP-compatible scoring, but not otherwise used by PPO loss |
@@ -385,9 +393,9 @@ pass a separate sampling temperature to XPO.
 
 Before starting a reinforcement job:
 
-1. Confirm the exact mode spelling: `grpo`, `rlhf_reinforce`, `ppo`,
+1. Confirm the exact mode spelling: `grpo`, `klpo`, `rlhf_reinforce`, `ppo`,
    `online_dpo`, or `xpo`.
-2. Confirm the dataset schema: GRPO needs `prompt` and `answer`; all online
+2. Confirm the dataset schema: GRPO and KLPO need `prompt` and `answer`; all online
    judge modes need `prompt`.
 3. Confirm reward function names or the tenant-local reward file before using a
    custom GRPO reward setup.

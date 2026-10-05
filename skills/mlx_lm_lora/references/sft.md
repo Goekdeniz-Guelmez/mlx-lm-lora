@@ -45,7 +45,7 @@ precedence.
 | `optimizer_config` | optimizer-specific empty mapping | Extra optimizer keyword arguments |
 | `learning_rate` | `1e-5` | Positive optimizer learning rate |
 | `lr_schedule` | `null` | MLX-LM schedule expression |
-| `batch_size` | `4` | Per-step batch size; keep it divisible by worker count |
+| `batch_size` | `1` | Per-step batch size; keep it divisible by worker count |
 | `iters` | `null` | Number of optimizer iterations |
 | `epochs` | `null` | Converted to iterations when `iters` is omitted |
 | `gradient_accumulation_steps` | `1` | Accumulate minibatches before updating |
@@ -66,8 +66,8 @@ precedence.
 | `test_batches` | `500` | Test batches; `-1` means all |
 | `fuse` | `true` | Merge and save the trained adapter with the base model |
 
-For quantized loading, set at most one of `load_in_4bits`, `load_in_6bits`, or
-`load_in_8bits` to `true`. These control model loading and are independent of
+For quantized loading, set at most one of `load_in_4bits`, `load_in_6bits`,
+`load_in_8bits`, or `load_in_mxfp4` to `true`. These control model loading and are independent of
 `train_type`.
 
 ## Loss algorithms
@@ -202,7 +202,7 @@ QAT is available on the SFT path when the deployment target is quantized:
 | --- | ---: | --- |
 | `qat_enable` | `false` | Enable straight-through fake-quantized linear forwards |
 | `qat_bits` | `8` | Projection bit width; implementation accepts 2–16 |
-| `qat_group_size` | `64` | Last-dimension group size; smaller groups are more local |
+| `qat_group_size` | `64` | Last-dimension group size; 0 means per-tensor; smaller positive groups are more local |
 | `qat_mode` | `"affine"` | The only supported mode |
 | `qat_start_step` | `1` | First optimizer step with QAT projection |
 | `qat_interval` | `1` | Apply the projection every N optimizer steps |

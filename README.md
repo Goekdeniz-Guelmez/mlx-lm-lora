@@ -223,22 +223,41 @@ Install the skill into the global skills directory for your harness:
 
 ```shell
 # Codex
-mlx_lm_lora.mcp --install-skill codex
+mlx-lm-lora-skills --codex
 
 # Claude Code
-mlx_lm_lora.mcp --install-skill claude
+mlx-lm-lora-skills --claude
 
 # Hermes
-mlx_lm_lora.mcp --install-skill hermes
+mlx-lm-lora-skills --hermes
+
+# Multiple harnesses, or every supported harness
+mlx-lm-lora-skills --codex --claude
+mlx-lm-lora-skills --all
 ```
+
+You can also run the installer directly from GitHub with `uvx`:
+
+```shell
+uvx --from git+https://github.com/Goekdeniz-Guelmez/mlx-lm-lora.git mlx-lm-lora-skills --codex
+```
+
+Replace `--codex` with `--claude`, `--hermes`, or `--all` as needed. To install
+from a specific branch or tag, append `@<ref>` to the Git URL. For example,
+use `git+https://github.com/Goekdeniz-Guelmez/mlx-lm-lora.git@add-a-mcp-server`
+while the installer is on that branch. The command installs the bundled skill;
+configure and run the MCP server separately. `uvx` resolves the package's
+normal dependencies, but the installer itself only uses the Python standard
+library and does not start MCP or load a model.
 
 The equivalent module command is:
 
 ```shell
-python -m mlx_lm_lora mcp --install-skill codex
+python -m mlx_lm_lora skills --codex
 ```
 
-Replace `codex` with `claude` or `hermes` as needed. The destinations are
+The existing `mlx_lm_lora.mcp --install-skill codex` command remains supported.
+The destinations are
 `~/.codex/skills/mlx_lm_lora`, `~/.claude/skills/mlx_lm_lora`, and
 `~/.hermes/skills/mlx_lm_lora`. Existing files for this skill are updated in
 place, while other installed skills are preserved.
@@ -290,13 +309,30 @@ to all tenants.
 
 The server exposes these tools:
 
-- `mlx_lm_lora_get_capabilities` — supported training modes and server behavior.
+- `mlx_lm_lora_get_capabilities` — supported modes, config keys and choices, feature support, and configured tenant.
+- `mlx_lm_lora_list_reward_functions` — registered GRPO/KLPO rewards and defaults without loading models or custom files.
 - `mlx_lm_lora_validate_training_config` — validate a config without training.
 - `mlx_lm_lora_start_training` — queue a training job and return its `job_id`.
 - `mlx_lm_lora_get_training_status` — inspect a tenant's job status and artifact path.
 - `mlx_lm_lora_list_training_runs` — list recent jobs for one tenant.
 - `mlx_lm_lora_get_training_log` — read a bounded log tail for one job.
 - `mlx_lm_lora_cancel_training` — cancel a job that has not started yet.
+
+MCP supports all twelve backend modes, including `dsla` and `klpo`. DSLA
+accepts `dsla_loss` and the `latent_*` alignment settings; KLPO accepts
+`klpo_route`, `klpo_kl_estimator`, `klpo_mc_samples`, `klpo_top_k`, and
+`klpo_tail_floor`. Sequence MC-KL requires at least two auxiliary samples.
+Use `micro_batch_size` for online DPO, XPO, RLHF REINFORCE, and PPO scoring,
+and `recurrence_chunk_size` for memory-safe recurrent fallbacks (default 64).
+Quantized loading includes `load_in_mxfp4`; select at most one loading flag.
+QAT is supported for SFT, DPO, ORPO, and DSLA, including per-tensor projection
+with `qat_group_size: 0`. Cached `efficient_long_context` processing supports
+SFT, DPO, CPO, and ORPO; DSLA needs full-sequence latent pooling.
+
+Validation checks these options before queueing a job. It cannot verify Hub
+availability, dataset contents, model-specific layer indices, or memory
+capacity without loading the training inputs. For reward discovery, use the
+listing tool instead of `list_reward_functions: true` in a training request.
 
 Example tool input for SFT:
 

@@ -42,6 +42,7 @@ setup(
         "console_scripts": [
             "mlx_lm_lora.train = mlx_lm_lora.train:main",
             "mlx_lm_lora.mcp = mlx_lm_lora.mcp:main",
+            "mlx-lm-lora-skills = mlx_lm_lora.skills:main",
         ]
     },
 )

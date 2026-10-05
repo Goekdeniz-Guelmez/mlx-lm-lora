@@ -19,12 +19,32 @@ Common natural-language mappings:
 | 3 epochs | `epochs` | `3` |
 | max context 512 | `max_seq_length` | `512` |
 | batch size 2 | `batch_size` | `2` |
+| scoring microbatch of 1 | `micro_batch_size` | `1` |
+| recurrent chunks of 32 tokens | `recurrence_chunk_size` | `32` |
+| mixed FP4 / MXFP4 | `load_in_mxfp4` | `true` |
+| DSLA with ORPO objective | `train_mode`, `dsla_loss` | `"dsla"`, `"orpo"` |
+| sequence KLPO with TopK-KL | `train_mode`, `klpo_route`, `klpo_kl_estimator` | `"klpo"`, `"sequence"`, `"topk"` |
 | learning rate 1e-5 | `learning_rate` | `0.00001` |
 | save every 100 steps | `save_every` | `100` |
 
 Do not send CLI spellings such as `--train-mode`; use JSON field names such as
 `train_mode`. Do not send a YAML `config` path through MCP. Put all requested
 options directly in the object.
+
+Discover accepted fields and enum values from `mlx_lm_lora_get_capabilities`.
+Its `features` describes mode support for QAT, cached long-context processing,
+microbatches, DSLA, and KLPO. The MCP default prompt batch is 1 and recurrent
+chunk size is 64. Optional fields may be omitted to use backend defaults.
+
+Mode-specific details live in [dsla.md](dsla.md), [klpo.md](klpo.md), and
+[memory.md](memory.md). A config can pass structural validation while failing
+later on an unavailable Hub repository, incompatible dataset schema, model
+architecture, or insufficient memory; inspect the job status and log.
+
+`qat_group_size: 0` means per-tensor quantization. Set only one quantized-loading
+flag. Online DPO, XPO, RLHF REINFORCE, and PPO require `judge` to name a model.
+Use the reward-listing MCP tool for discovery rather than
+`list_reward_functions: true`, which exits the backend without training.
 
 Example:
 

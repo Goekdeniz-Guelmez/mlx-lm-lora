@@ -18,9 +18,9 @@ import argparse
 import contextlib
 import json
 import logging
+import math
 import os
 import re
-import shutil
 import threading
 import traceback
 import uuid
@@ -30,6 +30,8 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from .skills import SKILL_NAME, SKILL_TARGETS, install_skill
 
 try:
     from mcp.server.fastmcp import FastMCP
@@ -54,25 +56,44 @@ HF_DATASET_ID_PATTERN = re.compile(
 )
 JOB_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 JOB_STATES = frozenset({"queued", "running", "succeeded", "failed", "cancelled"})
-SKILL_NAME = "mlx_lm_lora"
-SKILL_TARGETS = {
-    "codex": Path(".codex") / "skills",
-    "claude": Path(".claude") / "skills",
-    "hermes": Path(".hermes") / "skills",
-}
 TRAINING_MODES = (
     "sft",
     "dpo",
+    "dsla",
     "ftpo",
     "cpo",
     "orpo",
     "grpo",
+    "klpo",
     "online_dpo",
     "xpo",
     "rlhf_reinforce",
     "ppo",
 )
 TRAINING_TYPES = ("lora", "dora", "full")
+TRAINING_CONFIG_CHOICES = {
+    "train_mode": TRAINING_MODES,
+    "train_type": TRAINING_TYPES,
+    "optimizer": ("adam", "adamw", "muon"),
+    "sft_loss_type": ("nll", "chunked_nll", "dft"),
+    "dpo_cpo_loss_type": ("sigmoid", "hinge", "ipo", "dpop"),
+    "dsla_loss": ("dpo", "orpo", "cpo"),
+    "latent_variant": ("similarity", "direction", "both"),
+    "latent_pooling": (
+        "answer_mean",
+        "last_token",
+        "last_k_mean",
+        "prompt_answer_mean",
+    ),
+    "grpo_loss_type": ("grpo", "bnpo", "dr_grpo"),
+    "importance_sampling_level": ("token", "sequence"),
+    "klpo_route": ("token", "sequence"),
+    "klpo_kl_estimator": ("mc", "topk", "binary", "full"),
+    "qat_mode": ("affine",),
+}
+QAT_MODES = ("sft", "dpo", "orpo", "dsla")
+LONG_CONTEXT_MODES = ("sft", "dpo", "cpo", "orpo")
+ONLINE_JUDGE_MODES = ("online_dpo", "xpo", "rlhf_reinforce", "ppo")
 TRAINING_CONFIG_KEYS = frozenset(
     {
         "model",
@@ -93,6 +114,7 @@ TRAINING_CONFIG_KEYS = frozenset(
         "iters",
         "epochs",
         "gradient_accumulation_steps",
+        "micro_batch_size",
         "val_batches",
         "learning_rate",
         "steps_per_report",
@@ -106,12 +128,20 @@ TRAINING_CONFIG_KEYS = frozenset(
         "config",
         "grad_checkpoint",
         "efficient_long_context",
+        "recurrence_chunk_size",
         "wandb",
         "seed",
         "fuse",
         "beta",
         "reward_scaling",
         "dpo_cpo_loss_type",
+        "dsla_loss",
+        "latent_weight",
+        "latent_margin",
+        "latent_gamma",
+        "latent_variant",
+        "latent_pooling",
+        "latent_layer",
         "delta",
         "reference_model_path",
         "lambda_mse_target",
@@ -132,6 +162,11 @@ TRAINING_CONFIG_KEYS = frozenset(
         "grpo_loss_type",
         "epsilon_high",
         "importance_sampling_level",
+        "klpo_route",
+        "klpo_kl_estimator",
+        "klpo_mc_samples",
+        "klpo_top_k",
+        "klpo_tail_floor",
         "qat_enable",
         "qat_bits",
         "qat_group_size",
@@ -143,62 +178,6 @@ TRAINING_CONFIG_KEYS = frozenset(
         "lr_schedule",
     }
 )
-
-
-def _skill_source_dir() -> Path:
-    """Return the packaged harness skill directory."""
-
-    source_dir = Path(__file__).resolve().parent.parent / "skills" / SKILL_NAME
-    if not source_dir.is_dir() or not (source_dir / "SKILL.md").is_file():
-        raise FileNotFoundError(
-            "The packaged mlx_lm_lora skill is missing from the installation: "
-            f"{source_dir}"
-        )
-    return source_dir
-
-
-def install_skill(
-    target: str,
-    *,
-    home_dir: Path | None = None,
-    source_dir: Path | None = None,
-) -> Path:
-    """Install the bundled harness skill for one supported agent.
-
-    Args:
-        target: Harness name: ``codex``, ``claude``, or ``hermes``.
-        home_dir: Optional home directory override, primarily for testing.
-        source_dir: Optional skill source override, primarily for testing.
-
-    Returns:
-        The installed skill directory.
-
-    Raises:
-        ValueError: If ``target`` is not supported.
-        FileNotFoundError: If the bundled skill is unavailable.
-        FileExistsError: If the destination is not a directory.
-    """
-
-    if target not in SKILL_TARGETS:
-        supported_targets = ", ".join(sorted(SKILL_TARGETS))
-        raise ValueError(f"target must be one of: {supported_targets}")
-
-    source = (source_dir or _skill_source_dir()).expanduser().resolve()
-    if not source.is_dir() or not (source / "SKILL.md").is_file():
-        raise FileNotFoundError(f"Skill source directory is invalid: {source}")
-
-    home = (home_dir or Path.home()).expanduser()
-    destination = home / SKILL_TARGETS[target] / SKILL_NAME
-    if source == destination.resolve(strict=False):
-        return destination
-    if destination.is_symlink():
-        raise FileExistsError(
-            f"Refusing to install through a symbolic-link destination: {destination}"
-        )
-
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(source, destination, dirs_exist_ok=True)
-    return destination
 
 
 class TenantError(ValueError):
@@ -369,9 +348,7 @@ class ServerSettings:
             tenant_id=validate_tenant_id(tenant_id) if tenant_id else None,
             allowed_tenants=allowed_tenants,
             shared_root=Path(shared_root).expanduser() if shared_root else None,
-            transport=os.environ.get(
-                "MLX_LM_LORA_MCP_TRANSPORT", "streamable-http"
-            ),
+            transport=os.environ.get("MLX_LM_LORA_MCP_TRANSPORT", "streamable-http"),
             host=os.environ.get("MLX_LM_LORA_MCP_HOST", "127.0.0.1"),
             port=int(os.environ.get("MLX_LM_LORA_MCP_PORT", "8008")),
             auth_tokens=auth_tokens,
@@ -556,17 +533,7 @@ def normalize_training_config(
     normalized["model"] = _normalize_local_reference(model, tenant_id, tenants)
     normalized["data"] = _validate_hf_dataset_id(data)
 
-    choice_fields = {
-        "train_mode": TRAINING_MODES,
-        "train_type": TRAINING_TYPES,
-        "optimizer": ("adam", "adamw", "muon"),
-        "sft_loss_type": ("nll", "chunked_nll", "dft"),
-        "dpo_cpo_loss_type": ("sigmoid", "hinge", "ipo", "dpop"),
-        "grpo_loss_type": ("grpo", "bnpo", "dr_grpo"),
-        "importance_sampling_level": ("token", "sequence"),
-        "qat_mode": ("affine",),
-    }
-    for key, choices in choice_fields.items():
+    for key, choices in TRAINING_CONFIG_CHOICES.items():
         if (
             key in normalized
             and normalized[key] is not None
@@ -574,8 +541,32 @@ def normalize_training_config(
         ):
             raise ValueError(f"{key} must be one of {', '.join(choices)}")
     for key in (
+        "train",
+        "test",
+        "fuse",
+        "mask_prompt",
+        "grad_checkpoint",
+        "efficient_long_context",
+        "qat_enable",
+        "load_in_4bits",
+        "load_in_6bits",
+        "load_in_8bits",
+        "load_in_mxfp4",
+        "list_reward_functions",
+    ):
+        if (
+            key in normalized
+            and normalized[key] is not None
+            and not isinstance(normalized[key], bool)
+        ):
+            raise ValueError(f"{key} must be a boolean")
+    for key in (
         "batch_size",
         "gradient_accumulation_steps",
+        "micro_batch_size",
+        "recurrence_chunk_size",
+        "klpo_mc_samples",
+        "klpo_top_k",
         "steps_per_report",
         "steps_per_eval",
         "save_every",
@@ -583,7 +574,6 @@ def normalize_training_config(
         "group_size",
         "max_completion_length",
         "qat_bits",
-        "qat_group_size",
         "qat_start_step",
         "qat_interval",
     ):
@@ -598,13 +588,102 @@ def normalize_training_config(
             isinstance(value, bool) or not isinstance(value, int) or value < 1
         ):
             raise ValueError(f"{key} must be a positive integer")
-    learning_rate = normalized.get("learning_rate")
-    if learning_rate is not None and (
-        isinstance(learning_rate, bool)
-        or not isinstance(learning_rate, (int, float))
-        or learning_rate <= 0
+    for key, allow_zero in (
+        ("learning_rate", False),
+        ("latent_weight", True),
+        ("latent_margin", True),
+        ("latent_gamma", False),
+        ("klpo_tail_floor", False),
     ):
-        raise ValueError("learning_rate must be a positive number")
+        value = normalized.get(key)
+        if value is not None and (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or (value < 0 if allow_zero else value <= 0)
+        ):
+            bound = "nonnegative" if allow_zero else "positive"
+            raise ValueError(f"{key} must be a finite {bound} number")
+    tail_floor = normalized.get("klpo_tail_floor")
+    if tail_floor is not None and tail_floor >= 1:
+        raise ValueError("klpo_tail_floor must be in (0, 1)")
+    group_size = normalized.get("qat_group_size")
+    if group_size is not None and (
+        isinstance(group_size, bool)
+        or not isinstance(group_size, int)
+        or group_size < 0
+    ):
+        raise ValueError("qat_group_size must be a nonnegative integer (0=per-tensor)")
+    qat_bits = normalized.get("qat_bits")
+    if qat_bits is not None and not 2 <= qat_bits <= 16:
+        raise ValueError("qat_bits must be in [2, 16]")
+
+    layer = normalized.get("latent_layer")
+    if layer is not None:
+        if isinstance(layer, bool) or not isinstance(layer, (str, int)):
+            raise ValueError(
+                "latent_layer must be final, middle, late, or a layer index"
+            )
+        if isinstance(layer, int):
+            layer = str(layer)
+        if layer not in ("final", "middle", "late") and not re.fullmatch(
+            r"[0-9]+", layer
+        ):
+            raise ValueError(
+                "latent_layer must be final, middle, late, or a layer index"
+            )
+        normalized["latent_layer"] = layer
+
+    mode = normalized.get("train_mode") or "sft"
+    if mode in ("dsla", "klpo"):
+        for key in ("beta", "temperature") if mode == "klpo" else ("beta",):
+            value = normalized.get(key)
+            if value is not None and (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                or value <= 0
+            ):
+                raise ValueError(f"{key} must be a finite positive number for {mode}")
+    if mode == "dsla":
+        delta = normalized.get("delta")
+        if delta is not None and (
+            isinstance(delta, bool)
+            or not isinstance(delta, (int, float))
+            or not math.isfinite(delta)
+            or delta < 0
+        ):
+            raise ValueError("delta must be a finite nonnegative number for dsla")
+        if normalized.get("max_seq_length", 2048) == 1:
+            raise ValueError("DSLA requires max_seq_length >= 2")
+    if (
+        mode == "klpo"
+        and (normalized.get("klpo_route") or "token") == "sequence"
+        and (normalized.get("klpo_kl_estimator") or "mc") == "mc"
+        and normalized.get("klpo_mc_samples", 128) == 1
+    ):
+        raise ValueError("Sequence MC-KL requires klpo_mc_samples >= 2")
+    if normalized.get("efficient_long_context") and mode not in LONG_CONTEXT_MODES:
+        raise ValueError(
+            f"efficient_long_context is not supported for {mode}; "
+            "use grad_checkpoint and recurrence_chunk_size instead"
+        )
+    if normalized.get("qat_enable") and mode not in QAT_MODES:
+        raise ValueError(f"QAT is only supported for {', '.join(QAT_MODES)}")
+    if mode in ONLINE_JUDGE_MODES and not normalized.get("judge"):
+        raise ValueError(f"{mode} requires a judge model")
+    quantization_flags = (
+        "load_in_4bits",
+        "load_in_6bits",
+        "load_in_8bits",
+        "load_in_mxfp4",
+    )
+    if sum(bool(normalized.get(key)) for key in quantization_flags) > 1:
+        raise ValueError("Set at most one model-loading quantization flag")
+    if normalized.get("list_reward_functions"):
+        raise ValueError(
+            "Use mlx_lm_lora_list_reward_functions instead of starting a listing job"
+        )
 
     for key in ("reference_model_path", "judge"):
         if key in normalized and normalized[key] is not None:
@@ -920,6 +999,28 @@ def create_server(settings: ServerSettings | None = None) -> Any:
             "server": "mlx-lm-lora",
             "training_modes": list(TRAINING_MODES),
             "training_types": list(TRAINING_TYPES),
+            "training_config_keys": sorted(
+                TRAINING_CONFIG_KEYS
+                - {"config", "lm_studio_name", "list_reward_functions"}
+            ),
+            "config_choices": {
+                key: list(choices) for key, choices in TRAINING_CONFIG_CHOICES.items()
+            },
+            "features": {
+                "quantized_loading": [
+                    "load_in_4bits",
+                    "load_in_6bits",
+                    "load_in_8bits",
+                    "load_in_mxfp4",
+                ],
+                "qat_modes": list(QAT_MODES),
+                "efficient_long_context_modes": list(LONG_CONTEXT_MODES),
+                "micro_batch_modes": list(ONLINE_JUDGE_MODES),
+                "recurrence_chunk_size": "Positive integer; backend default is 64.",
+                "dsla": "DPO, ORPO, or CPO with latent alignment; DPO uses a reference.",
+                "klpo": "Token/sequence regression with mc, topk, binary, or full KL; no reference model.",
+            },
+            "configured_tenant_id": settings.tenant_id,
             "transports": ["stdio", "streamable-http"],
             "job_behavior": "Training jobs are queued and run one at a time.",
             "tenant_behavior": (
@@ -927,6 +1028,31 @@ def create_server(settings: ServerSettings | None = None) -> Any:
                 "Use tenant:// paths for local tenant files."
             ),
             "required_config": ["model", "data"],
+            "dataset_source": "Hugging Face dataset repository ID only.",
+            "unsupported_options": {
+                "config": "Pass options directly in the config object.",
+                "lm_studio_name": "Use a tenant-scoped adapter_path.",
+                "list_reward_functions": "Use mlx_lm_lora_list_reward_functions.",
+            },
+        }
+
+    @server.tool()
+    def mlx_lm_lora_list_reward_functions() -> dict[str, Any]:
+        """List registered GRPO/KLPO rewards without loading models or custom files."""
+
+        from .trainer.grpo_reward_functions import (
+            get_default_reward_functions,
+            list_available_reward_functions,
+        )
+
+        return {
+            "reward_functions": sorted(list_available_reward_functions()),
+            "default_reward_functions": [
+                reward.__name__ for reward in get_default_reward_functions()
+            ],
+            "training_modes": ["grpo", "klpo"],
+            "reward_functions_format": "Comma-separated names.",
+            "reward_weights_format": "Comma-separated numeric weights, optionally in brackets.",
         }
 
     @server.tool()
@@ -940,7 +1066,7 @@ def create_server(settings: ServerSettings | None = None) -> Any:
             normalized = normalize_training_config(
                 config, selected_tenant, tenants, "validation-preview"
             )
-        except (TenantError, ValueError, PermissionError) as exc:
+        except (TenantError, ValueError, TypeError, PermissionError) as exc:
             return {"valid": False, "tenant_id": selected_tenant, "errors": [str(exc)]}
         return {
             "valid": True,
@@ -1114,9 +1240,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     # LM Studio to fail with a 404 during initialization when users copy it.
     # Emit the complete URL on stderr through logging (never stdout, which is
     # reserved for protocol messages when stdio is used).
-    display_host = (
-        "127.0.0.1" if settings.host in {"0.0.0.0", "::"} else settings.host
-    )
+    display_host = "127.0.0.1" if settings.host in {"0.0.0.0", "::"} else settings.host
     LOGGER.info(
         "MCP Streamable HTTP endpoint: http://%s:%d/mcp",
         display_host,

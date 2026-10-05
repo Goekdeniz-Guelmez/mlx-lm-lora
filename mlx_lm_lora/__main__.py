@@ -5,6 +5,7 @@ if __name__ == "__main__":
     subcommands = {
         "train",
         "mcp",
+        "skills",
     }
     if len(sys.argv) < 2:
         raise ValueError(f"CLI requires a subcommand in {subcommands}")
