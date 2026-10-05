@@ -203,6 +203,13 @@ The process-level `MLX_LM_LORA_TENANT_ID` is recommended for a local agent. It
 means the agent does not need to choose a tenant in every tool call and cannot
 switch to another tenant through model-generated arguments.
 
+If no tenant ID is configured on a local single-tenant server, the server
+generates one random default tenant ID at startup and reuses it for subsequent
+tool calls. The ID is returned by the capabilities and job tools. Set
+`MLX_LM_LORA_TENANT_ID` if you want that tenant to stay the same across server
+restarts. Shared or authenticated servers continue to select tenants through
+their allow-list or authenticated identity.
+
 For LM Studio, open **Program > Install > Edit mcp.json** and add the same
 stdio server entry. If LM Studio cannot find the executable on its application
 PATH, use the absolute path printed by `which mlx_lm_lora.mcp` as `command`.
@@ -309,7 +316,7 @@ to all tenants.
 
 The server exposes these tools:
 
-- `mlx_lm_lora_get_capabilities` — supported modes, config keys and choices, feature support, and configured tenant.
+- `mlx_lm_lora_get_capabilities` — supported modes, config keys and choices, feature support, and configured or generated default tenant.
 - `mlx_lm_lora_list_reward_functions` — registered GRPO/KLPO rewards and defaults without loading models or custom files.
 - `mlx_lm_lora_validate_training_config` — validate a config without training.
 - `mlx_lm_lora_start_training` — queue a training job and return its `job_id`.

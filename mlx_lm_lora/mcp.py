@@ -371,6 +371,18 @@ class TenantManager:
     def __init__(self, settings: ServerSettings):
         self.settings = settings
         self.tenant_root = settings.tenant_root.expanduser().resolve(strict=False)
+        self.generated_tenant_id: str | None = None
+        if (
+            settings.tenant_id is None
+            and settings.allowed_tenants is None
+            and not settings.auth_tokens
+            and settings.auth_issuer_url is None
+        ):
+            self.generated_tenant_id = f"tenant-{uuid.uuid4().hex}"
+            LOGGER.info(
+                "No tenant ID configured; generated default tenant %s",
+                self.generated_tenant_id,
+            )
 
     def resolve_tenant(
         self,
@@ -402,11 +414,16 @@ class TenantManager:
                 "The authenticated principal cannot access this tenant"
             )
 
-        resolved = configured or authenticated or requested
+        resolved = (
+            configured
+            or authenticated
+            or requested
+            or self.generated_tenant_id
+        )
         if resolved is None:
             raise TenantError(
-                "tenant_id is required; configure MLX_LM_LORA_TENANT_ID for a "
-                "single-tenant agent or pass tenant_id for a shared server"
+                "tenant_id is required for this shared or authenticated server; "
+                "pass tenant_id or use an authenticated tenant"
             )
         if (
             self.settings.allowed_tenants is not None
@@ -1021,6 +1038,9 @@ def create_server(settings: ServerSettings | None = None) -> Any:
                 "klpo": "Token/sequence regression with mc, topk, binary, or full KL; no reference model.",
             },
             "configured_tenant_id": settings.tenant_id,
+            "default_tenant_id": (
+                settings.tenant_id or tenants.generated_tenant_id
+            ),
             "transports": ["stdio", "streamable-http"],
             "job_behavior": "Training jobs are queued and run one at a time.",
             "tenant_behavior": (
