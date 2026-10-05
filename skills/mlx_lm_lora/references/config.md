@@ -1,62 +1,101 @@
-# MCP training configuration
+# Shared MCP configuration
 
-The MCP tools accept a `config` object matching the training CLI's options.
-The server requires `model` and `data`, forces `train: true` when a job starts,
-and chooses a tenant-scoped `adapter_path` when one is not supplied.
+Use this reference for field mapping and options shared across algorithms.
+The connected server's `mlx_lm_lora_get_capabilities` response takes precedence
+when versions differ. Algorithm-specific options belong in each mode guide.
 
-`data` must be a Hugging Face dataset repository ID, for example
-`mlx-community/wikisql` or `org/dataset`. Do not send a local JSONL/CSV path,
-`tenant://` dataset path, or HTTP URL as `data`. Tenant-local paths are only
-for supported auxiliary inputs such as reward functions and resume adapters.
+## Request shape
 
-Common natural-language mappings:
-
-| User wording | MCP field | Example |
-| --- | --- | --- |
-| LoRA | `train_type` | `"lora"` |
-| SFT | `train_mode` | `"sft"` |
-| 10 steps/iterations | `iters` | `10` |
-| 3 epochs | `epochs` | `3` |
-| max context 512 | `max_seq_length` | `512` |
-| batch size 2 | `batch_size` | `2` |
-| scoring microbatch of 1 | `micro_batch_size` | `1` |
-| recurrent chunks of 32 tokens | `recurrence_chunk_size` | `32` |
-| mixed FP4 / MXFP4 | `load_in_mxfp4` | `true` |
-| DSLA with ORPO objective | `train_mode`, `dsla_loss` | `"dsla"`, `"orpo"` |
-| sequence KLPO with TopK-KL | `train_mode`, `klpo_route`, `klpo_kl_estimator` | `"klpo"`, `"sequence"`, `"topk"` |
-| learning rate 1e-5 | `learning_rate` | `0.00001` |
-| save every 100 steps | `save_every` | `100` |
-
-Do not send CLI spellings such as `--train-mode`; use JSON field names such as
-`train_mode`. Do not send a YAML `config` path through MCP. Put all requested
-options directly in the object.
-
-Discover accepted fields and enum values from `mlx_lm_lora_get_capabilities`.
-Its `features` describes mode support for QAT, cached long-context processing,
-microbatches, DSLA, and KLPO. The MCP default prompt batch is 1 and recurrent
-chunk size is 64. Optional fields may be omitted to use backend defaults.
-
-Mode-specific details live in [dsla.md](dsla.md), [klpo.md](klpo.md), and
-[memory.md](memory.md). A config can pass structural validation while failing
-later on an unavailable Hub repository, incompatible dataset schema, model
-architecture, or insufficient memory; inspect the job status and log.
-
-`qat_group_size: 0` means per-tensor quantization. Set only one quantized-loading
-flag. Online DPO, XPO, RLHF REINFORCE, and PPO require `judge` to name a model.
-Use the reward-listing MCP tool for discovery rather than
-`list_reward_functions: true`, which exits the backend without training.
-
-Example:
+Training tools receive `config` and an optional `tenant_id` as separate tool
+arguments. `model` and `data` are required. MCP forces `train: true` and chooses
+an isolated artifact directory when `adapter_path` is omitted.
 
 ```json
 {
-  "model": "Qwen/Qwen3.5-0.8B",
-  "data": "mlx-community/wikisql",
-  "train": true,
-  "train_type": "lora",
-  "train_mode": "sft",
-  "load_in_4bits": true,
-  "iters": 1,
-  "max_seq_length": 512
+  "tenant_id": "alice",
+  "config": {
+    "model": "org/model",
+    "data": "org/dataset",
+    "train": true,
+    "train_mode": "sft",
+    "train_type": "lora",
+    "iters": 100
+  }
 }
 ```
+
+Preserve Hub identifiers exactly. Dataset sources and schemas are in
+[datasets.md](datasets.md); approved local paths are in
+[multi-tenant.md](multi-tenant.md).
+
+## Map the user's words
+
+| User wording | Field | Value |
+| --- | --- | --- |
+| LoRA / DoRA / full fine-tuning | `train_type` | `"lora"` / `"dora"` / `"full"` |
+| Training algorithm | `train_mode` | Exact mode name from capabilities |
+| Steps / iterations | `iters` | Positive integer |
+| Epochs | `epochs` | Positive integer |
+| Maximum context length | `max_seq_length` | Positive integer |
+| Batch size | `batch_size` | Positive integer |
+| Gradient accumulation | `gradient_accumulation_steps` | Positive integer |
+| Scoring microbatch | `micro_batch_size` | See [memory.md](memory.md) |
+| Recurrent chunk size | `recurrence_chunk_size` | See [memory.md](memory.md) |
+| Quantization / QAT | Loading flags / `qat_*` | See [quantization.md](quantization.md) |
+| Save every N steps | `save_every` | Positive integer |
+| Resume adapter | `resume_adapter_file` | Approved local weights file |
+
+`iters` takes precedence over `epochs`. Without either, the backend runs 100
+iterations. `iters` counts trainer iterations; accumulation can yield fewer
+optimizer updates. Preserve an explicit budget; do not add both fields
+unnecessarily.
+
+## Shared defaults
+
+These are effective defaults for the MCP dictionary entrypoint.
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `train_mode` | `"sft"` | Algorithm |
+| `train_type` | `"lora"` | LoRA, DoRA, or full fine-tuning |
+| `optimizer` | `"adam"` | `"adam"`, `"adamw"`, or `"muon"` |
+| `optimizer_config` | `{"adam": {}, "adamw": {}, "muon": {}}` | Keyword arguments keyed by optimizer name |
+| `learning_rate` | `0.00001` | Finite positive learning rate |
+| `lr_schedule` | `null` | MLX-LM schedule mapping; overrides the constant learning rate |
+| `batch_size` | `1` | Minibatch or prompt batch size |
+| `gradient_accumulation_steps` | `1` | Minibatches accumulated before an update |
+| `num_layers` | `-1` | All adapter layers; positive values select fewer layers |
+| `lora_parameters` | `{"rank": 8, "dropout": 0.0, "scale": 10.0}` | LoRA/DoRA settings; not used for full fine-tuning |
+| `max_seq_length` | `2048` | Token limit, with mode-specific truncation/filtering |
+| `val_batches` | `25` | Validation batches; `-1` uses all |
+| `steps_per_report` | `10` | Training-log interval |
+| `steps_per_eval` | `200` | Validation interval |
+| `save_every` | `100` | Checkpoint interval |
+| `seed` | `0` | Random seed |
+| `wandb` | `null` | Optional Weights & Biases project |
+| `test` | `false` | Evaluate the test split after training |
+| `test_batches` | `500` | Test batches; `-1` uses all |
+| `fuse` | `true` | Merge and save the trained model after training/testing |
+| `resume_adapter_file` | `null` | Resume weights; does not restore optimizer/job state |
+| `adapter_path` | Per-job tenant artifact directory | Adapter and fused-model output |
+
+For an adapter-only run, explicitly set `fuse: false`. For distributed trainer
+use, the batch must be divisible by the worker count; MCP queues one training
+job at a time on the host.
+
+Omit unused optional fields. Use JSON booleans and numbers rather than string
+spellings, except fields with a specific string format such as reward names
+and weights. Memory defaults are in [memory.md](memory.md), and QAT defaults
+in [quantization.md](quantization.md).
+
+## Validation boundaries
+
+MCP accepts explicit option values, not a YAML `config` file. `lm_studio_name`
+is unsupported because it writes outside the tenant workspace. Use
+`mlx_lm_lora_list_reward_functions` instead of putting
+`list_reward_functions: true` in a training config.
+
+Validation checks keys, choices, numeric bounds, compatible features, and
+local path boundaries. It does not load models or datasets; Hub availability,
+split contents, tokenizer compatibility, model-specific layer indices, and
+memory capacity are checked when training runs.
