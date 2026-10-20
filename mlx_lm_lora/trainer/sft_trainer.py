@@ -434,7 +434,11 @@ def evaluate_sft(
     all_losses = mx.distributed.all_sum(all_losses, stream=mx.cpu)
     ntokens = mx.distributed.all_sum(ntokens, stream=mx.cpu)
 
-    return (all_losses / ntokens).item()
+    # Return the token count alongside the loss: callers such as
+    # mlx_lm_lora.train.evaluate_model report the number of evaluated
+    # tokens, and previously unpacked (loss, ntok) from this function
+    # while it only ever returned a float.
+    return (all_losses / ntokens).item(), int(ntokens.item())
 
 
 def train_sft(
@@ -579,7 +583,7 @@ def train_sft(
             and (it == 1 or it % args.steps_per_eval == 0 or it == args.iters)
         ):
             tic = time.perf_counter()
-            val_loss = evaluate_sft(
+            val_loss, _ = evaluate_sft(
                 model=model,
                 dataset=val_dataset,
                 loss=loss,
