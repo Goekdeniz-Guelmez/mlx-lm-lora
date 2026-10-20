@@ -16,6 +16,8 @@ from mlx_lm.tuner.utils import linear_to_lora_layers, load_adapters
 from mlx_lm.utils import dequantize_model, load, save_config, save_model
 from transformers import AutoProcessor
 
+from .chat_template import ensure_chat_template
+
 
 def calculate_iters(train_set, batch_size, epochs) -> int:
     num_samples = len(train_set)
@@ -184,6 +186,11 @@ def from_pretrained(
     """
     print(f"Loading model {model}")
     model, tokenizer = load(model, adapter_path=adapter_path)
+    if ensure_chat_template(tokenizer):
+        print(
+            "No chat template found for this tokenizer; installed a generic "
+            "fallback template so base checkpoints stay trainable."
+        )
     args = vars(model.args) if hasattr(model, "args") else {}
 
     if lora_config is not None:
