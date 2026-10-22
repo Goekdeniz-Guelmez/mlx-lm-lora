@@ -1,6 +1,7 @@
 """Tests for the MCP server. No MLX needed: training is replaced by a fake script."""
 
 import asyncio
+import contextlib
 import json
 import os
 import re
@@ -78,6 +79,64 @@ class Base(unittest.TestCase):
 
 
 class ConfigTests(Base):
+    def test_extra_config_overrides_are_validated(self):
+        cases = [
+            ("iters", -1),
+            ("batch_size", 0),
+            ("max_seq_length", True),
+            ("learning_rate", "fast"),
+            ("learning_rate", float("nan")),
+            ("learning_rate", float("inf")),
+            ("train_mode", "unknown"),
+            ("train_mode", []),
+            ("train_type", "unknown"),
+            ("model", ""),
+            ("data", None),
+        ]
+        for key, value in cases:
+            with self.subTest(key=key, value=value):
+                _, errors, _ = ms.build_config(
+                    "a/b", str(self.data), extra_config=json.dumps({key: value})
+                )
+                self.assertTrue(errors)
+                with self.assertRaises(ValueError):
+                    self.start(extra_config=json.dumps({key: value}))
+        self.assertFalse(self.manager.root.exists())
+
+    def test_valid_overrides_replace_invalid_flat_arguments(self):
+        cfg, errors, _ = ms.build_config(
+            "",
+            "",
+            train_mode="unknown",
+            iters=0,
+            extra_config=json.dumps(
+                {
+                    "model": "a/b",
+                    "data": str(self.data),
+                    "train_mode": "sft",
+                    "iters": 5,
+                }
+            ),
+        )
+        self.assertEqual(errors, [])
+        self.assertEqual(cfg["iters"], 5)
+
+    def test_extra_config_requires_string_keys(self):
+        _, errors, _ = ms.build_config(
+            "a/b", str(self.data), extra_config="{1: value, other: value}"
+        )
+        self.assertIn("extra_config keys must be strings.", errors)
+
+    def test_missing_input_files_are_reported(self):
+        for key in ("resume_adapter_file", "reward_functions_file"):
+            with self.subTest(key=key):
+                _, errors, _ = ms.build_config(
+                    "a/b",
+                    str(self.data),
+                    extra_config=json.dumps({key: str(self.data / "missing")}),
+                )
+                self.assertTrue(any(key in error for error in errors))
+
     def test_valid_config_uses_absolute_paths(self):
         cfg, errors, notes = ms.build_config(
             "mlx-community/Qwen3-0.6B-4bit", str(self.data)
@@ -146,6 +205,106 @@ class ConfigTests(Base):
 
 
 class RunTests(Base):
+    def test_extra_config_paths_work_in_trainer_directory(self):
+        root = Path(self.tmp.name)
+        for name in ("model", "judge", "reference"):
+            (root / name).mkdir()
+        for name in ("checkpoint.safetensors", "rewards.py"):
+            (root / name).touch()
+        extra = {
+            "model": "model",
+            "data": "data",
+            "judge": "judge",
+            "reference_model_path": "reference",
+            "resume_adapter_file": "checkpoint.safetensors",
+            "reward_functions_file": "rewards.py",
+        }
+        # This trainer opens the real configured inputs from the run directory.
+        self.fake.write_text(
+            f"#!{sys.executable}\n"
+            "import sys, yaml\n"
+            "from pathlib import Path\n"
+            "cfg = yaml.safe_load(Path(sys.argv[-1]).read_text())\n"
+            f"for key in {tuple(extra)!r}:\n"
+            "    path = Path(cfg[key])\n"
+            "    assert path.is_absolute() and path.exists(), (key, path)\n"
+            "for key in ('resume_adapter_file', 'reward_functions_file'):\n"
+            "    Path(cfg[key]).read_bytes()\n"
+        )
+        with contextlib.chdir(root):
+            run = self.start(extra_config=json.dumps(extra))
+        run = wait_for(self.manager, run["id"], {"completed", "failed"})
+        self.assertEqual(run["status"], "completed", self.manager.log_tail(run))
+
+    def test_concurrent_server_processes_allow_only_one_run(self):
+        root = Path(self.tmp.name)
+        gate = root / "start"
+        script = """
+import sys
+import time
+from pathlib import Path
+from unittest import mock
+from mlx_lm_lora import mcp_server as ms
+
+runs, python, data, ready, gate = sys.argv[1:]
+original_popen = ms.subprocess.Popen
+def delayed_popen(*args, **kwargs):
+    # Widen the gap between the active-run check and writing run.json.
+    time.sleep(0.3)
+    return original_popen(*args, **kwargs)
+Path(ready).touch()
+while not Path(gate).exists():
+    time.sleep(0.01)
+with mock.patch.object(ms.subprocess, "Popen", delayed_popen):
+    try:
+        ms.RunManager(runs, python=python).start(model="a/b", data=data)
+    except RuntimeError:
+        print("blocked", flush=True)
+    else:
+        print("started", flush=True)
+"""
+        env = {**os.environ, "PYTHONPATH": str(REPO), "FAKE_SLEEP": "30"}
+        clients = []
+        try:
+            for index in range(2):
+                clients.append(
+                    subprocess.Popen(
+                        [
+                            sys.executable, "-c", script, str(self.manager.root),
+                            str(self.fake), str(self.data),
+                            str(root / f"ready{index}"), str(gate),
+                        ],
+                        env=env,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                    )
+                )
+            deadline = time.monotonic() + 10
+            while not all((root / f"ready{i}").exists() for i in range(2)):
+                if time.monotonic() >= deadline:
+                    self.fail("server processes did not become ready")
+                time.sleep(0.01)
+            gate.touch()
+            outcomes = []
+            for client in clients:
+                output, error = client.communicate(timeout=10)
+                self.assertEqual(client.returncode, 0, error)
+                outcomes.append(output.strip())
+            self.assertCountEqual(outcomes, ["started", "blocked"])
+            self.assertEqual(len(self.manager.runs()), 1)
+        finally:
+            for client in clients:
+                if client.poll() is None:
+                    client.kill()
+                client.communicate()
+            # Trainers outlive the short-lived client/server processes.
+            for run in self.manager.runs():
+                try:
+                    os.killpg(run["pid"], 9)
+                except ProcessLookupError:
+                    pass
+
     def test_popen_is_detached_from_stdio(self):
         with mock.patch.object(ms.subprocess, "Popen") as popen:
             popen.return_value.pid = 4242

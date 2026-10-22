@@ -17,8 +17,10 @@ from __future__ import annotations
 
 import argparse
 import ast
+import fcntl
 import hmac
 import json
+import math
 import os
 import re
 import secrets
@@ -97,7 +99,10 @@ def reward_functions() -> list[str]:
 
 def _resolve_source(value: str, what: str, errors: list[str], notes: list[str]) -> str:
     """Local paths become absolute; anything shaped like owner/name is a Hub id."""
-    value = (value or "").strip()
+    if not isinstance(value, str):
+        errors.append(f"{what} must be a string.")
+        return ""
+    value = value.strip()
     if not value:
         errors.append(f"{what} is required.")
         return value
@@ -133,8 +138,8 @@ def build_config(
     errors: list[str] = []
     notes: list[str] = []
     cfg: dict[str, Any] = {
-        "model": _resolve_source(model, "model", errors, notes),
-        "data": _resolve_source(data, "data", errors, notes),
+        "model": model,
+        "data": data,
         "train": True,
         "train_mode": train_mode,
         "train_type": train_type,
@@ -145,17 +150,6 @@ def build_config(
         "max_seq_length": max_seq_length,
         "fuse": fuse,
     }
-    if train_mode not in TRAIN_MODES:
-        errors.append(
-            f"Unknown train_mode '{train_mode}'. Use one of: {', '.join(TRAIN_MODES)}."
-        )
-    if train_type not in TRAIN_TYPES:
-        errors.append(f"train_type must be one of: {', '.join(TRAIN_TYPES)}.")
-    for key in ("iters", "batch_size", "max_seq_length"):
-        if not isinstance(cfg[key], int) or cfg[key] < 1:
-            errors.append(f"{key} must be a positive integer.")
-    if not learning_rate or learning_rate <= 0:
-        errors.append("learning_rate must be greater than 0.")
     if quantize_bits:
         if quantize_bits not in QUANT_KEYS:
             errors.append("quantize_bits must be 0, 4, 6 or 8.")
@@ -168,10 +162,12 @@ def build_config(
         except yaml.YAMLError as exc:
             extra = None
             errors.append(f"extra_config is not valid JSON/YAML: {exc}")
-        if extra is not None and not isinstance(extra, dict):
+        if not isinstance(extra, dict):
             errors.append(
                 'extra_config must be a JSON/YAML object, e.g. {"beta": 0.1}.'
             )
+        elif any(not isinstance(key, str) for key in extra):
+            errors.append("extra_config keys must be strings.")
         elif extra:
             known = known_config_keys() | {"wandb"}
             unknown = sorted(k for k in extra if known and k not in known)
@@ -187,7 +183,40 @@ def build_config(
                     extra.pop(key)
             cfg.update(extra)
 
-    if cfg["train_mode"] in JUDGE_MODES and not cfg.get("judge"):
+    # Validate the final config, including overrides supplied by extra_config.
+    for key in ("model", "data"):
+        cfg[key] = _resolve_source(cfg[key], key, errors, notes)
+    mode = cfg["train_mode"]
+    if not isinstance(mode, str) or mode not in TRAIN_MODES:
+        errors.append(
+            f"Unknown train_mode '{mode}'. Use one of: {', '.join(TRAIN_MODES)}."
+        )
+    if cfg["train_type"] not in TRAIN_TYPES:
+        errors.append(f"train_type must be one of: {', '.join(TRAIN_TYPES)}.")
+    for key in ("iters", "batch_size", "max_seq_length"):
+        if type(cfg[key]) is not int or cfg[key] < 1:
+            errors.append(f"{key} must be a positive integer.")
+    rate = cfg["learning_rate"]
+    if type(rate) not in (int, float) or not math.isfinite(rate) or rate <= 0:
+        errors.append("learning_rate must be a finite number greater than 0.")
+
+    # The trainer runs in its own directory, so resolve input paths here.
+    for key in ("judge", "reference_model_path"):
+        if cfg.get(key) is not None:
+            cfg[key] = _resolve_source(cfg[key], key, errors, notes)
+    for key in ("resume_adapter_file", "reward_functions_file"):
+        value = cfg.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, str) or not value.strip():
+            errors.append(f"{key} must be a nonempty file path.")
+            continue
+        path = Path(value).expanduser().resolve()
+        if not path.is_file():
+            errors.append(f"{key} '{value}' was not found or is not a file.")
+        cfg[key] = str(path)
+
+    if isinstance(mode, str) and mode in JUDGE_MODES and not cfg.get("judge"):
         errors.append(
             f"train_mode '{cfg['train_mode']}' needs a judge model: "
             'pass extra_config {"judge": "<model id or path>"}.'
@@ -316,6 +345,16 @@ class RunManager:
         cfg, errors, notes = build_config(**options)
         if errors:
             raise ValueError(" ".join(errors))
+        self.root.mkdir(parents=True, exist_ok=True)
+        # Separate MCP clients can run separate server processes. Keep the check,
+        # launch and initial state write under one filesystem lock shared by all.
+        with open(self.root / ".start.lock", "a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            return self._start(name, cfg, notes)
+
+    def _start(
+        self, name: str, cfg: dict[str, Any], notes: list[str]
+    ) -> dict[str, Any]:
         active = [r for r in self.runs() if r["status"] in ACTIVE]
         if active:
             raise RuntimeError(
