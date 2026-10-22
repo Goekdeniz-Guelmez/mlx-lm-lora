@@ -757,7 +757,13 @@ Tools: `list_training_modes`, `check_training_config`, `start_training`,
 Only one run trains at a time. `start_training` takes flat arguments (`model`,
 `data`, `train_mode`, `train_type`, `iters`, `batch_size`, `learning_rate`,
 `num_layers`, `max_seq_length`, `quantize_bits`, `fuse`) plus `extra_config`, a
-JSON object for any other `mlx_lm_lora.train` key, e.g. `{"beta": 0.1}`.
+JSON/YAML object encoded as a string for any other `mlx_lm_lora.train` key,
+e.g. `"{\"beta\": 0.1}"`.
+
+The bundled [MLX-LM-LoRA training skill](skills/mlx-lm-lora/SKILL.md)
+documents all 12 training modes, matching MCP calls, best practices per
+algorithm, and [memory-efficiency guidance](skills/mlx-lm-lora/references/memory-efficiency.md).
+Copy `skills/mlx-lm-lora/` into your agent's skills directory to install it.
 
 **JOSIE Voice** (Settings → MCP servers, transport *stdio*). The same entry as JSON
 for the `mcpServers` list of `POST /api/v1/settings`:
