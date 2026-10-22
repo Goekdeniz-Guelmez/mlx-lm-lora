@@ -22,11 +22,14 @@ setup(
     url="https://github.com/Goekdeniz-Guelmez/mlx-lm-lora",
     license="Apache-2.0",
     install_requires=requirements,
+    extras_require={"mcp": ["mcp>=2.3,<3"]},
     packages=["mlx_lm_lora", "mlx_lm_lora.trainer"],
     python_requires=">=3.11",
     entry_points={
         "console_scripts": [
             "mlx_lm_lora.train = mlx_lm_lora.train:main",
+            "mlx_lm_lora.mcp = mlx_lm_lora.mcp_server:main",
+            "mlx-lm-lora-mcp = mlx_lm_lora.mcp_server:main",
         ]
     },
 )

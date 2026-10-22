@@ -1,0 +1,82 @@
+---
+name: mlx-lm-lora
+description: Translate MLX-LM-LoRA fine-tuning requests into validated MCP runs, including SFT, offline preference training, DSLA, GRPO, KLPO, and online judge modes. Use for starting, monitoring, stopping, or configuring training through this server.
+---
+
+# MLX-LM-LoRA training
+
+Use the connected MLX-LM-LoRA MCP server for training. Discover its live tool
+schemas first; these instructions target the PR #104 server with seven tools.
+This server manages local run state, logs, configs and adapters. It has no
+tenant system. Do not assume another MCP server's contract matches this one.
+
+## Translate and execute
+
+1. Discover tools and call `list_training_modes`. Preserve the user's model,
+   dataset, method and budget. Read the relevant algorithm reference below.
+2. Build **flat tool arguments**, not a nested `config`. The flat keys are
+   `model`, `data`, `train_mode`, `train_type`, `iters`, `batch_size`,
+   `learning_rate`, `num_layers`, `max_seq_length`, `quantize_bits`, `fuse`,
+   `extra_config`; `start_training` additionally accepts `name`.
+3. Put backend-only settings such as `beta`, `judge`, `grad_checkpoint`,
+   `gradient_accumulation_steps`, `lora_parameters` and reward settings in
+   `extra_config`, encoded as a JSON **string**. Do not invent backend keys.
+4. Call `check_training_config` with those arguments, excluding `name`.
+   Its text must say `Config looks good.`; `is_error=false` alone is not
+   validation success. Explain warnings. Validation checks local structure,
+   not Hub access, dataset schemas, every algorithm constraint or GPU fit.
+5. For an authorized training request, call `start_training`. On success,
+   record `structured_content.id`. Poll `training_status` with that exact
+   `run_id`; use `training_log` for details and `list_training_runs` to reconnect.
+6. Report run ID, terminal status, exit code, relevant metrics, adapter and
+   log paths. Check saved artifacts and logs before calling a run successful;
+   exit code 0 alone can conceal a backend early return. Use `stop_training`
+   when the user asks to stop a run; stopping the server is separate.
+
+Use supplied settings. If the user asks only for a tiny smoke test, choose
+and state a small step budget, batch/context and trainable-layer count.
+Do not start training for a configuration-only or dry-run request. Do not
+restart a stopped server or launch extra experiments merely to inspect docs.
+
+## Important mappings and limits
+
+- `train_type`: `lora`, `dora`, `full`. LoRA is the usual memory-conscious
+  starting point; full training has much larger gradient/optimizer storage.
+- `data`: preserve a Hub dataset ID, or accept a server-local folder with
+  `train.jsonl` and optional `valid.jsonl`, `test.jsonl`. Match the mode's row schema.
+- Map explicit 4/6/8-bit loading requests to flat `quantize_bits: 4/6/8`.
+  Use `0` for a model already quantized; avoid quantizing it twice.
+- `train: true` and `adapter_path` are server-managed. Do not set `config`
+  or `adapter_path` in `extra_config`; the server ignores them.
+- Backend-only options can override flat options through `extra_config`;
+  keep each setting in one place to avoid contradictory configs.
+- The server requires positive integer `iters` (default 100). Epoch-only
+  requests cannot currently be represented: `iters: null` is rejected and
+  the default overrides `epochs`. Explain this and obtain a step budget,
+  or calculate it only from verified dataset size and backend batching rules.
+  Never silently substitute 100 steps for requested epochs.
+- One active run is permitted per shared runs directory. HTTP authentication
+  is optional bearer authentication; it does not provide tenant isolation.
+- Dataset and model examples in references use illustrative Hub IDs. Inspect
+  real access/schema and model compatibility before starting them.
+
+## References
+
+- [MCP contract and defaults](references/config.md)
+- [Local paths and server lifecycle](references/multi-tenant.md)
+- [Memory efficiency and support matrix](references/memory-efficiency.md)
+- [Quantized loading and QAT](references/quantization.md)
+- [SFT, NLL, chunked NLL and DFT](references/sft.md)
+- [Offline preference overview](references/preference_optimization.md):
+  [DPO](references/dpo.md), [CPO](references/cpo.md),
+  [ORPO](references/orpo.md), [FTPO](references/ftpo.md), [DSLA](references/dsla.md)
+- [Reward/online overview](references/reinforcement_learning.md):
+  [GRPO](references/grpo.md), [GRPO variants](references/grpo_variants.md),
+  [KLPO](references/klpo.md), [Online DPO](references/online_dpo.md),
+  [XPO](references/xpo.md), [PPO](references/ppo.md),
+  [RLHF REINFORCE](references/rlhf_reinforce.md)
+
+Algorithm settings are checked against `train.py`, its dataset dispatch and
+trainer implementations at PR #104 commit `a16c417`. Recheck source and live
+schemas when versions differ. All modes are documented; only SFT has been
+verified with a real GPU run in this session. Schema checks are not training tests.

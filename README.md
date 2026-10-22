@@ -102,6 +102,7 @@ With MLX-LM-LoRA you can, train Large Language Models locally on Apple Silicon u
 - [Other Features](#other-features)
   - [Examples Repository (moved)](#-examples-have-moved-)
   - [Training Your Custom Preference Model](#training-your-custom-preference-model)
+  - [MCP Server](#mcp-server)
 - [Configuration](#configuration)
 - [Dataset Formats](#dataset-formats)
 - [Memory Optimization](#memory-optimization)
@@ -239,6 +240,8 @@ mlx_lm_lora.train \
 ---
 
 ### Direct Preference Optimization (DPO)
+
+DPO, CPO, and ORPO score response tokens only, including the first response token; prompts remain conditioning context and padding is excluded. This behavior is always enabled. DPO/CPO validation rewards use the same token weighting as the reported margin.
 
 Train models using preference pairs without a separate reward model.
 
@@ -728,6 +731,69 @@ python -m mlx_lm_lora.train_judge \
 ```
 
 **Dataset Format:** Same as DPO (with `prompt`, `chosen`, and `rejected` pairs).
+
+---
+
+### MCP Server
+
+`mlx-lm-lora` ships an [MCP](https://modelcontextprotocol.io) server so agents
+(JOSIE Voice, Claude Desktop, any MCP client) can start, follow and stop
+training runs. Each run is a background `mlx_lm_lora.train` process; its config,
+log, state and adapters live in `~/.mlx-lm-lora/runs/<run_id>/` (change it with
+`--runs-dir` or `MLX_LM_LORA_RUNS_DIR`). Run state is kept on disk, so
+restarting the server does not lose track of a run.
+
+```shell
+pip install -U "mlx-lm-lora[mcp]"
+
+mlx-lm-lora-mcp                                   # stdio (default)
+mlx-lm-lora-mcp --transport http --port 8765      # streamable HTTP at http://127.0.0.1:8765/mcp
+MLX_LM_LORA_MCP_TOKEN=change-me mlx-lm-lora-mcp --transport http --host 0.0.0.0 \
+  --allowed-host '192.168.1.20:*'                 # LAN, requires "Authorization: Bearer change-me"
+```
+
+Tools: `list_training_modes`, `check_training_config`, `start_training`,
+`training_status`, `training_log`, `list_training_runs`, `stop_training`.
+Only one run trains at a time. `start_training` takes flat arguments (`model`,
+`data`, `train_mode`, `train_type`, `iters`, `batch_size`, `learning_rate`,
+`num_layers`, `max_seq_length`, `quantize_bits`, `fuse`) plus `extra_config`, a
+JSON/YAML object encoded as a string for any other `mlx_lm_lora.train` key,
+e.g. `"{\"beta\": 0.1}"`.
+
+The bundled [MLX-LM-LoRA training skill](skills/mlx-lm-lora/SKILL.md)
+documents all 12 training modes, matching MCP calls, best practices per
+algorithm, and [memory-efficiency guidance](skills/mlx-lm-lora/references/memory-efficiency.md).
+Copy `skills/mlx-lm-lora/` into your agent's skills directory to install it.
+
+**JOSIE Voice** (Settings → MCP servers, transport *stdio*). The same entry as JSON
+for the `mcpServers` list of `POST /api/v1/settings`:
+
+```json
+{
+  "name": "mlx-lm-lora",
+  "transport": "stdio",
+  "command": "mlx-lm-lora-mcp",
+  "args": [],
+  "env": {"MLX_LM_LORA_RUNS_DIR": "~/.mlx-lm-lora/runs"},
+  "enabled": true
+}
+```
+
+Or over HTTP: transport *HTTP*, URL `http://127.0.0.1:8765/mcp`, header
+`Authorization: Bearer change-me` (only when the token is set).
+
+**Claude Desktop** (`claude_desktop_config.json`; use the full path from `which mlx-lm-lora-mcp`):
+
+```json
+{
+  "mcpServers": {
+    "mlx-lm-lora": {"command": "/full/path/to/mlx-lm-lora-mcp", "args": []}
+  }
+}
+```
+
+**Other clients:** stdio command `mlx-lm-lora-mcp` (or `python -m mlx_lm_lora.mcp_server`),
+or streamable HTTP at `http://<host>:<port>/mcp`.
 
 ---
 
