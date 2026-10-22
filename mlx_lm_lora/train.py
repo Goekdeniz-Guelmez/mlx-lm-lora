@@ -18,6 +18,7 @@ from mlx_lm.tuner.utils import (
 )
 from mlx_lm.utils import load, load_tokenizer
 
+from .chat_template import ensure_chat_template
 from .trainer.cpo_trainer import CPOTrainingArgs, evaluate_cpo, train_cpo
 from .trainer.datasets import CacheDataset, load_dataset
 from .trainer.dpo_trainer import DPOTrainingArgs, evaluate_dpo, train_dpo
@@ -208,10 +209,12 @@ def load_judge_model(args, reference_model=None):
     if args.judge == args.reference_model_path and reference_model is not None:
         print("Loading judge model (reusing reference model)")
         tokenizer = load_tokenizer(args.judge)
+        ensure_chat_template(tokenizer)
         return reference_model, tokenizer
 
     print(f"Loading pretrained judge model from {args.judge}")
     model, tokenizer = load(args.judge)
+    ensure_chat_template(tokenizer)
     return model.freeze(), tokenizer
 
 
