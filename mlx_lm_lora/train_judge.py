@@ -351,7 +351,7 @@ def train_model(
 
 
 def evaluate_model(args, model: nn.Module, tokenizer, test_set):
-    test_loss = evaluate_sft(
+    test_loss, _ = evaluate_sft(
         model=model,
         dataset=CacheDataset(test_set),
         batch_size=args.batch_size,
