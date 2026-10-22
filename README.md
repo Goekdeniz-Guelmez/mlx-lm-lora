@@ -241,6 +241,8 @@ mlx_lm_lora.train \
 
 ### Direct Preference Optimization (DPO)
 
+DPO, CPO, and ORPO score response tokens only, including the first response token; prompts remain conditioning context and padding is excluded. This behavior is always enabled. DPO/CPO validation rewards use the same token weighting as the reported margin.
+
 Train models using preference pairs without a separate reward model.
 
 ```shell

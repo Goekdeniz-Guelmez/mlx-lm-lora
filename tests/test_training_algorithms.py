@@ -136,7 +136,7 @@ class DPOTrainerTest(unittest.TestCase):
                 )
                 self.assertTrue(mx.isfinite(loss).item())
                 self.assertEqual(reward.shape, (2,))
-                self.assertEqual(_scalar(tokens), 10.0)
+                self.assertEqual(_scalar(tokens), 6.0)
                 self.assertIn("margins", metrics)
 
     def test_dpo_rejects_unknown_loss(self):
@@ -145,7 +145,7 @@ class DPOTrainerTest(unittest.TestCase):
 
     def test_dpo_compute_score_uses_mean_only_for_ipo(self):
         scores = mx.array([[2.0, 4.0]])
-        mask = mx.ones((1, 2))
+        mask = mx.ones((1, 3))
         self.assertEqual(_scalar(dpo_trainer.compute_score(scores, mask, "ipo")), 3.0)
         self.assertEqual(
             _scalar(dpo_trainer.compute_score(scores, mask, "sigmoid")), 6.0
@@ -212,7 +212,7 @@ class CPOTrainerTest(unittest.TestCase):
                 )
                 self.assertTrue(mx.isfinite(loss).item())
                 self.assertEqual(reward.shape, (2,))
-                self.assertEqual(_scalar(tokens), 10.0)
+                self.assertEqual(_scalar(tokens), 6.0)
                 self.assertIn("accuracies", metrics)
 
     def test_cpo_rejects_unknown_loss(self):

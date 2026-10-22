@@ -46,11 +46,11 @@ class DPOTrainingArgs(SFTTrainingArgs):
 def get_token_scores(model, x, mask, cache=None):
     inputs, targets = x[:, :-1], x[:, 1:]
     logits = model(inputs, cache=cache).astype(mx.float32)
-    return -nn.losses.cross_entropy(logits, targets) * mask[:, :-1]
+    return -nn.losses.cross_entropy(logits, targets) * mask[:, 1:]
 
 
 def compute_score(scores, mask, loss_type):
-    token_count = mask.sum(-1)
+    token_count = mx.maximum(mask[:, 1:].sum(-1), 1)
     return scores.sum(-1) / token_count if loss_type == "ipo" else scores.sum(-1)
 
 
@@ -87,8 +87,8 @@ def dpo_loss(
         raise ValueError(f"Unknown loss type: {loss_type}")
 
     # Token counts and rewards
-    num_chosen_tokens = chosen_masks.sum(-1)
-    num_rejected_tokens = rejected_masks.sum(-1)
+    num_chosen_tokens = chosen_masks[:, 1:].sum(-1)
+    num_rejected_tokens = rejected_masks[:, 1:].sum(-1)
     num_tokens = (num_chosen_tokens + num_rejected_tokens).sum()
 
     chosen_reward = beta * mx.mean(policy_chosen_score - reference_chosen_score)
@@ -157,8 +157,14 @@ def iterate_dpo_batches(dataset, batch_size, max_seq_length, train=False):
                     :rejected_length
                 ]
 
-                chosen_masks[j, :chosen_length] = 1.0
-                rejected_masks[j, :rejected_length] = 1.0
+                chosen_prompt_length = min(
+                    batch[j].get("chosen_prompt_length", 0), chosen_length
+                )
+                rejected_prompt_length = min(
+                    batch[j].get("rejected_prompt_length", 0), rejected_length
+                )
+                chosen_masks[j, chosen_prompt_length:chosen_length] = 1.0
+                rejected_masks[j, rejected_prompt_length:rejected_length] = 1.0
 
             yield mx.array(chosen_arr), mx.array(rejected_arr), mx.array(
                 chosen_masks
@@ -238,7 +244,7 @@ def evaluate_dpo(
             delta=delta,
         )
         all_losses += loss_value * toks
-        all_rewards += reward
+        all_rewards += reward * toks
         ntokens += toks
 
         if all_metrics is None:
@@ -399,8 +405,8 @@ def train_dpo(
             c_ref_score = mx.zeros_like(c_score)
             r_ref_score = mx.zeros_like(r_score)
 
-        c_tokens_count = chosen_masks[:, :-1].sum(-1)
-        r_tokens_count = rejected_masks[:, :-1].sum(-1)
+        c_tokens_count = mx.maximum(chosen_masks[:, 1:].sum(-1), 1)
+        r_tokens_count = mx.maximum(rejected_masks[:, 1:].sum(-1), 1)
 
         if loss_type == "ipo":
             c_score_arg = c_score / c_tokens_count
