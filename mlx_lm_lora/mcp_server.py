@@ -40,7 +40,7 @@ PYTHON_ENV = "MLX_LM_LORA_PYTHON"
 DEFAULT_RUNS_DIR = "~/.mlx-lm-lora/runs"
 
 TRAIN_MODES = {
-    "sft": "Supervised fine-tuning. Data rows: messages, prompt/completion or text.",
+    "sft": "Causal LM pretraining (including continued pretraining) and supervised fine-tuning. Data rows: text, messages or prompt/completion.",
     "dpo": "Direct Preference Optimization. Data rows: prompt, chosen, rejected.",
     "cpo": "Contrastive Preference Optimization. Data rows: prompt, chosen, rejected.",
     "orpo": "Odds Ratio Preference Optimization. Data rows: prompt, chosen, rejected.",
@@ -656,7 +656,7 @@ def create_server(manager: RunManager | None = None):
         extra_config: str = "",
         name: str = "",
     ):
-        """Start a fine-tuning run in the background and return its run id.
+        """Start a training run in the background and return its run id.
 
         model: Hugging Face id or local path. data: folder with train.jsonl or a
         Hugging Face dataset id. quantize_bits: 0, 4, 6 or 8 (QLoRA). fuse: merge

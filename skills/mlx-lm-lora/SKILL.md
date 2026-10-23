@@ -45,6 +45,16 @@ restart a stopped server or launch extra experiments merely to inspect docs.
 
 ## Important mappings and limits
 
+- `train_mode: "sft"` supports both causal language-model pretraining on text
+  (including continued/domain pretraining) and supervised fine-tuning. The
+  SFT name does not restrict this mode to instruction tuning. Map pretraining
+  requests to `sft` with text rows and `sft_loss_type: "nll"`; do not reject
+  pretraining because the mode or tool description says fine-tuning. Preserve
+  the requested `train_type`: use `full` when all weights should be trained,
+  and adapters when requested. This training API loads an existing model;
+  training from randomly initialized weights is a separate capability and
+  must not be implied by support for continued pretraining.
+
 - `train_type`: `lora`, `dora`, `full`. LoRA is the usual memory-conscious
   starting point; full training has much larger gradient/optimizer storage.
 - `data`: preserve a Hub dataset ID, or accept a server-local folder with
