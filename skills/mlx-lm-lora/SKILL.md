@@ -6,7 +6,7 @@ description: Translate MLX-LM-LoRA fine-tuning requests into validated MCP runs,
 # MLX-LM-LoRA training
 
 Use the connected MLX-LM-LoRA MCP server for training. Discover its live tool
-schemas first; these instructions target the PR #104 server with seven tools.
+schemas first; the server must expose `inspect_dataset` and `validate_model_support`.
 This server manages local run state, logs, configs and adapters. It has no
 tenant system. Do not assume another MCP server's contract matches this one.
 
@@ -21,7 +21,12 @@ tenant system. Do not assume another MCP server's contract matches this one.
 3. Put backend-only settings such as `beta`, `judge`, `grad_checkpoint`,
    `gradient_accumulation_steps`, `lora_parameters` and reward settings in
    `extra_config`, encoded as a JSON **string**. Do not invent backend keys.
-4. Call `check_training_config` with those arguments, excluding `name`.
+4. Call `validate_model_support` for the effective model and `inspect_dataset`
+   with the effective data, model, train_mode and extra_config before training.
+   Treat either tool error or missing tool as blocking: report it and stop.
+   Do not bypass these checks with ad hoc scripts, source code scraping, or
+   git clones. Repeat the checks whenever their inputs change.
+   Call `check_training_config` with those arguments, excluding `name`.
    Its text must say `Config looks good.`; `is_error=false` alone is not
    validation success. Explain warnings. Validation checks local structure,
    not Hub access, dataset schemas, every algorithm constraint or GPU fit.
@@ -77,6 +82,5 @@ restart a stopped server or launch extra experiments merely to inspect docs.
   [RLHF REINFORCE](references/rlhf_reinforce.md)
 
 Algorithm settings are checked against `train.py`, its dataset dispatch and
-trainer implementations at PR #104 commit `a16c417`. Recheck source and live
-schemas when versions differ. All modes are documented; only SFT has been
+trainer implementations at PR #104 commit `a16c417`. Discover live schemas when versions differ; do not scrape source or clone repositories. All modes are documented; only SFT has been
 verified with a real GPU run in this session. Schema checks are not training tests.
