@@ -21,8 +21,10 @@ tenant system. Do not assume another MCP server's contract matches this one.
 3. Put backend-only settings such as `beta`, `judge`, `grad_checkpoint`,
    `gradient_accumulation_steps`, `lora_parameters` and reward settings in
    `extra_config`, encoded as a JSON **string**. Do not invent backend keys.
-4. Call `validate_model_support` for the effective model and `inspect_dataset`
-   with the effective data, model, train_mode and extra_config before training.
+4. Call `validate_model_support` for the effective model, then call
+   `inspect_dataset` with the effective data, model, train_mode and extra_config
+   before training. Run these calls sequentially, never concurrently: both
+   initialize Transformers' lazy imports on a cold MCP server.
    Treat either tool error or missing tool as blocking: report it and stop.
    Do not bypass these checks with ad hoc scripts, source code scraping, or
    git clones. Repeat the checks whenever their inputs change.

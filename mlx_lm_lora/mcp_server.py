@@ -27,6 +27,7 @@ import secrets
 import signal
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -68,6 +69,12 @@ _HF_ID = re.compile(r"^[\w.-]+/[\w.-]+$")
 
 # Runs started by this process, so finished children get reaped (no zombies).
 _PROCS: dict[str, subprocess.Popen] = {}
+
+# Transformers resolves public symbols through a lazy module. Dataset and
+# model-support tools may be called concurrently by an MCP client on a cold
+# server, so serialize those imports and resolve AutoTokenizer before MLX-LM's
+# package initializer imports its tokenizer utilities.
+_TRANSFORMERS_IMPORT_LOCK = threading.Lock()
 
 
 def _now() -> str:
@@ -556,8 +563,9 @@ def create_server(manager: RunManager | None = None):
         """
         try:
             from types import SimpleNamespace
-            from transformers import AutoTokenizer
-            from .trainer.datasets import load_dataset
+            with _TRANSFORMERS_IMPORT_LOCK:
+                from transformers import AutoTokenizer
+                from .trainer.datasets import load_dataset
 
             cfg, errors, _ = build_config(
                 model, data, train_mode=train_mode, extra_config=extra_config
@@ -587,7 +595,11 @@ def create_server(manager: RunManager | None = None):
         """
         try:
             from huggingface_hub import hf_hub_download
-            from mlx_lm.utils import _get_classes
+            with _TRANSFORMERS_IMPORT_LOCK:
+                # Resolve this lazy Transformers export before importing
+                # MLX-LM, whose package initializer imports tokenizer_utils.
+                from transformers import AutoTokenizer  # noqa: F401
+                from mlx_lm.utils import _get_classes
 
             path = Path(model).expanduser()
             config_path = path / "config.json" if path.is_dir() else Path(
