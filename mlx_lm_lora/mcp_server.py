@@ -40,7 +40,7 @@ PYTHON_ENV = "MLX_LM_LORA_PYTHON"
 DEFAULT_RUNS_DIR = "~/.mlx-lm-lora/runs"
 
 TRAIN_MODES = {
-    "sft": "Supervised fine-tuning. Data rows: messages, prompt/completion or text.",
+    "sft": "Causal LM pretraining (including continued pretraining) and supervised fine-tuning. Data rows: text, messages or prompt/completion.",
     "dpo": "Direct Preference Optimization. Data rows: prompt, chosen, rejected.",
     "cpo": "Contrastive Preference Optimization. Data rows: prompt, chosen, rejected.",
     "orpo": "Odds Ratio Preference Optimization. Data rows: prompt, chosen, rejected.",
@@ -547,6 +547,61 @@ def create_server(manager: RunManager | None = None):
         )
 
     @server.tool(annotations=read_only)
+    def inspect_dataset(data: str, model: str, train_mode: str = "sft",
+                        extra_config: str = ""):
+        """Inspect dataset access and validate rows with the training dataset loader.
+
+        Loads the tokenizer but no model weights. Errors block training.
+        Uses the same feature mappings and dataset settings as training.
+        """
+        try:
+            from types import SimpleNamespace
+            from transformers import AutoTokenizer
+            from .trainer.datasets import load_dataset
+
+            cfg, errors, _ = build_config(
+                model, data, train_mode=train_mode, extra_config=extra_config
+            )
+            if errors:
+                raise ValueError("; ".join(errors))
+            cfg.setdefault("test", False)
+            tokenizer = AutoTokenizer.from_pretrained(cfg["model"], trust_remote_code=False)
+            splits = load_dataset(SimpleNamespace(**cfg), tokenizer)
+            sizes = {}
+            for name, split in zip(("train", "valid", "test"), splits):
+                sizes[name] = len(split)
+                for index in range(len(split)):
+                    split[index]
+            if not sizes["train"]:
+                raise ValueError("Training dataset is empty.")
+            return result("Dataset inspection passed.", {"valid": True, "rows": sizes})
+        except Exception as exc:
+            raise ToolError(f"Dataset inspection failed: {exc}") from exc
+
+    @server.tool(annotations=read_only)
+    def validate_model_support(model: str):
+        """Validate model access and architecture against installed MLX-LM.
+
+        Reads config only, without downloading weights or executing remote code.
+        This checks architecture support, not GPU fit or successful training.
+        """
+        try:
+            from huggingface_hub import hf_hub_download
+            from mlx_lm.utils import _get_classes
+
+            path = Path(model).expanduser()
+            config_path = path / "config.json" if path.is_dir() else Path(
+                hf_hub_download(model, "config.json")
+            )
+            config = json.loads(config_path.read_text())
+            _get_classes(config)
+            return result("Model support validation passed.", {
+                "valid": True, "model": model, "model_type": config.get("model_type")
+            })
+        except Exception as exc:
+            raise ToolError(f"Model support validation failed: {exc}") from exc
+
+    @server.tool(annotations=read_only)
     def check_training_config(
         model: str,
         data: str,
@@ -601,7 +656,7 @@ def create_server(manager: RunManager | None = None):
         extra_config: str = "",
         name: str = "",
     ):
-        """Start a fine-tuning run in the background and return its run id.
+        """Start a training run in the background and return its run id.
 
         model: Hugging Face id or local path. data: folder with train.jsonl or a
         Hugging Face dataset id. quantize_bits: 0, 4, 6 or 8 (QLoRA). fuse: merge

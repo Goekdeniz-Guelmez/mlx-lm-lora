@@ -397,6 +397,8 @@ def text_of(result):
 @unittest.skipUnless(HAS_MCP, "mcp is not installed")
 class MCPRoundTripTests(Base):
     TOOLS = {
+        "inspect_dataset",
+        "validate_model_support",
         "list_training_modes",
         "check_training_config",
         "start_training",

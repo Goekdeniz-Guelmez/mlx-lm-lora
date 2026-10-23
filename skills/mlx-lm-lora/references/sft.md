@@ -1,4 +1,13 @@
-# SFT: supervised fine-tuning
+# SFT: pretraining and supervised fine-tuning
+
+`train_mode: "sft"` runs causal language-model training and supports both
+pretraining on text and supervised fine-tuning on instruction/chat data.
+For continued or domain pretraining, use plain `text` rows with
+`sft_loss_type: "nll"` and no prompt masking. Use `train_type: "full"` when
+all model weights should train, or the requested adapter method. The MCP
+loads an existing checkpoint; this does not imply random-initialization
+training support. Never reject a pretraining request merely because the
+mode is named SFT.
 
 ## Data and settings
 
@@ -7,7 +16,8 @@ Rows may contain `text`, `messages`, or `prompt`/`completion`. Use `mask_prompt`
 ## MCP example
 
 Pass these flat arguments to `start_training`; use the same arguments with
-`check_training_config` first. Hub IDs below are illustrative.
+`check_training_config` first, and require successful `validate_model_support`
+and `inspect_dataset` preflights before starting. Hub IDs below are illustrative.
 
 ```json
 {
