@@ -738,12 +738,38 @@ def load_local_dataset(
     return train, valid, test
 
 
+def _discard_incomplete_torch_namespace():
+    """Hide a namespace-only ``torch`` directory from Hugging Face datasets.
+
+    MLX environments can contain a ``torch/`` namespace directory left by
+    optional ecosystem packages without having PyTorch installed. Recent
+    ``datasets`` releases see that namespace in ``sys.modules`` and assume it
+    implements the PyTorch API while fingerprinting a dataset.
+    """
+    import sys
+
+    torch_module = sys.modules.get("torch")
+    if torch_module is None:
+        return
+
+    tensor_type = getattr(torch_module, "Tensor", None)
+    generator_type = getattr(torch_module, "Generator", None)
+    module_type = getattr(getattr(torch_module, "nn", None), "Module", None)
+    if not all(
+        isinstance(value, type)
+        for value in (tensor_type, generator_type, module_type)
+    ):
+        sys.modules.pop("torch", None)
+
+
 def load_hf_dataset(
     data_id: str,
     tokenizer: PreTrainedTokenizer,
     config,
 ):
     from datasets import exceptions, load_dataset
+
+    _discard_incomplete_torch_namespace()
 
     try:
         dataset = load_dataset(data_id)
@@ -767,6 +793,8 @@ def load_hf_dataset(
 
 def load_custom_hf_dataset(args, tokenizer: PreTrainedTokenizer):
     import datasets
+
+    _discard_incomplete_torch_namespace()
 
     def create_hf_dataset(dataset_name, config, split, hf_config):
         ds = datasets.load_dataset(

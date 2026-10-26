@@ -397,6 +397,7 @@ def text_of(result):
 @unittest.skipUnless(HAS_MCP, "mcp is not installed")
 class MCPRoundTripTests(Base):
     TOOLS = {
+        "calculate_iters",
         "inspect_dataset",
         "validate_model_support",
         "list_training_modes",
@@ -423,6 +424,21 @@ class MCPRoundTripTests(Base):
 
                 modes = await client.call_tool("list_training_modes", {})
                 self.assertIn("grpo", text_of(modes))
+
+                for rows, batch_size, epochs, expected in (
+                    (101, 8, 3, 39), (100, 10, 2, 20), (1, 8, 1, 1)
+                ):
+                    budget = await client.call_tool("calculate_iters", {
+                        "num_samples": rows, "batch_size": batch_size, "epochs": epochs
+                    })
+                    self.assertFalse(budget.is_error, text_of(budget))
+                    self.assertEqual(budget.structured_content["iters"], expected)
+                for key in ("num_samples", "batch_size", "epochs"):
+                    for value in (0, -1):
+                        args = {"num_samples": 100, "batch_size": 8, "epochs": 3}
+                        args[key] = value
+                        invalid = await client.call_tool("calculate_iters", args)
+                        self.assertTrue(invalid.is_error)
 
                 check = await client.call_tool(
                     "check_training_config", {"model": "a/b", "data": str(self.data)}

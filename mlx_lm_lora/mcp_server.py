@@ -302,18 +302,27 @@ class RunManager:
         """Settle the status of a run whose process may have ended."""
         if run["status"] not in ACTIVE:
             return run
+
         proc = _PROCS.get(run["id"])
-        alive = proc.poll() is None if proc else _pid_alive(run.get("pid"))
-        if alive:
-            return run
+        if proc:
+            code = proc.poll()
+            if code is None:
+                return run
+        else:
+            # The wrapper writes this marker as soon as training exits. After
+            # a server restart, prefer it to checking the persisted PID: the
+            # OS may have reused that PID for an unrelated process, leaving a
+            # finished run looking active forever.
+            exit_file = self.root / run["id"] / "exit_code"
+            code = None
+            if exit_file.exists():
+                try:
+                    code = int(exit_file.read_text().strip())
+                except ValueError:
+                    pass
+            if code is None and _pid_alive(run.get("pid")):
+                return run
         _PROCS.pop(run["id"], None)
-        exit_file = self.root / run["id"] / "exit_code"
-        code = None
-        if exit_file.exists():
-            try:
-                code = int(exit_file.read_text().strip())
-            except ValueError:
-                pass
         run["exit_code"] = code
         run["ended_at"] = run.get("ended_at") or _now()
         if run.get("stop_requested"):
@@ -552,6 +561,28 @@ def create_server(manager: RunManager | None = None):
             + (f"\nGRPO reward functions: {', '.join(rewards)}." if rewards else "")
             + "\nData is a folder with train.jsonl (and valid.jsonl) or a Hugging Face dataset id."
         )
+
+    @server.tool(annotations=read_only)
+    def calculate_iters(num_samples: int, batch_size: int, epochs: int):
+        """Convert epochs to iterations using the backend's epoch-budget formula.
+
+        Use inspect_dataset's rows.train for num_samples and the effective
+        training batch_size. Returns epochs * ceil(num_samples / batch_size).
+        Pass the returned iters to check_training_config and start_training.
+        Iterations are not necessarily optimizer updates with accumulation.
+        """
+        for key, value in (
+            ("num_samples", num_samples), ("batch_size", batch_size), ("epochs", epochs)
+        ):
+            if type(value) is not int or value < 1:
+                raise ToolError(f"{key} must be a positive integer.")
+        # Match train.calculate_iters without importing MLX or printing to stdio.
+        batches_per_epoch = (num_samples + batch_size - 1) // batch_size
+        iters = epochs * batches_per_epoch
+        return result(f"Calculated {iters} iterations from {epochs} epochs.", {
+            "iters": iters, "epochs": epochs, "num_samples": num_samples,
+            "batch_size": batch_size, "batches_per_epoch": batches_per_epoch,
+        })
 
     @server.tool(annotations=read_only)
     def inspect_dataset(data: str, model: str, train_mode: str = "sft",

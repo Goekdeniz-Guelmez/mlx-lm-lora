@@ -82,7 +82,12 @@ of restoring optimizer state, RNG and the exact data cursor.
 
 The backend can derive iterations from epochs only when `iters` is absent/null.
 This server always supplies a positive `iters`, so `extra_config` containing
-only `epochs` does not implement epoch training. Use a verified step budget.
+only `epochs` does not implement epoch training. Call the read-only MCP tool
+`calculate_iters(num_samples, batch_size, epochs)` with `num_samples` from
+`inspect_dataset`'s `rows.train`, the effective training batch size, and positive
+integer epochs. Pass its returned `iters` to configuration validation and training.
+For example, 101 rows, batch size 8 and 3 epochs returns 39 iterations.
+Recalculate whenever those inputs change.
 The backend formula is epochs × ceil(training rows / batch size), before
 trainer-specific distributed/accumulation semantics. Do not call every iteration
 an optimizer update: with accumulation, these counts can differ by trainer.

@@ -67,11 +67,16 @@ restart a stopped server or launch extra experiments merely to inspect docs.
   or `adapter_path` in `extra_config`; the server ignores them.
 - Backend-only options can override flat options through `extra_config`;
   keep each setting in one place to avoid contradictory configs.
-- The server requires positive integer `iters` (default 100). Epoch-only
-  requests cannot currently be represented: `iters: null` is rejected and
-  the default overrides `epochs`. Explain this and obtain a step budget,
-  or calculate it only from verified dataset size and backend batching rules.
-  Never silently substitute 100 steps for requested epochs.
+- For an epoch budget, call `calculate_iters` after `inspect_dataset`, passing
+  `num_samples` from `rows.train`, the effective `batch_size` (including any
+  extra_config override), and the requested positive integer `epochs`.
+  Pass its returned `iters` to both `check_training_config` and `start_training`.
+  The formula is `epochs * ceil(num_samples / batch_size)`, matching the backend.
+  Recalculate if dataset settings, batch size or epochs change. These are
+  training iterations, not necessarily optimizer updates with accumulation.
+  Do not put only `epochs` in extra_config: the default `iters: 100` overrides it.
+  If the calculation tool is missing, report that limitation; never silently
+  substitute 100 steps for requested epochs.
 - One active run is permitted per shared runs directory. HTTP authentication
   is optional bearer authentication; it does not provide tenant isolation.
 - Dataset and model examples in references use illustrative Hub IDs. Inspect
