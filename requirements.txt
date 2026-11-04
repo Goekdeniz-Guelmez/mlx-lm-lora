@@ -6,4 +6,4 @@ protobuf
 pyyaml
 jinja2
 tqdm
-datasets
+datasets>=4.7.0,<6.0.0
