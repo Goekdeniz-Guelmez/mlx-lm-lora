@@ -1,19 +1,20 @@
 import time
 from dataclasses import dataclass, field
 from functools import partial
-from pathlib import Path
 from typing import Any, Optional
 
 import mlx.core as mx
 import mlx.nn as nn
 import numpy as np
 from mlx.nn.utils import average_gradients
-from mlx.utils import tree_flatten, tree_map
+from mlx.utils import tree_map
 from mlx_lm.models.cache import make_prompt_cache
 from mlx_lm.tuner.callbacks import TrainingCallback
 from tqdm import tqdm
 
 from ..recurrent_patch import enable_memory_safe_recurrences, model_uses_recurrence
+from .checkpointing import resume_training, save_checkpoint
+from .long_context import iter_cached_sft_chunks
 from .sft_trainer import (
     SFTTrainingArgs,
     _install_qat_hooks,
@@ -41,7 +42,9 @@ def get_logps(model, tokens, mask, cache=None):
     log_probs = -nn.losses.cross_entropy(logits, targets, reduction="none")
     log_probs = mx.clip(log_probs, -1000.0, 0.0)
 
-    mask = mask[:, :-1]
+    # A logit at position t predicts token t + 1; mask response targets.
+    mask = mask[:, 1:]
+
     seq_lengths = mask.sum(-1)
     logp_sum = (log_probs * mask).sum(-1)
     safe_seq_lengths = mx.where(seq_lengths > 0, seq_lengths, 1.0)
@@ -90,7 +93,7 @@ def orpo_loss(
     rejected_reward = beta * rejected_logps
     reward = mx.stack([mx.mean(chosen_reward), mx.mean(rejected_reward)])
 
-    num_tokens = chosen_masks.sum() + rejected_masks.sum()
+    num_tokens = chosen_masks[:, 1:].sum() + rejected_masks[:, 1:].sum()
 
     metrics = {
         "accuracies": mx.mean((chosen_reward > rejected_reward).astype(mx.float32)),
@@ -187,11 +190,17 @@ def iterate_orpo_batches(dataset, batch_size, max_seq_length, train=False):
                 rejected_length = min(rejected_lengths[j], max_length_in_batch)
 
                 chosen_arr[j, :chosen_length] = batch[j]["chosen"][:chosen_length]
-                chosen_masks[j, :chosen_length] = 1.0
+                chosen_prompt_length = min(
+                    batch[j].get("chosen_prompt_length", 0), chosen_length
+                )
+                chosen_masks[j, chosen_prompt_length:chosen_length] = 1.0
                 rejected_arr[j, :rejected_length] = batch[j]["rejected"][
                     :rejected_length
                 ]
-                rejected_masks[j, :rejected_length] = 1.0
+                rejected_prompt_length = min(
+                    batch[j].get("rejected_prompt_length", 0), rejected_length
+                )
+                rejected_masks[j, rejected_prompt_length:rejected_length] = 1.0
 
             yield (
                 mx.array(chosen_arr),
@@ -250,7 +259,7 @@ def evaluate_orpo(
             for k, v in metrics.items():
                 all_metrics[k] += v * toks
 
-    mx.eval(all_losses, all_rewards, ntokens)
+        mx.eval(all_losses, all_rewards, ntokens, *all_metrics.values())
     all_losses = mx.distributed.all_sum(all_losses)
     all_rewards = mx.distributed.all_sum(all_rewards)
     ntokens = mx.distributed.all_sum(ntokens)
@@ -273,7 +282,7 @@ def train_orpo(
     training_callback: TrainingCallback = None,
 ):
     if model_uses_recurrence(model):
-        enable_memory_safe_recurrences()
+        enable_memory_safe_recurrences(chunk_size=args.recurrence_chunk_size)
     mx.set_wired_limit(mx.device_info()["max_recommended_working_set_size"])
     world = mx.distributed.init()
     world_size = world.size()
@@ -297,6 +306,7 @@ def train_orpo(
         cache = make_prompt_cache(model)
         seq_step_size = args.seq_step_size
 
+    progress = resume_training(args, model, optimizer)
     state = [model.state, optimizer.state, mx.random.state]
 
     def loss_from_logps(
@@ -377,19 +387,15 @@ def train_orpo(
 
             reset_prompt_cache(cache)
 
-            for s in range(0, seq_length, seq_step_size):
-                end = min(s + seq_step_size, seq_length)
-                if 0 < (seq_length - end) < 2:
-                    end = seq_length
-
-                chunk = tokens[:, s:end]
-                chunk_mask = masks[:, s:end]
+            for start, end in iter_cached_sft_chunks(seq_length, seq_step_size):
+                chunk = tokens[:, start:end]
+                chunk_mask = masks[:, start:end]
 
                 chunk_avg, chunk_logits_mean = get_logps(
                     model, chunk, chunk_mask, cache
                 )
 
-                chunk_input_mask = chunk_mask[:, :-1]
+                chunk_input_mask = chunk_mask[:, 1:]
                 chunk_lens = chunk_input_mask.sum(-1)
 
                 logp_sum += chunk_avg * chunk_lens
@@ -409,8 +415,8 @@ def train_orpo(
         c_logp_sum, c_logits_mean = compute_logps_chunked(chosen, chosen_masks)
         r_logp_sum, r_logits_mean = compute_logps_chunked(rejected, rejected_masks)
 
-        c_lens = chosen_masks[:, :-1].sum(-1)
-        r_lens = rejected_masks[:, :-1].sum(-1)
+        c_lens = chosen_masks[:, 1:].sum(-1)
+        r_lens = rejected_masks[:, 1:].sum(-1)
         c_lens_safe = mx.where(c_lens > 0, c_lens, 1.0)
         r_lens_safe = mx.where(r_lens > 0, r_lens, 1.0)
 
@@ -455,19 +461,15 @@ def train_orpo(
 
             def chunk_loss_fn(chunk, chunk_mask, weights):
                 chunk_avg, _ = get_logps(model, chunk, chunk_mask, cache)
-                chunk_lens = chunk_mask[:, :-1].sum(-1)
+                chunk_lens = chunk_mask[:, 1:].sum(-1)
                 chunk_sum = chunk_avg * chunk_lens
                 return (chunk_sum * weights).sum()
 
             chunk_value_and_grad = nn.value_and_grad(model, chunk_loss_fn)
 
-            for s in range(0, seq_length, seq_step_size):
-                end = min(s + seq_step_size, seq_length)
-                if 0 < (seq_length - end) < 2:
-                    end = seq_length
-
-                chunk = tokens[:, s:end]
-                chunk_mask = masks[:, s:end]
+            for start, end in iter_cached_sft_chunks(seq_length, seq_step_size):
+                chunk = tokens[:, start:end]
+                chunk_mask = masks[:, start:end]
 
                 _, grad = chunk_value_and_grad(chunk, chunk_mask, weights)
 
@@ -504,7 +506,7 @@ def train_orpo(
     rewards = mx.zeros((2,))
     n_tokens = 0
     steps = 0
-    trained_tokens = 0
+    trained_tokens = progress.trained_tokens
     accumulated_metrics = {
         "accuracies": 0,
         "margins": 0,
@@ -513,11 +515,15 @@ def train_orpo(
         "rejected_logits_mean": 0,
         "chosen_logits_mean": 0,
     }
-    grad_accum = None
-    opt_step = 0
+    grad_accum = progress.grad_accum
+    opt_step = progress.optimizer_step
 
     start = time.perf_counter()
-    pbar = tqdm(range(1, args.iters + 1), desc="Training", disable=rank != 0)
+    pbar = tqdm(
+        range(progress.start_iteration, args.iters + 1),
+        desc="Training",
+        disable=rank != 0,
+    )
     for it in pbar:
         batch = next(
             iterate_orpo_batches(
@@ -665,17 +671,23 @@ def train_orpo(
             start = time.perf_counter()
 
         if it % args.steps_per_save == 0:
-            adapter_weights = dict(tree_flatten(model.trainable_parameters()))
-            mx.save_safetensors(str(args.adapter_file), adapter_weights)
-            checkpoint = Path(args.adapter_file).parent / (
-                f"{it:07d}_{Path(args.adapter_file).name}"
-            )
-            mx.save_safetensors(str(checkpoint), adapter_weights)
-            tqdm.write(
-                f"Iter {it}: Saved adapter weights to "
-                f"{args.adapter_file} and {checkpoint}."
+            save_checkpoint(
+                args,
+                it,
+                model=model,
+                optimizer=optimizer,
+                optimizer_step=opt_step,
+                grad_accum=grad_accum,
+                trained_tokens=trained_tokens,
             )
 
-    adapter_weights = dict(tree_flatten(model.trainable_parameters()))
-    mx.save_safetensors(str(args.adapter_file), adapter_weights)
-    tqdm.write(f"Saved final weights to {args.adapter_file}.")
+    save_checkpoint(
+        args,
+        max(args.iters, progress.iteration),
+        model=model,
+        optimizer=optimizer,
+        optimizer_step=opt_step,
+        grad_accum=grad_accum,
+        trained_tokens=trained_tokens,
+        final=True,
+    )

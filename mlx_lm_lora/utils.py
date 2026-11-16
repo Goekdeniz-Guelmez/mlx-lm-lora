@@ -16,6 +16,8 @@ from mlx_lm.tuner.utils import linear_to_lora_layers, load_adapters
 from mlx_lm.utils import dequantize_model, load, save_config, save_model
 from transformers import AutoProcessor
 
+from .chat_template import ensure_chat_template
+
 
 def calculate_iters(train_set, batch_size, epochs) -> int:
     num_samples = len(train_set)
@@ -184,6 +186,11 @@ def from_pretrained(
     """
     print(f"Loading model {model}")
     model, tokenizer = load(model, adapter_path=adapter_path)
+    if ensure_chat_template(tokenizer):
+        print(
+            "No chat template found for this tokenizer; installed a generic "
+            "fallback template so base checkpoints stay trainable."
+        )
     args = vars(model.args) if hasattr(model, "args") else {}
 
     if lora_config is not None:
@@ -226,21 +233,18 @@ def from_pretrained(
             model.args.quantization_config = model.args.quantization
 
     if new_adapter_path is not None:
-        new_adapter_path = Path(new_adapter_path)
-        new_adapter_path.mkdir(parents=True, exist_ok=True)
-        if lora_config is not None:
-            adapter_args = {
+        args = (
+            {
                 "lora_parameters": lora_config,
                 "num_layers": lora_config.get("num_layers", None),
             }
-            new_adapter_file = new_adapter_path / "adapters.safetensors"
-            save_config(adapter_args, new_adapter_path / "adapter_config.json")
-        else:
-            # Full fine-tuning produces a normal MLX model directory, not an
-            # adapter package. The trainer writes all parameters to this file.
-            new_adapter_file = new_adapter_path / "model.safetensors"
-            save_config(args, new_adapter_path / "config.json")
-            tokenizer.save_pretrained(new_adapter_path)
+            if lora_config is not None
+            else {} | args
+        )
+        new_adapter_path = Path(new_adapter_path)
+        new_adapter_path.mkdir(parents=True, exist_ok=True)
+        new_adapter_file = new_adapter_path / "adapters.safetensors"
+        save_config(args, new_adapter_path / "adapter_config.json")
 
     return model, tokenizer, new_adapter_file if new_adapter_path is not None else None
 

@@ -5,6 +5,9 @@
 # MLX-LM-LORA
 
 [![image](https://img.shields.io/pypi/v/mlx-lm-lora.svg)](https://pypi.python.org/pypi/mlx-lm-lora)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+
+**[Explore the project site →](https://goekdeniz-guelmez.github.io/mlx-lm-lora/)**
 
 With MLX-LM-LoRA you can, train Large Language Models locally on Apple Silicon using MLX. Training works with all models supported by [MLX-LM](https://github.com/ml-explore/mlx-lm), including:
 
@@ -24,12 +27,13 @@ With MLX-LM-LoRA you can, train Large Language Models locally on Apple Silicon u
 - **DoRA**: Weight-Decomposed Low-Rank Adaptation
 - **Full-precision**: Train all model parameters
 - **Quantized training**: QLoRA with 4-bit, 6-bit, or 8-bit quantization
-- **Quantization Aware Training (QAT)**: Apply quantization projection during training for SFT, DPO, and ORPO
+- **Quantization Aware Training (QAT)**: Apply fake quantization during training for SFT, DPO, ORPO, and DSLA
 
 **Training Algorithms:**
 
 - **SFT**: Supervised Fine-Tuning
 - **DPO**: Direct Preference Optimization
+- **DSLA**: Directional and Similarity-aware Latent Alignment with a selectable DPO, ORPO, or CPO preference objective
 - **FTPO / Antidoom**: Final-token preference optimization for repairing repetition loops
 - **CPO**: Contrastive Preference Optimization
 - **ORPO**: Odds Ratio Preference Optimization
@@ -41,13 +45,14 @@ With MLX-LM-LoRA you can, train Large Language Models locally on Apple Silicon u
 - **XPO**: Extended Preference Optimization
 - **RLHF Reinforce KL**: Reinforced Reinforcement Learning from Human Feedback (with KL regularization)
 - **PPO**: Proximal policy Optimization
+- **KLPO**: KL-Regularized Policy Optimization for Critic-Free Agentic Reinforcement Learning
 
 ## New Features
 
 **Quantization Aware Training (QAT):**
 
-- Enable QAT for SFT, DPO, and ORPO with minimal post-update quantization projection.
-- Supports 4-16 bit, group or per-tensor, and configurable start/interval.
+- Enable QAT for SFT, DPO, ORPO, and DSLA with fake quantization in forward passes.
+- Supports 2-16 bit, group or per-tensor scaling, and a configurable activation step.
 - Use QAT to simulate quantization effects during training for better quantized model performance.
 
 **Training Your Custom Preference Model:**
@@ -83,6 +88,7 @@ With MLX-LM-LoRA you can, train Large Language Models locally on Apple Silicon u
 - [Training Methods](#training-methods)
   - [Supervised Fine-Tuning (SFT)](#supervised-fine-tuning-sft)
   - [Direct Preference Optimization (DPO)](#direct-preference-optimization-dpo)
+  - [Directional and Similarity-aware Latent Alignment (DSLA)](#directional-and-similarity-aware-latent-alignment-dsla)
   - [Contrastive Preference Optimization (CPO)](#contrastive-preference-optimization-cpo)
   - [Odds Ratio Preference Optimization (ORPO)](#odds-ratio-preference-optimization-orpo)
   - [Group Relative Policy Optimization (GRPO)](#group-relative-policy-optimization-grpo)
@@ -96,11 +102,13 @@ With MLX-LM-LoRA you can, train Large Language Models locally on Apple Silicon u
 - [Other Features](#other-features)
   - [Examples Repository (moved)](#-examples-have-moved-)
   - [Training Your Custom Preference Model](#training-your-custom-preference-model)
+  - [MCP Server](#mcp-server)
 - [Configuration](#configuration)
 - [Dataset Formats](#dataset-formats)
 - [Memory Optimization](#memory-optimization)
 - [Evaluation & Generation](#evaluation--generation)
 - [Performance Comparison](#performance-comparison)
+- [License](#license)
 
 ---
 
@@ -142,18 +150,20 @@ Command-line flags will override corresponding values in the config file.
 
 ### Quantization Aware Training (QAT)
 
-QAT projects trainable weights onto a quantized grid after each optimizer update, simulating quantization effects during training. This improves quantized model performance and robustness.
+QAT applies symmetric fake quantization to linear weights during forward passes,
+using a straight-through estimator for gradients. Optimizers retain full-precision
+weights while the model sees quantization noise during training.
 
-**Supported for:** SFT, DPO, ORPO
+**Supported for:** SFT, DPO, ORPO, DSLA
 
 **QAT Flags:**
 
 - `--qat-enable`    Enable QAT projection during training
 - `--qat-bits`     Bit-width for QAT (default: 8)
 - `--qat-group-size`  Group size for QAT (default: 64, 0=per-tensor)
-- `--qat-mode`     QAT mode (default: affine)
+- `--qat-mode`     Accepted argument (default: affine); the current hook always uses symmetric quantization
 - `--qat-start-step`  Start QAT after this optimizer step (default: 1)
-- `--qat-interval`   Apply QAT every N optimizer steps (default: 1)
+- `--qat-interval`   Accepted argument (default: 1), currently unused; fake quantization runs on every forward pass once activated
 
 **Example (SFT):**
 
@@ -231,6 +241,8 @@ mlx_lm_lora.train \
 
 ### Direct Preference Optimization (DPO)
 
+DPO, CPO, and ORPO score response tokens only, including the first response token; prompts remain conditioning context and padding is excluded. This behavior is always enabled. DPO/CPO validation rewards use the same token weighting as the reported margin.
+
 Train models using preference pairs without a separate reward model.
 
 ```shell
@@ -257,6 +269,63 @@ mlx_lm_lora.train \
 {"prompt": "User question", "chosen": "Good response", "rejected": "Bad response"}
 {"system": "You are helpful", "prompt": "Question", "chosen": "Good", "rejected": "Bad"}
 ```
+
+---
+
+### Directional and Similarity-aware Latent Alignment (DSLA)
+
+DSLA is a standalone trainer that adds prompt-response similarity and batch-direction
+supervision to a preference objective. Select the objective with `--dsla-loss`:
+`dpo`, `orpo`, or `cpo`. DPO and ORPO follow the DSLA preprint; CPO and alternative
+DPO/CPO margin losses extend the same latent regularizer to those objectives.
+
+```shell
+mlx_lm_lora.train \
+  --model <model> \
+  --train --train-mode dsla --dsla-loss orpo \
+  --data <preference_dataset> \
+  --batch-size 2 \
+  --latent-weight 0.1 --latent-margin 0.05 --latent-gamma 10 \
+  --latent-variant both --latent-pooling answer_mean --latent-layer final
+```
+
+Use the standard `prompt`, `chosen`, and `rejected` preference-pair format, with
+an optional `system` field. The rendered generation prompt must be an exact token
+prefix of both responses. DSLA masks prompt and padding targets from the output
+loss. The default `answer_mean` pooling includes every response hidden state,
+including the final token.
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `--dsla-loss` | `dpo` | Preference objective: `dpo`, `orpo`, or `cpo` |
+| `--beta` | `0.1` | DPO/CPO margin scale or ORPO preference-term weight |
+| `--dpo-cpo-loss-type` | `sigmoid` | DPO/CPO loss: `sigmoid`, `hinge`, `ipo`, or `dpop` |
+| `--latent-weight` | `0.1` | Weight of the latent objective |
+| `--latent-margin` | `0.05` | Target prompt-response similarity margin |
+| `--latent-gamma` | `10` | Soft-margin sharpness |
+| `--latent-variant` | `both` | `similarity`, `direction`, or their average (`both`) |
+| `--latent-pooling` | `answer_mean` | `answer_mean`, `last_token`, `last_k_mean` (last 8 tokens), or `prompt_answer_mean` |
+| `--latent-layer` | `final` | Final normalized hidden states, `middle`, `late`, or a zero-based block index |
+
+DSLA-DPO uses a frozen reference model, loaded from `--reference-model-path` or
+the original model. DSLA-ORPO and DSLA-CPO are reference-free. Python callers use
+`DSLATrainingArgs(loss_type="orpo")`, `train_dsla`, and `evaluate_dsla` from
+`mlx_lm_lora.trainer.dsla_trainer`.
+
+DSLA supports compiled optimizer updates, LoRA/DoRA/full fine-tuning, gradient
+accumulation, gradient checkpointing, recurrent training safeguards and fast VJPs
+when available, QAT, distributed gradient averaging, callbacks, and adapter
+checkpoints. QAT is scoped to policy projections so the reference remains fixed.
+For DSLA QAT, `--qat-bits`, `--qat-group-size`, and `--qat-start-step` control the
+symmetric forward-pass quantizer; `--qat-mode` and `--qat-interval` currently have
+no effect.
+Cached `--efficient-long-context` sequence splitting is currently unsupported;
+use `--grad-checkpoint` and `--recurrence-chunk-size` to reduce memory.
+
+The direction is estimated independently for each worker's microbatch. Use at
+least two pairs per worker for agreement across pairs. Accumulating gradients
+from singleton microbatches does not combine their latent directions. Batch
+size one remains supported for similarity supervision.
 
 ---
 
@@ -355,13 +424,60 @@ mlx_lm_lora.train \
 **Key Parameters:**
 
 - `--group-size`: Number of generations per prompt (default: 4)
-- `--epsilon`: Numerical stability constant (default: 1e-4)
+- `--epsilon`: Importance-ratio clipping width (default: 1e-4)
 - `--max-completion-length`: Max generation length (default: 512)
 - `--temperature`: Sampling temperature (default: 0.8)
 - `--reward-functions`: Comma-separated reward function names
 - `--reward-functions-file`: Path to custom reward functions file
 - `--reward-weights`: JSON list of weights for each reward function
 - `--grpo-loss-type`: Loss variant - `grpo`, `bnpo`, or `dr_grpo`
+
+GRPO scores the exact sampled tokens with their prompt context, including the
+first completion token and any sampled stop token. Each rollout is used for one
+update; the fixed reference model is used only for the KL penalty. With
+`--beta 0`, reference scoring is skipped and the KL metric is zero.
+
+Log probabilities and loss reductions use float32. The KL estimator is
+`expm1(log_ref - log_policy) - (log_ref - log_policy)`, with its log ratio capped
+above at 20 to prevent exponential overflow. `kl_clip_ratio` (shown as
+“KL saturation”) reports how often this cap is reached; persistent saturation
+indicates excessive divergence and should be investigated. Non-finite losses or
+gradients abort the update before changing optimizer state.
+
+`grpo` averages each completion's token loss before averaging completions;
+`bnpo` divides by the total valid token count; `dr_grpo` divides by the number of
+completions times the configured maximum completion length. Empty completions
+contribute zero. Reward functions run once per rollout; unavailable rewards
+(`None`/NaN) have zero coverage and zero summary statistics when entirely absent,
+while infinite rewards and completions with no valid rewards are rejected.
+Generation concurrency and scoring microbatches are capped at the prompt batch
+size to limit KV-cache and activation memory as group size grows. Advantages
+are still normalized over complete groups, and microbatch gradients preserve
+the chosen loss normalization. Float32 scoring costs extra arithmetic; these
+memory limits trade some throughput for a smaller working set.
+
+### KL-Regularized Policy Optimization (KLPO)
+
+KLPO trains one complete sampled response per prompt using terminal rewards and
+sampler-conditioned KL records. The default is token regression with MC-KL:
+
+```shell
+mlx_lm_lora.train \
+  --model <model> \
+  --train \
+  --train-mode klpo \
+  --data <dataset> \
+  --beta 0.1 \
+  --klpo-route token \
+  --klpo-kl-estimator mc \
+  --klpo-mc-samples 128
+```
+
+Use `--klpo-route sequence` for sequence regression and
+`--klpo-kl-estimator binary|topk|full` for the other conditional KL
+estimators. KLPO does not use GRPO group normalization, PPO ratio clipping, or
+a reference model. It reuses the GRPO reward callbacks and bounded generation,
+scoring, gradient, evaluation, and checkpointing pipeline.
 
 **Dataset Format:**
 
@@ -376,13 +492,26 @@ Create a Python file with reward functions:
 
 ```python
 # my_rewards.py
-from mlx_lm_lora.reward_functions import register_reward_function
+from typing import Optional
+
+from mlx_lm_lora.trainer.grpo_reward_functions import register_reward_function
+
 
 @register_reward_function()
-def my_custom_reward(prompt, completion, reference_answer, **kwargs):
-    """Custom reward function"""
-    # Your logic here
-    return score  # float between 0 and 1
+def my_custom_reward(
+    prompts: list, completions: list, answer: list, types: Optional[list] = None
+) -> list[float]:
+    """Score a whole batch of completions.
+
+    Reward functions are called with keyword arguments
+    (`prompts=`, `completions=`, `answer=`, `types=`), so these parameter names
+    must match exactly -- note that `answer` is singular. Each call receives the
+    full batch and must return one float per entry in `completions`.
+    """
+    return [
+        1.0 if str(a).strip() and str(a).strip() in c else 0.0
+        for c, a in zip(completions, answer)
+    ]
 ```
 
 Then use: `--reward-functions-file ./my_rewards.py --reward-functions "my_custom_reward"`
@@ -482,6 +611,11 @@ mlx_lm_lora.train \
 - `--judge`: Judge model ID or "human" for human feedback
 - `--alpha`: Learning rate for online updates (default: 1e-5)
 - `--judge-config`: Additional configuration for judge model
+- `--micro-batch-size`: Maximum number of preference pairs scored together;
+  lower it to reduce activation/KV-cache memory (defaults to `batch_size`)
+
+Online DPO batches both policy/reference scoring and uses selected-token
+log-probabilities, so full-vocabulary log-softmax tensors are not retained.
 
 **Dataset Format:**
 
@@ -513,6 +647,8 @@ mlx_lm_lora.train \
 - `--alpha`: Online learning rate (default: 1e-5)
 - `--beta`: KL penalty strength (default: 0.1)
 - `--judge-config`: Additional judge configuration
+- `--micro-batch-size`: Maximum number of preference pairs scored together;
+  lower it to reduce activation/KV-cache memory (defaults to `batch_size`)
 
 **Dataset Format:** Same as Online DPO
 
@@ -538,6 +674,12 @@ mlx_lm_lora.train \
 - `--judge`: Reward model ID
 - `--alpha`: Policy learning rate (default: 1e-5)
 - `--beta`: KL penalty strength (default: 0.1)
+- `--micro-batch-size`: Maximum number of sampled trajectories scored together;
+  lower it to reduce activation/logit memory (defaults to `2 * batch_size`)
+
+RLHF REINFORCE scores the sampled target token directly and microbatches the
+trajectory graph, avoiding materialization of a second full-vocabulary logits
+graph for the reference policy.
 
 **Dataset Format:** Same as Online DPO
 
@@ -592,6 +734,69 @@ python -m mlx_lm_lora.train_judge \
 
 ---
 
+### MCP Server
+
+`mlx-lm-lora` ships an [MCP](https://modelcontextprotocol.io) server so agents
+(JOSIE Voice, Claude Desktop, any MCP client) can start, follow and stop
+training runs. Each run is a background `mlx_lm_lora.train` process; its config,
+log, state and adapters live in `~/.mlx-lm-lora/runs/<run_id>/` (change it with
+`--runs-dir` or `MLX_LM_LORA_RUNS_DIR`). Run state is kept on disk, so
+restarting the server does not lose track of a run.
+
+```shell
+pip install -U "mlx-lm-lora[mcp]"
+
+mlx-lm-lora-mcp                                   # stdio (default)
+mlx-lm-lora-mcp --transport http --port 8765      # streamable HTTP at http://127.0.0.1:8765/mcp
+MLX_LM_LORA_MCP_TOKEN=change-me mlx-lm-lora-mcp --transport http --host 0.0.0.0 \
+  --allowed-host '192.168.1.20:*'                 # LAN, requires "Authorization: Bearer change-me"
+```
+
+Tools: `list_training_modes`, `check_training_config`, `start_training`,
+`training_status`, `training_log`, `list_training_runs`, `stop_training`.
+Only one run trains at a time. `start_training` takes flat arguments (`model`,
+`data`, `train_mode`, `train_type`, `iters`, `batch_size`, `learning_rate`,
+`num_layers`, `max_seq_length`, `quantize_bits`, `fuse`) plus `extra_config`, a
+JSON/YAML object encoded as a string for any other `mlx_lm_lora.train` key,
+e.g. `"{\"beta\": 0.1}"`.
+
+The bundled [MLX-LM-LoRA training skill](skills/mlx-lm-lora/SKILL.md)
+documents all 12 training modes, matching MCP calls, best practices per
+algorithm, and [memory-efficiency guidance](skills/mlx-lm-lora/references/memory-efficiency.md).
+Copy `skills/mlx-lm-lora/` into your agent's skills directory to install it.
+
+**JOSIE Voice** (Settings → MCP servers, transport *stdio*). The same entry as JSON
+for the `mcpServers` list of `POST /api/v1/settings`:
+
+```json
+{
+  "name": "mlx-lm-lora",
+  "transport": "stdio",
+  "command": "mlx-lm-lora-mcp",
+  "args": [],
+  "env": {"MLX_LM_LORA_RUNS_DIR": "~/.mlx-lm-lora/runs"},
+  "enabled": true
+}
+```
+
+Or over HTTP: transport *HTTP*, URL `http://127.0.0.1:8765/mcp`, header
+`Authorization: Bearer change-me` (only when the token is set).
+
+**Claude Desktop** (`claude_desktop_config.json`; use the full path from `which mlx-lm-lora-mcp`):
+
+```json
+{
+  "mcpServers": {
+    "mlx-lm-lora": {"command": "/full/path/to/mlx-lm-lora-mcp", "args": []}
+  }
+}
+```
+
+**Other clients:** stdio command `mlx-lm-lora-mcp` (or `python -m mlx_lm_lora.mcp_server`),
+or streamable HTTP at `http://<host>:<port>/mcp`.
+
+---
+
 ## Configuration
 
 ### Core Training Parameters
@@ -626,16 +831,16 @@ python -m mlx_lm_lora.train_judge \
 
 # Quantization Aware Training (QAT)
 
-QAT projects trainable weights onto a quantized grid after each optimizer update, simulating quantization effects during training. This improves quantized model performance and robustness. QAT is supported for SFT, DPO, and ORPO.
+QAT applies symmetric fake quantization to linear weights during forward passes, with a straight-through estimator for gradients. Optimizers retain full-precision weights. QAT is supported for SFT, DPO, ORPO, and DSLA.
 
 **QAT Flags:**
 
 - `--qat-enable`    Enable QAT projection during training
 - `--qat-bits`     Bit-width for QAT (default: 8)
 - `--qat-group-size`  Group size for QAT (default: 64, 0=per-tensor)
-- `--qat-mode`     QAT mode (default: affine)
+- `--qat-mode`     Accepted argument (default: affine); the current hook always uses symmetric quantization
 - `--qat-start-step`  Start QAT after this optimizer step (default: 1)
-- `--qat-interval`   Apply QAT every N optimizer steps (default: 1)
+- `--qat-interval`   Accepted argument (default: 1), currently unused; fake quantization runs on every forward pass once activated
 
 See [QAT section above](#quantization-aware-training-qat) for usage examples.
 --load-in-4bits                  # 4-bit quantization
@@ -646,9 +851,9 @@ See [QAT section above](#quantization-aware-training-qat) for usage examples.
 --qat-enable                      # Enable QAT projection during training
 --qat-bits 4                      # Bit-width for QAT (default: 8)
 --qat-group-size 64               # Group size for QAT (default: 64, 0=per-tensor)
---qat-mode affine                 # QAT mode (default: affine)
+--qat-mode affine                 # Accepted; current quantizer is symmetric
 --qat-start-step 1                # Start QAT after this optimizer step (default: 1)
---qat-interval 1                  # Apply QAT every N optimizer steps (default: 1)
+--qat-interval 1                  # Accepted; current forward hook ignores this
 
 # Monitoring
 --steps-per-report 10            # Steps between loss reports
@@ -660,25 +865,30 @@ See [QAT section above](#quantization-aware-training-qat) for usage examples.
 --adapter-path ./adapters        # Save/load path for adapters
 --save-every 100                 # Save frequency
 --resume-adapter-file <path>     # Resume from checkpoint
---resume-checkpoint <directory>  # Resume full training state (SFT)
+--resume-checkpoint <directory>  # Resume full training state (all modes)
+--no-save-training-state         # Only save weights, no resumable state
 --fuse                           # Fuse and save trained model
 ```
 
-SFT checkpoints are written every `--save-every` iterations as
-`NNNNNNN_training_checkpoint/`, plus `final_training_checkpoint/` at clean exit.
-They contain trainable model parameters, optimizer/scheduler state, MLX and NumPy
-random state, iteration counters, and partially accumulated gradients. Resume to
-the original total iteration target, for example:
+Every training mode writes a resumable `NNNNNNN_training_checkpoint/` directory
+next to each `--save-every` weight snapshot, plus `final_training_checkpoint/`
+when training finishes. A checkpoint holds the trainable weights, the optimizer
+state (including the learning-rate schedule step), the MLX and NumPy random
+states, partially accumulated gradients and the iteration counters. SFT, DPO,
+CPO, ORPO, Online DPO, XPO, PPO and RLHF-REINFORCE resume bit-identically to an
+uninterrupted run; DSLA, FTPO, GRPO and KLPO restore the same state but start a
+new shuffled pass over the training data. Resume with the original
+configuration and the original total `--iters`:
 
 ```bash
 mlx_lm_lora.train --config config.yaml \
-  --resume-checkpoint adapters/0000500_training_checkpoint --iters 1000
+  --resume-checkpoint adapters/0000500_training_checkpoint
 ```
 
-With `--train-type full`, trained parameters are saved as `model.safetensors`
-with `config.json` and tokenizer files; no `adapters.safetensors` or
-`adapter_config.json` is created. Periodic weight snapshots use names such as
-`0000500_model.safetensors`. LoRA and DoRA runs retain the adapter filenames.
+`--resume-adapter-file` still loads weights only (a fresh optimizer and
+iteration count); the two flags cannot be combined. Checkpoint directories also
+store optimizer moments, so for large full fine-tunes pass
+`--no-save-training-state` if disk space matters more than resumability.
 
 ### Algorithm-Specific Parameters
 
@@ -698,6 +908,18 @@ with `config.json` and tokenizer files; no `adapters.safetensors` or
 ```shell
 --beta 0.1                        # Temperature parameter
 --reward-scaling 1.0              # Reward scaling factor
+```
+
+**DSLA:**
+
+```shell
+--dsla-loss orpo                  # dpo, orpo, cpo
+--latent-weight 0.1               # Weight of latent supervision
+--latent-margin 0.05              # Target similarity margin
+--latent-gamma 10                 # Soft-margin sharpness
+--latent-variant both             # similarity, direction, both
+--latent-pooling answer_mean      # answer_mean, last_token, last_k_mean, prompt_answer_mean
+--latent-layer final              # final, middle, late, or a zero-based block index
 ```
 
 **Group-Based Methods:**
@@ -899,8 +1121,12 @@ mlx_lm_lora.train --model <model> --load-in-8bits --train
 --grad-checkpoint
 
 # Linear and hybrid recurrent models (Qwen3.5/Next, Kimi, Mamba, etc.) are
-# detected automatically and use checkpointed linear blocks and smaller SSM
-# blocks during training.
+# detected automatically. Gated-delta layers use MLX's fast VJP when the
+# installed MLX build exposes it; masked or unsupported calls use checkpointed
+# blocks. SSM layers use smaller checkpointed blocks during training.
+
+# Attention already uses mx.fast.scaled_dot_product_attention, so MLX selects
+# its accelerated attention VJP automatically when supported by the build/device.
 
 # Reduce sequence length
 --max-seq-length 1024
@@ -1010,9 +1236,11 @@ Use multiple reward functions:
 |--------|------|-----------------|-------------|---------------------|-------------|
 | SFT | Supervised | ❌ | ❌ | ❌ | Simple, fast training |
 | DPO | Preference | ✅ | ❌ | ❌ | No reward model needed |
+| DSLA | Preference + latent | DPO only | ❌ | ❌ | Explicit similarity and direction supervision |
 | CPO | Preference | ✅ | ❌ | ❌ | Better for structured tasks |
 | ORPO | Preference | ❌ | ❌ | ❌ | Monolithic optimization |
 | GRPO | Policy | ❌ | ❌ | ✅ | Group-based learning |
+| KLPO | Policy | ❌ | ❌ | ❌ | Critic-free KL regularization |
 | GSPO | Policy | ❌ | ❌ | ✅ | Importance sampling |
 | Dr. GRPO | Policy | ❌ | ❌ | ✅ | Decoupled rewards |
 | DAPO | Policy | ❌ | ❌ | ✅ | Dynamic clipping |
@@ -1033,6 +1261,15 @@ mlx_lm_lora.train --model <model> --train-mode sft --data <data>
 
 # DPO
 mlx_lm_lora.train --model <model> --train-mode dpo --data <data> --beta 0.1
+
+# DSLA with DPO (loads a frozen reference)
+mlx_lm_lora.train --model <model> --train --train-mode dsla --dsla-loss dpo --data <data> --batch-size 2
+
+# DSLA with ORPO (reference-free)
+mlx_lm_lora.train --model <model> --train --train-mode dsla --dsla-loss orpo --data <data> --batch-size 2
+
+# DSLA with CPO (reference-free extension)
+mlx_lm_lora.train --model <model> --train --train-mode dsla --dsla-loss cpo --data <data> --batch-size 2
 
 # CPO
 mlx_lm_lora.train --model <model> --train-mode cpo --data <data> --beta 0.1
@@ -1192,7 +1429,7 @@ Below is a comparison of iteration speed and memory usage across different train
 #### Key Differences
 
 **MLX-LM-LoRA (Apple Silicon - Native MLX)**
-- ✅ **Comprehensive**: 12 training algorithms (SFT, DPO, CPO, ORPO, GRPO, GSPO, Dr. GRPO, DAPO, Online DPO, XPO, RLHF, PPO)
+- ✅ **Comprehensive**: 13 training algorithms (SFT, DPO, CPO, ORPO, GRPO, KLPO, GSPO, Dr. GRPO, DAPO, Online DPO, XPO, RLHF, PPO)
 - ✅ **Custom Preference Models**: Built-in judge training for online preference workflows
 - ✅ **Unified Memory**: Access to full system RAM (up to 512GB on Ultra)
 - ✅ **Moderate Speed**: Optimized MLX implementation with native Apple Silicon support
@@ -1261,3 +1498,7 @@ MLX-LM-LoRA is also beeing used by researchers, engineers, and other profesional
   year = {2025},
 }
 ```
+
+## License
+
+MLX-LM-LoRA is licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for the full license text.

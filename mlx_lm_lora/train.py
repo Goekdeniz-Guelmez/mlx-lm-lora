@@ -18,9 +18,11 @@ from mlx_lm.tuner.utils import (
 )
 from mlx_lm.utils import load, load_tokenizer
 
+from .chat_template import ensure_chat_template
 from .trainer.cpo_trainer import CPOTrainingArgs, evaluate_cpo, train_cpo
 from .trainer.datasets import CacheDataset, load_dataset
 from .trainer.dpo_trainer import DPOTrainingArgs, evaluate_dpo, train_dpo
+from .trainer.dsla_trainer import DSLATrainingArgs, evaluate_dsla, train_dsla
 from .trainer.ftpo_trainer import FTPOTrainingArgs, evaluate_ftpo, train_ftpo
 from .trainer.grpo_reward_functions import (
     get_default_reward_functions,
@@ -28,6 +30,7 @@ from .trainer.grpo_reward_functions import (
     list_available_reward_functions,
 )
 from .trainer.grpo_trainer import GRPOTrainingArgs, evaluate_grpo, train_grpo
+from .trainer.klpo_trainer import KLPOTrainingArgs, evaluate_klpo, train_klpo
 from .trainer.online_dpo_trainer import (
     OnlineDPOTrainingArgs,
     evaluate_online_dpo,
@@ -90,16 +93,18 @@ CONFIG_DEFAULTS = {
     "data": "data/",
     "seed": 0,
     "num_layers": -1,
-    "batch_size": 4,
+    "batch_size": 1,
     "iters": None,
     "epochs": None,
     "gradient_accumulation_steps": 1,
+    "micro_batch_size": None,
     "val_batches": 25,
     "learning_rate": 1e-5,
     "steps_per_report": 10,
     "steps_per_eval": 200,
     "resume_adapter_file": None,
     "resume_checkpoint": None,
+    "save_training_state": True,
     "adapter_path": "adapters",
     "save_every": 100,
     "test": False,
@@ -108,6 +113,7 @@ CONFIG_DEFAULTS = {
     "config": None,
     "grad_checkpoint": False,
     "efficient_long_context": False,
+    "recurrence_chunk_size": 64,
     "lr_schedule": None,
     "lora_parameters": {"rank": 8, "dropout": 0.0, "scale": 10.0},
     "mask_prompt": False,
@@ -115,6 +121,13 @@ CONFIG_DEFAULTS = {
     "beta": 0.1,
     "reward_scaling": 1.0,
     "dpo_cpo_loss_type": "sigmoid",
+    "dsla_loss": "dpo",
+    "latent_weight": 0.1,
+    "latent_margin": 0.05,
+    "latent_gamma": 10.0,
+    "latent_variant": "both",
+    "latent_pooling": "answer_mean",
+    "latent_layer": "final",
     "delta": 50.0,
     "reference_model_path": None,
     "lambda_mse_target": 0.05,
@@ -134,6 +147,11 @@ CONFIG_DEFAULTS = {
     "reward_functions_file": None,
     "grpo_loss_type": "grpo",
     "importance_sampling_level": "token",
+    "klpo_route": "token",
+    "klpo_kl_estimator": "mc",
+    "klpo_mc_samples": 128,
+    "klpo_top_k": 128,
+    "klpo_tail_floor": 1e-6,
     "lm_studio_name": None,
     "qat_enable": False,
     "qat_bits": 8,
@@ -193,10 +211,12 @@ def load_judge_model(args, reference_model=None):
     if args.judge == args.reference_model_path and reference_model is not None:
         print("Loading judge model (reusing reference model)")
         tokenizer = load_tokenizer(args.judge)
+        ensure_chat_template(tokenizer)
         return reference_model, tokenizer
 
     print(f"Loading pretrained judge model from {args.judge}")
     model, tokenizer = load(args.judge)
+    ensure_chat_template(tokenizer)
     return model.freeze(), tokenizer
 
 
@@ -258,10 +278,12 @@ def build_parser():
         choices=[
             "sft",
             "dpo",
+            "dsla",
             "ftpo",
             "cpo",
             "orpo",
             "grpo",
+            "klpo",
             "online_dpo",
             "xpo",
             "rlhf_reinforce",
@@ -331,7 +353,17 @@ def build_parser():
     parser.add_argument(
         "--resume-checkpoint",
         type=str,
-        help="Resume model, optimizer, RNG, gradients, and iteration from a full checkpoint directory.",
+        help=(
+            "Resume weights, optimizer, RNG, accumulated gradients and iteration "
+            "from a *_training_checkpoint directory (all training modes)."
+        ),
+    )
+    parser.add_argument(
+        "--no-save-training-state",
+        dest="save_training_state",
+        action="store_false",
+        default=None,
+        help="Only save weights; skip the resumable *_training_checkpoint directories.",
     )
     parser.add_argument(
         "--adapter-path", type=str, help="Save/load path for the fine-tuned weights."
@@ -370,6 +402,12 @@ def build_parser():
         default=None,
     )
     parser.add_argument(
+        "--recurrence-chunk-size",
+        type=int,
+        help="Chunk size for memory-safe recurrent training fallbacks.",
+        default=None,
+    )
+    parser.add_argument(
         "--wandb",
         type=str,
         default=None,
@@ -404,6 +442,24 @@ def build_parser():
     parser.add_argument(
         "--delta", type=float, help="Delta parameter for DPOP loss type.", default=50.0
     )
+    parser.add_argument(
+        "--dsla-loss",
+        choices=["dpo", "orpo", "cpo"],
+        default="dpo",
+        help="Underlying preference objective for --train-mode dsla.",
+    )
+    parser.add_argument("--latent-weight", type=float, default=0.1)
+    parser.add_argument("--latent-margin", type=float, default=0.05)
+    parser.add_argument("--latent-gamma", type=float, default=10.0)
+    parser.add_argument(
+        "--latent-variant", choices=["similarity", "direction", "both"], default="both"
+    )
+    parser.add_argument(
+        "--latent-pooling",
+        choices=["answer_mean", "last_token", "last_k_mean", "prompt_answer_mean"],
+        default="answer_mean",
+    )
+    parser.add_argument("--latent-layer", default="final")
     parser.add_argument(
         "--reference-model-path",
         type=str,
@@ -443,6 +499,12 @@ def build_parser():
     )
     parser.add_argument(
         "--temperature", type=float, help="Temperature for sampling.", default=1.0
+    )
+    parser.add_argument(
+        "--micro-batch-size",
+        type=int,
+        default=None,
+        help="Bound online DPO/RLHF/XPO scoring memory with this microbatch size.",
     )
     parser.add_argument(
         "--reward-weights",
@@ -488,6 +550,38 @@ def build_parser():
         help="Level of importance sampling to use (default: token).",
     )
     parser.add_argument(
+        "--klpo-route",
+        type=str,
+        choices=["token", "sequence"],
+        default="token",
+        help="KLPO regression route.",
+    )
+    parser.add_argument(
+        "--klpo-kl-estimator",
+        type=str,
+        choices=["mc", "topk", "binary", "full"],
+        default="mc",
+        help="KLPO conditional KL estimator.",
+    )
+    parser.add_argument(
+        "--klpo-mc-samples",
+        type=int,
+        default=128,
+        help="KLPO auxiliary MC-KL draws per visited prefix.",
+    )
+    parser.add_argument(
+        "--klpo-top-k",
+        type=int,
+        default=128,
+        help="KLPO TopK-KL sampler head size.",
+    )
+    parser.add_argument(
+        "--klpo-tail-floor",
+        type=float,
+        default=1e-6,
+        help="KLPO TopK-KL tail probability floor.",
+    )
+    parser.add_argument(
         "--qat-enable",
         action="store_true",
         default=None,
@@ -527,6 +621,22 @@ def build_parser():
     return parser
 
 
+def _dsla_training_args(args, **overrides):
+    """Map CLI/config settings to the standalone DSLA trainer."""
+    values = {
+        name: getattr(args, name)
+        for name in DSLATrainingArgs.__dataclass_fields__
+        if hasattr(args, name)
+    }
+    values.update(
+        loss_type=args.dsla_loss,
+        steps_per_save=args.save_every,
+        seq_step_size=512 if args.efficient_long_context else None,
+    )
+    values.update(overrides)
+    return DSLATrainingArgs(**values)
+
+
 def train_model(
     args,
     model: nn.Module,
@@ -541,21 +651,22 @@ def train_model(
 ):
     mx.random.seed(args.seed)
 
+    if args.iters is None:
+        if args.epochs is not None:
+            args.iters = calculate_iters(
+                train_set=train_set, batch_size=args.batch_size, epochs=args.epochs
+            )
+        else:
+            args.iters = SFTTrainingArgs().iters
+            print_info(
+                f"Neither iters nor epochs was provided; defaulting to {args.iters} iterations."
+            )
+
     if args.resume_adapter_file is not None and args.resume_checkpoint is not None:
         raise ValueError(
             "Use either --resume-adapter-file (weights only) or "
-            "--resume-checkpoint (full SFT state), not both."
+            "--resume-checkpoint (full training state), not both."
         )
-    if args.resume_checkpoint is not None and args.train_mode != "sft":
-        raise ValueError(
-            "--resume-checkpoint currently supports --train-mode sft only."
-        )
-
-    if args.iters is None and args.epochs is not None:
-        args.iters = calculate_iters(
-            train_set=train_set, batch_size=args.batch_size, epochs=args.epochs
-        )
-
     if args.resume_adapter_file is not None:
         print_warning(
             f"Loading fine-tuned weights from {Colors.CYAN}{args.resume_adapter_file}{Colors.RESET}"
@@ -574,7 +685,18 @@ def train_model(
     print_info(f"Training mode: {Colors.YELLOW}{args.train_mode.upper()}{Colors.RESET}")
 
     # Training mode dispatch
-    if args.train_mode == "orpo":
+    if args.train_mode == "dsla":
+        train_dsla(
+            model=model,
+            optimizer=opt,
+            train_dataset=train_set,
+            val_dataset=valid_set,
+            args=_dsla_training_args(args, adapter_file=adapter_file),
+            ref_model=reference_model,
+            training_callback=training_callback,
+        )
+
+    elif args.train_mode == "orpo":
         train_orpo(
             model=model,
             optimizer=opt,
@@ -588,8 +710,11 @@ def train_model(
                 steps_per_eval=args.steps_per_eval,
                 steps_per_save=args.save_every,
                 adapter_file=adapter_file,
+                resume_checkpoint=args.resume_checkpoint,
+                save_training_state=args.save_training_state,
                 max_seq_length=args.max_seq_length,
                 grad_checkpoint=args.grad_checkpoint,
+                recurrence_chunk_size=args.recurrence_chunk_size,
                 beta=args.beta,
                 seq_step_size=512 if args.efficient_long_context else None,
                 reward_scaling=args.reward_scaling,
@@ -619,8 +744,11 @@ def train_model(
                 steps_per_eval=args.steps_per_eval,
                 steps_per_save=args.save_every,
                 adapter_file=adapter_file,
+                resume_checkpoint=args.resume_checkpoint,
+                save_training_state=args.save_training_state,
                 max_seq_length=args.max_seq_length,
                 grad_checkpoint=args.grad_checkpoint,
+                recurrence_chunk_size=args.recurrence_chunk_size,
                 gradient_accumulation_steps=args.gradient_accumulation_steps,
                 lambda_mse_target=args.lambda_mse_target,
                 tau_mse_target=args.tau_mse_target,
@@ -645,8 +773,11 @@ def train_model(
                 steps_per_eval=args.steps_per_eval,
                 steps_per_save=args.save_every,
                 adapter_file=adapter_file,
+                resume_checkpoint=args.resume_checkpoint,
+                save_training_state=args.save_training_state,
                 max_seq_length=args.max_seq_length,
                 grad_checkpoint=args.grad_checkpoint,
+                recurrence_chunk_size=args.recurrence_chunk_size,
                 beta=args.beta,
                 loss_type=args.dpo_cpo_loss_type,
                 delta=args.delta,
@@ -679,11 +810,15 @@ def train_model(
             "steps_per_eval": args.steps_per_eval,
             "steps_per_save": args.save_every,
             "adapter_file": adapter_file,
+            "resume_checkpoint": args.resume_checkpoint,
+            "save_training_state": args.save_training_state,
             "max_seq_length": args.max_seq_length,
             "grad_checkpoint": args.grad_checkpoint,
+            "recurrence_chunk_size": args.recurrence_chunk_size,
             "beta": args.beta,
             "reference_model_path": args.reference_model_path,
             "gradient_accumulation_steps": args.gradient_accumulation_steps,
+            "micro_batch_size": args.micro_batch_size,
             "judge": args.judge,
             "max_completion_length": args.max_completion_length,
         }
@@ -734,14 +869,72 @@ def train_model(
                 steps_per_eval=args.steps_per_eval,
                 steps_per_save=args.save_every,
                 adapter_file=adapter_file,
+                resume_checkpoint=args.resume_checkpoint,
+                save_training_state=args.save_training_state,
                 max_seq_length=args.max_seq_length,
                 grad_checkpoint=args.grad_checkpoint,
+                recurrence_chunk_size=args.recurrence_chunk_size,
                 beta=args.beta,
                 loss_type=args.dpo_cpo_loss_type,
                 delta=args.delta,
                 seq_step_size=512 if args.efficient_long_context else None,
                 reference_model_path=args.reference_model_path,
                 gradient_accumulation_steps=args.gradient_accumulation_steps,
+            ),
+            training_callback=training_callback,
+        )
+
+    elif args.train_mode == "klpo":
+        if args.reward_functions_file:
+            load_reward_functions_from_file(args.reward_functions_file)
+
+        reward_funcs = get_default_reward_functions()
+        if args.reward_functions:
+            func_names = [name.strip() for name in args.reward_functions.split(",")]
+            try:
+                reward_funcs = [get_reward_function(name) for name in func_names]
+                print_success(f"Using custom reward functions: {', '.join(func_names)}")
+            except KeyError as e:
+                print_error(f"Error: {e!s}")
+                print_info(
+                    f"Available reward functions: {list_available_reward_functions()}"
+                )
+                return
+
+        train_klpo(
+            model=model,
+            tokenizer=tokenizer,
+            optimizer=opt,
+            train_dataset=train_set,
+            val_dataset=valid_set,
+            reward_funcs=reward_funcs,
+            args=KLPOTrainingArgs(
+                batch_size=args.batch_size,
+                iters=args.iters,
+                val_batches=args.val_batches,
+                steps_per_report=args.steps_per_report,
+                steps_per_eval=args.steps_per_eval,
+                steps_per_save=args.save_every,
+                adapter_file=adapter_file,
+                resume_checkpoint=args.resume_checkpoint,
+                save_training_state=args.save_training_state,
+                max_seq_length=args.max_seq_length,
+                max_completion_length=args.max_completion_length,
+                grad_checkpoint=args.grad_checkpoint,
+                recurrence_chunk_size=args.recurrence_chunk_size,
+                beta=args.beta,
+                route=args.klpo_route,
+                kl_estimator=args.klpo_kl_estimator,
+                mc_samples=args.klpo_mc_samples,
+                top_k=args.klpo_top_k,
+                tail_floor=args.klpo_tail_floor,
+                temperature=args.temperature,
+                gradient_accumulation_steps=args.gradient_accumulation_steps,
+                reward_weights=(
+                    [float(x) for x in args.reward_weights.strip("[]").split(",")]
+                    if args.reward_weights
+                    else None
+                ),
             ),
             training_callback=training_callback,
         )
@@ -757,7 +950,7 @@ def train_model(
                 reward_funcs = [get_reward_function(name) for name in func_names]
                 print_success(f"Using custom reward functions: {', '.join(func_names)}")
             except KeyError as e:
-                print_error(f"Error: {str(e)}")
+                print_error(f"Error: {e!s}")
                 print_info(
                     f"Available reward functions: {list_available_reward_functions()}"
                 )
@@ -779,9 +972,12 @@ def train_model(
                 steps_per_eval=args.steps_per_eval,
                 steps_per_save=args.save_every,
                 adapter_file=adapter_file,
+                resume_checkpoint=args.resume_checkpoint,
+                save_training_state=args.save_training_state,
                 max_seq_length=args.max_seq_length,
                 max_completion_length=args.max_completion_length,
                 grad_checkpoint=args.grad_checkpoint,
+                recurrence_chunk_size=args.recurrence_chunk_size,
                 beta=args.beta,
                 group_size=args.group_size,
                 epsilon=args.epsilon,
@@ -813,10 +1009,12 @@ def train_model(
                 steps_per_save=args.save_every,
                 adapter_file=adapter_file,
                 resume_checkpoint=args.resume_checkpoint,
+                save_training_state=args.save_training_state,
                 max_seq_length=args.max_seq_length,
                 grad_checkpoint=args.grad_checkpoint,
                 gradient_accumulation_steps=args.gradient_accumulation_steps,
                 seq_step_size=512 if args.efficient_long_context else None,
+                recurrence_chunk_size=args.recurrence_chunk_size,
                 qat_enable=args.qat_enable,
                 qat_bits=args.qat_bits,
                 qat_group_size=args.qat_group_size,
@@ -846,9 +1044,22 @@ def evaluate_model(
 
     print_section(f"Evaluating {args.train_mode.upper()} Model")
 
-    if args.train_mode == "orpo":
-        efficient = args.seq_step_size is not None
-        seq_step_size = args.seq_step_size or args.max_seq_length
+    if args.train_mode == "dsla":
+        test_loss, test_rewards, _, test_metrics = evaluate_dsla(
+            model=model,
+            dataset=test_set,
+            args=_dsla_training_args(args),
+            ref_model=reference_model,
+            num_batches=args.test_batches,
+        )
+        print(f"{Colors.BOLD}DSLA Test loss:{Colors.RESET} {test_loss:.3f}")
+        print(
+            f"Chosen reward: {test_rewards[0]:.3f}, rejected reward: {test_rewards[1]:.3f}"
+        )
+        for metric_name, metric_value in test_metrics.items():
+            print(f"  {metric_name}: {float(metric_value):.3f}")
+
+    elif args.train_mode == "orpo":
         test_loss, test_rewards, _, test_metrics = evaluate_orpo(
             model=model,
             dataset=test_set,
@@ -856,8 +1067,6 @@ def evaluate_model(
             num_batches=args.test_batches,
             max_seq_length=args.max_seq_length,
             beta=args.beta,
-            efficient=efficient,
-            seq_step_size=seq_step_size,
         )
         test_ppl = math.exp(test_loss)
         print(
@@ -1057,6 +1266,57 @@ def evaluate_model(
                 f"  {Colors.WHITE}{metric_name}:{Colors.RESET} {float(metric_value):.3f}"
             )
 
+    elif args.train_mode == "klpo":
+        if args.reward_functions_file:
+            load_reward_functions_from_file(args.reward_functions_file)
+
+        reward_funcs = get_default_reward_functions()
+        if args.reward_functions:
+            func_names = [name.strip() for name in args.reward_functions.split(",")]
+            try:
+                reward_funcs = [get_reward_function(name) for name in func_names]
+            except KeyError as e:
+                print_error(f"Error: {e!s}")
+                print_info(
+                    f"Available reward functions: {list_available_reward_functions()}"
+                )
+                return
+
+        test_loss, test_ntokens, test_metrics = evaluate_klpo(
+            model=model,
+            dataset=test_set,
+            tokenizer=tokenizer,
+            batch_size=args.batch_size,
+            num_batches=args.test_batches,
+            beta=args.beta,
+            route=args.klpo_route,
+            kl_estimator=args.klpo_kl_estimator,
+            mc_samples=args.klpo_mc_samples,
+            top_k=args.klpo_top_k,
+            tail_floor=args.klpo_tail_floor,
+            max_seq_length=args.max_seq_length,
+            max_tokens=args.max_completion_length,
+            temperature=args.temperature,
+            reward_funcs=reward_funcs,
+            reward_weights=(
+                [float(x) for x in args.reward_weights.strip("[]").split(",")]
+                if args.reward_weights
+                else None
+            ),
+        )
+        test_ppl = math.exp(test_loss)
+        print(
+            f"{Colors.BOLD}Test Results:{Colors.RESET}\n"
+            f"  {Colors.YELLOW}Loss:{Colors.RESET} {test_loss:.3f}\n"
+            f"  {Colors.YELLOW}Perplexity:{Colors.RESET} {test_ppl:.3f}\n"
+            f"  {Colors.YELLOW}Tokens:{Colors.RESET} {test_ntokens}"
+        )
+        print(f"\n{Colors.CYAN}KLPO Test Metrics:{Colors.RESET}")
+        for metric_name, metric_value in test_metrics.items():
+            print(
+                f"  {Colors.WHITE}{metric_name}:{Colors.RESET} {float(metric_value):.3f}"
+            )
+
     elif args.train_mode == "grpo":
         if args.reward_functions_file:
             load_reward_functions_from_file(args.reward_functions_file)
@@ -1067,7 +1327,7 @@ def evaluate_model(
             try:
                 reward_funcs = [get_reward_function(name) for name in func_names]
             except KeyError as e:
-                print_error(f"Error: {str(e)}")
+                print_error(f"Error: {e!s}")
                 print_info(
                     f"Available reward functions: {list_available_reward_functions()}"
                 )
@@ -1119,6 +1379,7 @@ def evaluate_model(
             num_batches=args.test_batches,
             max_seq_length=args.max_seq_length,
             loss=get_sft_loss(args.sft_loss_type),
+            recurrence_chunk_size=args.recurrence_chunk_size,
         )
         test_ppl = math.exp(test_loss)
         print(
@@ -1175,6 +1436,7 @@ def run(args, training_callback: TrainingCallback = None):
         load_reference_model(args)
         if args.train_mode
         in ["dpo", "ftpo", "grpo", "online_dpo", "ppo", "rlhf_reinforce", "xpo"]
+        or (args.train_mode == "dsla" and args.dsla_loss == "dpo")
         else None
     )
     judge_model, judge_tokenizer = (
@@ -1188,12 +1450,7 @@ def run(args, training_callback: TrainingCallback = None):
 
     if args.test and not args.train:
         if args.adapter_path != "":
-            if args.train_type == "full":
-                model.load_weights(
-                    str(Path(args.adapter_path) / "model.safetensors"), strict=True
-                )
-            else:
-                load_adapters(model, args.adapter_path)
+            load_adapters(model, args.adapter_path)
     elif args.train:
         print_section("Training")
         train_model(

@@ -22,7 +22,7 @@ def register_reward_function(name: str = None):
 
     Example:
         @register_reward_function()
-        def my_custom_reward(prompts, completions, answers, types=None):
+        def my_custom_reward(prompts, completions, answer, types=None):
             # Your reward logic here
             return [1.0 if condition else 0.0 for _ in completions]
     """

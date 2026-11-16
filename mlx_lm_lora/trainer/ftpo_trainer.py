@@ -3,18 +3,18 @@
 import time
 from dataclasses import dataclass, field
 from functools import partial
-from pathlib import Path
 from typing import Any, Optional
 
 import mlx.core as mx
 import mlx.nn as nn
 import numpy as np
 from mlx.nn.utils import average_gradients
-from mlx.utils import tree_flatten, tree_map
+from mlx.utils import tree_map
 from mlx_lm.tuner.callbacks import TrainingCallback
 from tqdm import tqdm
 
 from ..recurrent_patch import enable_memory_safe_recurrences, model_uses_recurrence
+from .checkpointing import resume_training, save_checkpoint
 from .sft_trainer import SFTTrainingArgs, grad_checkpoint
 
 
@@ -174,10 +174,10 @@ def evaluate_ftpo(
             if totals is None
             else {k: totals[k] + v for k, v in metrics.items()}
         )
+        mx.eval(total_loss, *totals.values())
         count += 1
     if count == 0:
         raise ValueError("No FTPO evaluation batches available")
-    mx.eval(total_loss, *totals.values())
     return total_loss.item() / count, {k: v / count for k, v in totals.items()}
 
 
@@ -191,7 +191,7 @@ def train_ftpo(
     training_callback: TrainingCallback = None,
 ):
     if model_uses_recurrence(model):
-        enable_memory_safe_recurrences()
+        enable_memory_safe_recurrences(chunk_size=args.recurrence_chunk_size)
     if ref_model is None:
         raise ValueError("FTPO requires a frozen reference model")
     if args.gradient_accumulation_steps < 1:
@@ -200,6 +200,7 @@ def train_ftpo(
         grad_checkpoint(model.layers[0])
 
     world = mx.distributed.init()
+    progress = resume_training(args, model, optimizer)
     state = [model.state, optimizer.state, mx.random.state]
     value_and_grad = nn.value_and_grad(
         model, lambda m, batch: _batch_loss(m, ref_model, batch, args)
@@ -222,13 +223,15 @@ def train_ftpo(
     iterator = iterate_ftpo_batches(
         train_dataset, args.batch_size, args.max_seq_length, train=True
     )
-    accumulated_grad = None
+    accumulated_grad = progress.grad_accum
     loss_sum = mx.array(0.0)
     metric_sums = None
     report_steps = 0
     start = time.perf_counter()
     rank = world.rank()
-    pbar = tqdm(range(1, args.iters + 1), desc="FTPO", disable=rank != 0)
+    pbar = tqdm(
+        range(progress.start_iteration, args.iters + 1), desc="FTPO", disable=rank != 0
+    )
     for iteration in pbar:
         if val_dataset and (iteration == 1 or iteration % args.steps_per_eval == 0):
             val_loss, val_metrics = evaluate_ftpo(
@@ -290,10 +293,19 @@ def train_ftpo(
                 time.perf_counter(),
             )
         if iteration % args.steps_per_save == 0:
-            mx.save_safetensors(
-                str(args.adapter_file), dict(tree_flatten(model.trainable_parameters()))
+            save_checkpoint(
+                args,
+                iteration,
+                model=model,
+                optimizer=optimizer,
+                grad_accum=accumulated_grad,
             )
 
-    mx.save_safetensors(
-        str(args.adapter_file), dict(tree_flatten(model.trainable_parameters()))
+    save_checkpoint(
+        args,
+        max(args.iters, progress.iteration),
+        model=model,
+        optimizer=optimizer,
+        grad_accum=accumulated_grad,
+        final=True,
     )

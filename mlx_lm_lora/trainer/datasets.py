@@ -7,6 +7,13 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from transformers import PreTrainedTokenizer
 
 
+def _chat_template_prefix_kwargs(tokenizer, required: bool):
+    """Align thinking-capable chat templates with completed response prefixes."""
+    if required and getattr(tokenizer, "has_thinking", False):
+        return {"enable_thinking": False}
+    return {}
+
+
 class GRPODataset:
     def __init__(
         self,
@@ -183,9 +190,14 @@ class DPODataset:
         chosen_key: str = "chosen",
         rejected_key: str = "rejected",
         system_key: str = "system",
+        strict_prompt_prefix: bool = False,
     ):
         self._chosen_data = []
         self._rejected_data = []
+        self._prompt_lengths = []
+        template_kwargs = _chat_template_prefix_kwargs(
+            tokenizer, required=strict_prompt_prefix
+        )
 
         for d in data:
             messages = (
@@ -205,17 +217,40 @@ class DPODataset:
 
             self._chosen_data.append(
                 tokenizer.apply_chat_template(
-                    chosen_messages, add_generation_prompt=True
+                    chosen_messages,
+                    add_generation_prompt=False,
+                    **template_kwargs,
                 )
             )
             self._rejected_data.append(
                 tokenizer.apply_chat_template(
-                    rejected_messages, add_generation_prompt=True
+                    rejected_messages,
+                    add_generation_prompt=False,
+                    **template_kwargs,
                 )
             )
+            prompt_tokens = tokenizer.apply_chat_template(
+                base_messages,
+                add_generation_prompt=True,
+                **template_kwargs,
+            )
+            if strict_prompt_prefix and (
+                self._chosen_data[-1][: len(prompt_tokens)] != prompt_tokens
+                or self._rejected_data[-1][: len(prompt_tokens)] != prompt_tokens
+            ):
+                raise ValueError(
+                    "DSLA requires the rendered generation prompt to be an exact "
+                    "token prefix of both responses; check the tokenizer chat template"
+                )
+            self._prompt_lengths.append(len(prompt_tokens))
 
     def __getitem__(self, idx: int):
-        return {"chosen": self._chosen_data[idx], "rejected": self._rejected_data[idx]}
+        return {
+            "chosen": self._chosen_data[idx],
+            "rejected": self._rejected_data[idx],
+            "chosen_prompt_length": self._prompt_lengths[idx],
+            "rejected_prompt_length": self._prompt_lengths[idx],
+        }
 
     def __len__(self):
         return len(self._chosen_data)
@@ -274,7 +309,12 @@ class ORPODataset:
     ):
         self._chosen_data = []
         self._rejected_data = []
+        self._chosen_prompt_lengths = []
+        self._rejected_prompt_lengths = []
         self._scores = []
+        # ORPO uses this separately rendered prompt length to mask response
+        # tokens, so it needs the same token-prefix alignment as DSLA.
+        template_kwargs = _chat_template_prefix_kwargs(tokenizer, required=True)
 
         for d in data:
             prompt_content = d.get(prompt_key, d.get("question", ""))
@@ -323,11 +363,18 @@ class ORPODataset:
                     rejected_messages.extend(d[rejected_key])
 
                 chosen_text = tokenizer.apply_chat_template(
-                    chosen_messages, add_generation_prompt=True
+                    chosen_messages,
+                    add_generation_prompt=False,
+                    **template_kwargs,
                 )
                 rejected_text = tokenizer.apply_chat_template(
-                    rejected_messages, add_generation_prompt=True
+                    rejected_messages,
+                    add_generation_prompt=False,
+                    **template_kwargs,
                 )
+                prompt_messages = base_messages + [
+                    {"role": "user", "content": prompt_content}
+                ]
 
             else:
                 chosen_content = self._extract_content(d[chosen_key])
@@ -337,17 +384,29 @@ class ORPODataset:
                     [
                         {"role": "user", "content": prompt_content},
                         {"role": "assistant", "content": chosen_content},
-                    ]
+                    ],
+                    **template_kwargs,
                 )
                 rejected_text = tokenizer.apply_chat_template(
                     [
                         {"role": "user", "content": prompt_content},
                         {"role": "assistant", "content": rejected_content},
-                    ]
+                    ],
+                    **template_kwargs,
                 )
+                prompt_messages = [{"role": "user", "content": prompt_content}]
 
             self._chosen_data.append(chosen_text)
             self._rejected_data.append(rejected_text)
+            prompt_length = len(
+                tokenizer.apply_chat_template(
+                    prompt_messages,
+                    add_generation_prompt=True,
+                    **template_kwargs,
+                )
+            )
+            self._chosen_prompt_lengths.append(prompt_length)
+            self._rejected_prompt_lengths.append(prompt_length)
 
             if preference_score_key in d:
                 self._scores.append(float(d[preference_score_key]))
@@ -383,6 +442,8 @@ class ORPODataset:
         return {
             "chosen": self._chosen_data[idx],
             "rejected": self._rejected_data[idx],
+            "chosen_prompt_length": self._chosen_prompt_lengths[idx],
+            "rejected_prompt_length": self._rejected_prompt_lengths[idx],
             "preference_score": self._scores[idx],
         }
 
@@ -571,7 +632,7 @@ def create_dataset(
 
     sample = data[0]
 
-    if train_mode == "orpo":
+    if train_mode in ["orpo"]:
         if chosen_feature in sample and rejected_feature in sample:
             return ORPODataset(
                 data=data,
@@ -609,7 +670,7 @@ def create_dataset(
                 max_seq_length=getattr(config, "max_seq_length", 2048),
             )
         raise ValueError("Unsupported data format for FTPO training.")
-    elif train_mode in ["dpo", "cpo"]:
+    elif train_mode in ["dpo", "cpo", "dsla"]:
         if chosen_feature in sample and rejected_feature in sample:
             return DPODataset(
                 data=data,
@@ -618,6 +679,7 @@ def create_dataset(
                 system_key=system_feature,
                 chosen_key=chosen_feature,
                 rejected_key=rejected_feature,
+                strict_prompt_prefix=train_mode == "dsla",
             )
         else:
             raise ValueError("Unsupported data format for Online DPO or CPO training.")
@@ -630,7 +692,7 @@ def create_dataset(
             )
         else:
             raise ValueError("Unsupported data format for RLHF training.")
-    elif train_mode in ["grpo"]:
+    elif train_mode in ["grpo", "klpo"]:
         if prompt_feature in sample:
             return GRPODataset(
                 data=data,
@@ -676,12 +738,38 @@ def load_local_dataset(
     return train, valid, test
 
 
+def _discard_incomplete_torch_namespace():
+    """Hide a namespace-only ``torch`` directory from Hugging Face datasets.
+
+    MLX environments can contain a ``torch/`` namespace directory left by
+    optional ecosystem packages without having PyTorch installed. Recent
+    ``datasets`` releases see that namespace in ``sys.modules`` and assume it
+    implements the PyTorch API while fingerprinting a dataset.
+    """
+    import sys
+
+    torch_module = sys.modules.get("torch")
+    if torch_module is None:
+        return
+
+    tensor_type = getattr(torch_module, "Tensor", None)
+    generator_type = getattr(torch_module, "Generator", None)
+    module_type = getattr(getattr(torch_module, "nn", None), "Module", None)
+    if not all(
+        isinstance(value, type)
+        for value in (tensor_type, generator_type, module_type)
+    ):
+        sys.modules.pop("torch", None)
+
+
 def load_hf_dataset(
     data_id: str,
     tokenizer: PreTrainedTokenizer,
     config,
 ):
     from datasets import exceptions, load_dataset
+
+    _discard_incomplete_torch_namespace()
 
     try:
         dataset = load_dataset(data_id)
@@ -705,6 +793,8 @@ def load_hf_dataset(
 
 def load_custom_hf_dataset(args, tokenizer: PreTrainedTokenizer):
     import datasets
+
+    _discard_incomplete_torch_namespace()
 
     def create_hf_dataset(dataset_name, config, split, hf_config):
         ds = datasets.load_dataset(

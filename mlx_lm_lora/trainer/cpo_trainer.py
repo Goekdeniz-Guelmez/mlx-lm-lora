@@ -1,30 +1,31 @@
 import time
 from functools import partial
-from pathlib import Path
 from typing import Any, Optional
 
 import mlx.core as mx
 import mlx.nn as nn
 import numpy as np
 from mlx.nn.utils import average_gradients
-from mlx.utils import tree_flatten, tree_map
+from mlx.utils import tree_map
 from mlx_lm.models.cache import make_prompt_cache
 from mlx_lm.tuner.callbacks import TrainingCallback
 from tqdm import tqdm
 
 from ..recurrent_patch import enable_memory_safe_recurrences, model_uses_recurrence
+from .checkpointing import resume_training, save_checkpoint
 from .dpo_trainer import DPOTrainingArgs as CPOTrainingArgs
+from .long_context import iter_cached_sft_chunks
 from .sft_trainer import grad_checkpoint, reset_prompt_cache
 
 
 def get_token_scores(model, x, mask, cache=None):
     inputs, targets = x[:, :-1], x[:, 1:]
     logits = model(inputs, cache=cache).astype(mx.float32)
-    return -nn.losses.cross_entropy(logits, targets) * mask[:, :-1]
+    return -nn.losses.cross_entropy(logits, targets) * mask[:, 1:]
 
 
 def compute_score(scores, mask, loss_type):
-    token_count = mask.sum(-1)
+    token_count = mx.maximum(mask[:, 1:].sum(-1), 1)
     return scores.sum(-1) / token_count if loss_type == "ipo" else scores.sum(-1)
 
 
@@ -57,8 +58,8 @@ def cpo_loss(
         raise ValueError(f"Unknown loss type: {loss_type}")
 
     # Token counts and rewards
-    num_chosen_tokens = chosen_masks.sum(-1)
-    num_rejected_tokens = rejected_masks.sum(-1)
+    num_chosen_tokens = chosen_masks[:, 1:].sum(-1)
+    num_rejected_tokens = rejected_masks[:, 1:].sum(-1)
     num_tokens = (num_chosen_tokens + num_rejected_tokens).sum()
 
     chosen_reward = beta * mx.mean(policy_chosen_score)
@@ -155,12 +156,21 @@ def iterate_cpo_batches(dataset, batch_size, max_seq_length, train=False):
                     :rejected_length
                 ]
 
-                chosen_masks[j, :chosen_length] = 1.0
-                rejected_masks[j, :rejected_length] = 1.0
+                chosen_prompt_length = min(
+                    batch[j].get("chosen_prompt_length", 0), chosen_length
+                )
+                rejected_prompt_length = min(
+                    batch[j].get("rejected_prompt_length", 0), rejected_length
+                )
+                chosen_masks[j, chosen_prompt_length:chosen_length] = 1.0
+                rejected_masks[j, rejected_prompt_length:rejected_length] = 1.0
 
-            yield mx.array(chosen_arr), mx.array(rejected_arr), mx.array(
-                chosen_masks
-            ), mx.array(rejected_masks)
+            yield (
+                mx.array(chosen_arr),
+                mx.array(rejected_arr),
+                mx.array(chosen_masks),
+                mx.array(rejected_masks),
+            )
 
         if not train:
             break
@@ -215,7 +225,7 @@ def evaluate_cpo(
             delta=delta,
         )
         all_losses += loss_value * toks
-        all_rewards += reward
+        all_rewards += reward * toks
         ntokens += toks
 
         if all_metrics is None:
@@ -224,7 +234,7 @@ def evaluate_cpo(
             for k, v in metrics.items():
                 all_metrics[k] += v * toks
 
-        mx.eval(all_losses, all_rewards, ntokens)
+        mx.eval(all_losses, all_rewards, ntokens, *all_metrics.values())
     all_losses = mx.distributed.all_sum(all_losses)
     all_rewards = mx.distributed.all_sum(all_rewards)
     ntokens = mx.distributed.all_sum(ntokens)
@@ -247,7 +257,7 @@ def train_cpo(
     training_callback: TrainingCallback = None,
 ):
     if model_uses_recurrence(model):
-        enable_memory_safe_recurrences()
+        enable_memory_safe_recurrences(chunk_size=args.recurrence_chunk_size)
     mx.set_wired_limit(mx.device_info()["max_recommended_working_set_size"])
     world = mx.distributed.init()
     world_size = world.size()
@@ -267,6 +277,7 @@ def train_cpo(
         cache = make_prompt_cache(model)
         seq_step_size = args.seq_step_size
 
+    progress = resume_training(args, model, optimizer)
     state = [model.state, optimizer.state, mx.random.state]
 
     @partial(mx.compile, inputs=state, outputs=state)
@@ -318,14 +329,9 @@ def train_cpo(
             if curr_cache is not None:
                 reset_prompt_cache(curr_cache)
 
-            step_size = seq_step_size
-            for s in range(0, seq_length, step_size):
-                end = min(s + step_size, seq_length)
-                if 0 < (seq_length - end) < 2:
-                    end = seq_length
-
-                chunk = tokens[:, s:end]
-                chunk_mask = masks[:, s:end]
+            for start, end in iter_cached_sft_chunks(seq_length, seq_step_size):
+                chunk = tokens[:, start:end]
+                chunk_mask = masks[:, start:end]
 
                 chunk_scores = get_token_scores(
                     curr_model, chunk, chunk_mask, cache=curr_cache
@@ -341,8 +347,8 @@ def train_cpo(
         c_score = compute_scores_chunked(model, cache, chosen, chosen_masks)
         r_score = compute_scores_chunked(model, cache, rejected, rejected_masks)
 
-        c_tokens_count = chosen_masks[:, :-1].sum(-1)
-        r_tokens_count = rejected_masks[:, :-1].sum(-1)
+        c_tokens_count = mx.maximum(chosen_masks[:, 1:].sum(-1), 1)
+        r_tokens_count = mx.maximum(rejected_masks[:, 1:].sum(-1), 1)
 
         if args.loss_type == "ipo":
             c_score_arg = c_score / c_tokens_count
@@ -391,14 +397,9 @@ def train_cpo(
             seq_length = tokens.shape[1]
             reset_prompt_cache(cache)
 
-            step_size = seq_step_size
-            for s in range(0, seq_length, step_size):
-                end = min(s + step_size, seq_length)
-                if 0 < (seq_length - end) < 2:
-                    end = seq_length
-
-                chunk = tokens[:, s:end]
-                chunk_mask = masks[:, s:end]
+            for start, end in iter_cached_sft_chunks(seq_length, seq_step_size):
+                chunk = tokens[:, start:end]
+                chunk_mask = masks[:, start:end]
 
                 def local_loss_fn(model):
                     local_sum = get_token_scores(
@@ -440,7 +441,7 @@ def train_cpo(
     rewards = mx.zeros((2,))
     n_tokens = 0
     steps = 0
-    trained_tokens = 0
+    trained_tokens = progress.trained_tokens
     accumulated_metrics = {
         "accuracies": 0,
         "margins": 0,
@@ -449,10 +450,14 @@ def train_cpo(
         "rejected_logits_mean": 0,
         "chosen_logits_mean": 0,
     }
-    grad_accum = None
+    grad_accum = progress.grad_accum
 
     start = time.perf_counter()
-    pbar = tqdm(range(1, args.iters + 1), desc="Training", disable=rank != 0)
+    pbar = tqdm(
+        range(progress.start_iteration, args.iters + 1),
+        desc="Training",
+        disable=rank != 0,
+    )
     for it in pbar:
         batch = next(
             iterate_cpo_batches(
@@ -589,17 +594,21 @@ def train_cpo(
             start = time.perf_counter()
 
         if it % args.steps_per_save == 0:
-            adapter_weights = dict(tree_flatten(model.trainable_parameters()))
-            mx.save_safetensors(str(args.adapter_file), adapter_weights)
-            checkpoint = Path(args.adapter_file).parent / (
-                f"{it:07d}_{Path(args.adapter_file).name}"
-            )
-            mx.save_safetensors(str(checkpoint), adapter_weights)
-            print(
-                f"Iter {it}: Saved adapter weights to "
-                f"{args.adapter_file} and {checkpoint}."
+            save_checkpoint(
+                args,
+                it,
+                model=model,
+                optimizer=optimizer,
+                grad_accum=grad_accum,
+                trained_tokens=trained_tokens,
             )
 
-    adapter_weights = dict(tree_flatten(model.trainable_parameters()))
-    mx.save_safetensors(str(args.adapter_file), adapter_weights)
-    print(f"Saved final weights to {args.adapter_file}.")
+    save_checkpoint(
+        args,
+        max(args.iters, progress.iteration),
+        model=model,
+        optimizer=optimizer,
+        grad_accum=grad_accum,
+        trained_tokens=trained_tokens,
+        final=True,
+    )

@@ -1,9 +1,9 @@
-mlx>=0.30.6
-mlx_lm>=0.30.6
+mlx>=0.32.3
+mlx_lm>=0.32.0
 numpy
 transformers>=4.39.3
 protobuf
 pyyaml
 jinja2
 tqdm
-datasets
+datasets>=4.7.0,<6.0.0
