@@ -21,6 +21,7 @@ from tqdm import tqdm
 from ..recurrent_patch import enable_memory_safe_recurrences, model_uses_recurrence
 from .checkpointing import resume_training, save_checkpoint
 from .datasets import CacheDataset
+from .distributed import shard
 from .long_context import iter_cached_sft_chunks
 
 _CHUNKED_NLL_CHUNK_SIZE = 256
@@ -361,7 +362,7 @@ def iterate_batches(
         raise ValueError("The batch size must be divisible by the number of workers")
 
     batch_idx = [
-        idx[i : i + batch_size : step]
+        shard(idx[i : i + batch_size])
         for i in range(0, len(idx) - batch_size + 1, batch_size)
     ]
 

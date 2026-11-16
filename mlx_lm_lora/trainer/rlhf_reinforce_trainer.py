@@ -11,6 +11,7 @@ from tqdm import tqdm
 
 from ..recurrent_patch import enable_memory_safe_recurrences, model_uses_recurrence
 from .checkpointing import resume_training, save_checkpoint
+from .distributed import reduce_metrics
 from .judge import LLMPPOJudge
 from .online_dpo_trainer import (
     _online_token_logps,
@@ -494,9 +495,7 @@ def train_rlhf_reinforce(
             stop = time.perf_counter()
 
             train_loss = mx.distributed.all_sum(losses).item() / (steps * world_size)
-            avg_metrics = {
-                k: v / (steps * world_size) for k, v in accumulated_metrics.items()
-            }
+            avg_metrics = reduce_metrics(accumulated_metrics, steps)
             n_tokens = mx.distributed.all_sum(n_tokens).item()
             learning_rate = optimizer.learning_rate.item()
             it_sec = args.steps_per_report / (stop - start)

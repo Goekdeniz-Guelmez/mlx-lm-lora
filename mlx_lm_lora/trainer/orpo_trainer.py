@@ -14,6 +14,7 @@ from tqdm import tqdm
 
 from ..recurrent_patch import enable_memory_safe_recurrences, model_uses_recurrence
 from .checkpointing import resume_training, save_checkpoint
+from .distributed import reduce_metrics, shard
 from .long_context import iter_cached_sft_chunks
 from .sft_trainer import (
     SFTTrainingArgs,
@@ -148,7 +149,7 @@ def iterate_orpo_batches(dataset, batch_size, max_seq_length, train=False):
         raise ValueError("Batch size must be divisible by number of workers")
 
     batch_idx = [
-        idx[i : i + batch_size : step]
+        shard(idx[i : i + batch_size])
         for i in range(0, len(idx) - batch_size + 1, batch_size)
     ]
 
@@ -618,9 +619,7 @@ def train_orpo(
                 r / (steps * world_size)
                 for r in mx.distributed.all_sum(rewards).tolist()
             ]
-            avg_metrics = {
-                k: v / (steps * world_size) for k, v in accumulated_metrics.items()
-            }
+            avg_metrics = reduce_metrics(accumulated_metrics, steps)
             n_tokens = mx.distributed.all_sum(n_tokens).item()
             learning_rate = optimizer.learning_rate.item()
             it_sec = args.steps_per_report / (stop - start)

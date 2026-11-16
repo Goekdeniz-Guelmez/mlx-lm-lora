@@ -244,7 +244,8 @@ def from_pretrained(
         new_adapter_path = Path(new_adapter_path)
         new_adapter_path.mkdir(parents=True, exist_ok=True)
         new_adapter_file = new_adapter_path / "adapters.safetensors"
-        save_config(args, new_adapter_path / "adapter_config.json")
+        if mx.distributed.init().rank() == 0:
+            save_config(args, new_adapter_path / "adapter_config.json")
 
     return model, tokenizer, new_adapter_file if new_adapter_path is not None else None
 

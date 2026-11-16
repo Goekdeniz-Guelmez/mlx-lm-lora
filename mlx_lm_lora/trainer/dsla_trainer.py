@@ -17,6 +17,7 @@ from tqdm import tqdm
 from ..recurrent_patch import enable_memory_safe_recurrences, model_uses_recurrence
 from .checkpointing import resume_training, save_checkpoint
 from .cpo_trainer import cpo_loss
+from .distributed import global_batch_mean
 from .dpo_trainer import dpo_loss
 from .sft_trainer import (
     SFTTrainingArgs,
@@ -234,7 +235,8 @@ def latent_preference_loss(
 
     Masks index the hidden states of the actual tokens, independently of the
     one-position shift used to score next-token probabilities. The direction
-    estimate remains differentiable and is computed over this microbatch.
+    estimate remains differentiable and is computed over this microbatch on
+    every data-parallel rank together.
     """
     chosen = _pool(
         chosen_hidden, chosen_response_mask, chosen_prompt_mask, args.latent_pooling
@@ -271,7 +273,7 @@ def latent_preference_loss(
         )
     if args.latent_variant in ("direction", "both"):
         directions = chosen - rejected
-        mean_direction = directions.mean(0)
+        mean_direction = global_batch_mean(directions)
         # sqrt(max(||mean||^2, 1e-16)) equals max(||mean||, 1e-8),
         # with a finite derivative at zero (unlike sqrt(0) before clamping).
         batch_direction = mean_direction / mx.sqrt(

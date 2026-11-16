@@ -15,6 +15,7 @@ from tqdm import tqdm
 
 from ..recurrent_patch import enable_memory_safe_recurrences, model_uses_recurrence
 from .checkpointing import resume_training, save_checkpoint
+from .distributed import reduce_mean, reduce_metrics, shard
 from .sft_trainer import SFTTrainingArgs, grad_checkpoint
 
 
@@ -93,8 +94,9 @@ def iterate_ftpo_batches(dataset, batch_size, max_seq_length, train=False):
             f"FTPO dataset must contain at least batch_size={batch_size} rows"
         )
     order = sorted(range(len(dataset)), key=lambda i: len(dataset[i]["prompt_ids"]))
+    # Every rank sees the same global batch order and keeps its own rows.
     batches = [
-        order[i : i + batch_size]
+        shard(order[i : i + batch_size])
         for i in range(0, len(order) - batch_size + 1, batch_size)
     ]
     while True:
@@ -110,10 +112,10 @@ def iterate_ftpo_batches(dataset, batch_size, max_seq_length, train=False):
                 )
             width = max(lengths)
             max_chosen = max(len(row["chosen_ids"]) for row in rows)
-            prompts = np.zeros((batch_size, width), dtype=np.int32)
-            chosen = np.zeros((batch_size, max_chosen), dtype=np.int32)
-            chosen_mask = np.zeros((batch_size, max_chosen), dtype=np.float32)
-            rejected = np.zeros((batch_size,), dtype=np.int32)
+            prompts = np.zeros((len(rows), width), dtype=np.int32)
+            chosen = np.zeros((len(rows), max_chosen), dtype=np.int32)
+            chosen_mask = np.zeros((len(rows), max_chosen), dtype=np.float32)
+            rejected = np.zeros((len(rows),), dtype=np.int32)
             for j, row in enumerate(rows):
                 prompts[j, : lengths[j]] = row["prompt_ids"]
                 count = len(row["chosen_ids"])
@@ -178,7 +180,7 @@ def evaluate_ftpo(
         count += 1
     if count == 0:
         raise ValueError("No FTPO evaluation batches available")
-    return total_loss.item() / count, {k: v / count for k, v in totals.items()}
+    return reduce_mean(total_loss, count).item(), reduce_metrics(totals, count)
 
 
 def train_ftpo(
