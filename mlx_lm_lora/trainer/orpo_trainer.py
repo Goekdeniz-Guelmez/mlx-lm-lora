@@ -21,6 +21,7 @@ from .sft_trainer import (
     _install_qat_hooks,
     grad_checkpoint,
     reset_prompt_cache,
+    restores_qat_hooks,
 )
 
 
@@ -273,6 +274,7 @@ def evaluate_orpo(
     return avg_loss, avg_rewards, ntokens, avg_metrics
 
 
+@restores_qat_hooks
 def train_orpo(
     model,
     optimizer,

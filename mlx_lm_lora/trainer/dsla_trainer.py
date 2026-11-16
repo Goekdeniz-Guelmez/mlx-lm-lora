@@ -21,7 +21,8 @@ from .distributed import global_batch_mean
 from .dpo_trainer import dpo_loss
 from .sft_trainer import (
     SFTTrainingArgs,
-    _symmetric_fake_quantize_tensor,
+    _install_qat,
+    _restore_qat,
     grad_checkpoint,
 )
 
@@ -737,40 +738,11 @@ def train_dsla(
         )
 
     finally:
-        for cls, original in qat_originals.items():
-            cls.__call__ = original
+        _restore_qat(qat_originals)
         for cls, original in checkpoint_originals.items():
             cls.__call__ = original
 
 
 def _install_policy_qat(model, args):
-    """Apply shared STE quantization to policy projections, keeping the reference fixed."""
-    projections = [
-        module for _, module in model.named_modules() if isinstance(module, nn.Linear)
-    ]
-    policy_ids = {id(module) for module in projections}
-    originals = {}
-    for module in projections:
-        cls = type(module)
-        if cls in originals:
-            continue
-        original = cls.__call__
-        originals[cls] = original
-
-        def qat_forward(layer, inputs, _original=original):
-            if id(layer) not in policy_ids:
-                return _original(layer, inputs)
-            weight = layer.weight
-            layer.weight = weight + mx.stop_gradient(
-                _symmetric_fake_quantize_tensor(
-                    weight, args.qat_bits, args.qat_group_size
-                )
-                - weight
-            )
-            try:
-                return _original(layer, inputs)
-            finally:
-                layer.weight = weight
-
-        cls.__call__ = qat_forward
-    return originals
+    """Apply shared STE quantization to the policy, keeping the reference fixed."""
+    return _install_qat(model, args.qat_bits, args.qat_group_size)
