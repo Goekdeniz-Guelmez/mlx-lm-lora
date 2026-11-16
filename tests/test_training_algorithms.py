@@ -84,6 +84,128 @@ class SFTTrainerTest(unittest.TestCase):
         self.assertEqual(quantized.shape, values.shape)
         self.assertTrue(mx.all(mx.isfinite(quantized)).item())
 
+    def test_fake_quantization_matches_mx_quantize_exactly(self):
+        mx.random.seed(0)
+        for dtype in (mx.float32, mx.bfloat16):
+            for bits, group_size in ((4, 64), (8, 32), (2, 128)):
+                w = (mx.random.normal((64, 256)) * 0.02).astype(dtype)
+                wq, s, b = mx.quantize(w, group_size=group_size, bits=bits)
+                expected = mx.dequantize(wq, s, b, group_size=group_size, bits=bits)
+                got = sft_trainer._affine_fake_quantize_tensor(w, bits, group_size)
+                self.assertEqual(got.dtype, dtype)
+                self.assertTrue(mx.array_equal(got, expected).item())
+
+    def test_fake_quantization_fallback_is_affine(self):
+        mx.random.seed(1)
+        w = mx.random.normal((4, 50))
+        quantized = sft_trainer._affine_fake_quantize_tensor(w, 4, 16)
+        self.assertEqual(quantized.shape, w.shape)
+        for group in range(4):
+            levels = set(quantized[0, group * 16 : (group + 1) * 16].tolist())
+            self.assertLessEqual(len(levels), 16)
+        self.assertLess(_scalar(mx.max(mx.abs(quantized - w))), 0.5)
+
+    def test_qat_rounds_merged_lora_weight_and_embeddings(self):
+        from mlx_lm.tuner.lora import LoRALinear
+
+        class Tiny(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.embed = nn.Embedding(16, 64)
+                self.proj = LoRALinear.from_base(nn.Linear(64, 64), r=4, scale=10.0)
+
+            def __call__(self, tokens):
+                return self.proj(self.embed(tokens))
+
+        mx.random.seed(2)
+        model = Tiny()
+        model.proj.lora_b = mx.random.normal(model.proj.lora_b.shape) * 0.05
+        model.proj.dropout = nn.Dropout(0.0)
+        tokens = mx.array([[1, 2, 3]])
+
+        def rounded(w):
+            wq, s, b = mx.quantize(w, group_size=64, bits=4)
+            return mx.dequantize(wq, s, b, group_size=64, bits=4)
+
+        fused = model.proj.fuse()
+        expected = rounded(model.embed.weight)[tokens] @ rounded(fused.weight).T
+        expected = expected + fused.bias
+
+        originals = sft_trainer._install_qat(model, 4, 64)
+        try:
+            got = model(tokens)
+            self.assertTrue(mx.allclose(got, expected, atol=1e-5).item())
+            grads = nn.value_and_grad(model, lambda: model(tokens).sum())()[1]
+            self.assertGreater(_scalar(mx.abs(grads["proj"]["lora_a"]).sum()), 0)
+            self.assertGreater(_scalar(mx.abs(grads["proj"]["lora_b"]).sum()), 0)
+        finally:
+            sft_trainer._restore_qat(originals)
+        self.assertFalse(mx.allclose(model(tokens), expected, atol=1e-5).item())
+
+    def test_qat_rounds_fused_weight_of_every_adapter_type(self):
+        from mlx_lm.tuner.dora import DoRAEmbedding, DoRALinear
+        from mlx_lm.tuner.lora import LoRAEmbedding, LoRALinear
+
+        def rounded(w):
+            wq, s, b = mx.quantize(w, group_size=64, bits=4)
+            return mx.dequantize(wq, s, b, group_size=64, bits=4)
+
+        mx.random.seed(3)
+        tokens = mx.array([[1, 5, 7]])
+        x = mx.random.normal((2, 64))
+        for cls, base in (
+            (LoRALinear, nn.Linear(64, 64)),
+            (DoRALinear, nn.Linear(64, 64)),
+            (LoRALinear, nn.QuantizedLinear(64, 64, group_size=64, bits=4)),
+            (LoRAEmbedding, nn.Embedding(16, 64)),
+            (DoRAEmbedding, nn.Embedding(16, 64)),
+        ):
+            with self.subTest(cls=cls.__name__, base=type(base).__name__):
+                layer = cls.from_base(base, r=4, scale=10.0)
+                layer.lora_b = mx.random.normal(layer.lora_b.shape) * 0.05
+                fused = layer.fuse(dequantize=True)
+                w = rounded(fused.weight)
+                is_embedding = isinstance(fused, nn.Embedding)
+                inp = tokens if is_embedding else x
+                expected = w[inp] if is_embedding else inp @ w.T
+                if "bias" in fused:
+                    expected = expected + fused.bias
+
+                originals = sft_trainer._install_qat(layer, 4, 64)
+                try:
+                    self.assertTrue(mx.allclose(layer(inp), expected, atol=1e-4).item())
+                    if is_embedding:
+                        self.assertTrue(
+                            mx.allclose(layer.as_linear(x), x @ w.T, atol=1e-4).item()
+                        )
+                    loss = lambda: layer(inp).astype(mx.float32).square().sum()
+                    grads = nn.value_and_grad(layer, loss)()[1]
+                    self.assertGreater(_scalar(mx.abs(grads["lora_b"]).sum()), 0)
+                finally:
+                    sft_trainer._restore_qat(originals)
+
+    def test_train_functions_restore_qat_hooks_even_on_error(self):
+        from mlx_lm_lora.trainer import dpo_trainer, orpo_trainer
+
+        for fn in (
+            sft_trainer.train_sft,
+            dpo_trainer.train_dpo,
+            orpo_trainer.train_orpo,
+        ):
+            self.assertTrue(hasattr(fn, "__wrapped__"))
+        original = nn.Linear.__call__
+        args = sft_trainer.SFTTrainingArgs(qat_enable=True, qat_bits=4)
+
+        @sft_trainer.restores_qat_hooks
+        def failing_train(model):
+            sft_trainer._install_qat_hooks(model, args)
+            self.assertIsNot(nn.Linear.__call__, original)
+            raise RuntimeError("boom")
+
+        with self.assertRaises(RuntimeError):
+            failing_train(nn.Sequential(nn.Linear(64, 64)))
+        self.assertIs(nn.Linear.__call__, original)
+
     def test_find_cache_offset_searches_nested_caches(self):
         class Cache:
             offset = 7
