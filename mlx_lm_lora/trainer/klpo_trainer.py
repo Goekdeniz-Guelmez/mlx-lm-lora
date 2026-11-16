@@ -8,7 +8,6 @@ scoring, microbatch boundaries, distributed reductions, and checkpointing.
 import math
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
 
 import mlx.core as mx
 import numpy as np
@@ -19,6 +18,7 @@ from mlx_lm.tuner.callbacks import TrainingCallback
 from tqdm import tqdm
 
 from ..recurrent_patch import enable_memory_safe_recurrences, model_uses_recurrence
+from .checkpointing import resume_training, save_checkpoint
 from .grpo_reward_functions import (
     r1_accuracy_reward_func,
     r1_count_xml,
@@ -930,6 +930,7 @@ def train_klpo(
     if grad_accum_steps < 1:
         raise ValueError("gradient_accumulation_steps must be at least 1")
 
+    progress = resume_training(args, model, optimizer)
     state = [model.state, optimizer.state, mx.random.state]
     loss_value_and_grad = nn.value_and_grad(model, klpo_loss)
 
@@ -983,7 +984,8 @@ def train_klpo(
         return loss, tokens, metrics, grads
 
     model.train()
-    losses, n_tokens, steps, trained_tokens = 0, 0, 0, 0
+    losses, n_tokens, steps = 0, 0, 0
+    trained_tokens = progress.trained_tokens
     accumulated_metrics = {
         "reward_mean": 0,
         "reward_std": 0,
@@ -1002,9 +1004,13 @@ def train_klpo(
         accumulated_metrics[f"{name}_std"] = 0
         accumulated_metrics[f"{name}_coverage"] = 0
 
-    grad_accum = None
+    grad_accum = progress.grad_accum
     start_time = time.perf_counter()
-    pbar = tqdm(range(1, args.iters + 1), desc="KLPO training", disable=rank != 0)
+    pbar = tqdm(
+        range(progress.start_iteration, args.iters + 1),
+        desc="KLPO training",
+        disable=rank != 0,
+    )
     batches = iter(
         iterate_grpo_batches(
             dataset=train_dataset,
@@ -1125,16 +1131,21 @@ def train_klpo(
             start_time = time.perf_counter()
 
         if iteration % args.steps_per_save == 0:
-            adapter_weights = dict(tree_flatten(model.trainable_parameters()))
-            mx.save_safetensors(str(args.adapter_file), adapter_weights)
-            checkpoint = (
-                Path(args.adapter_file).parent / f"{iteration:07d}_adapters.safetensors"
-            )
-            mx.save_safetensors(str(checkpoint), adapter_weights)
-            tqdm.write(
-                f"Iter {iteration}: Saved adapter weights to {args.adapter_file} and {checkpoint}."
+            save_checkpoint(
+                args,
+                iteration,
+                model=model,
+                optimizer=optimizer,
+                grad_accum=grad_accum,
+                trained_tokens=trained_tokens,
             )
 
-    adapter_weights = dict(tree_flatten(model.trainable_parameters()))
-    mx.save_safetensors(str(args.adapter_file), adapter_weights)
-    tqdm.write(f"Saved final weights to {args.adapter_file}.")
+    save_checkpoint(
+        args,
+        max(args.iters, progress.iteration),
+        model=model,
+        optimizer=optimizer,
+        grad_accum=grad_accum,
+        trained_tokens=trained_tokens,
+        final=True,
+    )

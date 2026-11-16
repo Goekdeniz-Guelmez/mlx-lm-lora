@@ -1,14 +1,13 @@
 import time
 from dataclasses import dataclass, field
 from functools import partial, wraps
-from pathlib import Path
 from typing import Any, Optional
 
 import mlx.core as mx
 import mlx.nn as nn
 import numpy as np
 from mlx.nn.utils import average_gradients
-from mlx.utils import tree_flatten, tree_map
+from mlx.utils import tree_map
 from mlx_lm.models.cache import (
     ArraysCache,
     CacheList,
@@ -20,6 +19,7 @@ from mlx_lm.tuner.callbacks import TrainingCallback
 from tqdm import tqdm
 
 from ..recurrent_patch import enable_memory_safe_recurrences, model_uses_recurrence
+from .checkpointing import resume_training, save_checkpoint
 from .datasets import CacheDataset
 from .long_context import iter_cached_sft_chunks
 
@@ -126,6 +126,16 @@ class SFTTrainingArgs:
     adapter_file: str = field(
         default="adapters.safetensors",
         metadata={"help": "Save/load path for the trained adapter weights."},
+    )
+    resume_checkpoint: Optional[str] = field(
+        default=None,
+        metadata={"help": "Resume from a full training checkpoint directory."},
+    )
+    save_training_state: bool = field(
+        default=True,
+        metadata={
+            "help": "Write resumable optimizer/RNG state next to weight snapshots."
+        },
     )
     grad_checkpoint: bool = field(
         default=False,
@@ -649,6 +659,7 @@ def train_sft(
     if efficient:
         cache = make_prompt_cache(model)
 
+    progress = resume_training(args, model, optimizer)
     state = [model.state, optimizer.state, mx.random.state]
 
     loss_value_and_grad = nn.value_and_grad(model, loss)
@@ -728,13 +739,17 @@ def train_sft(
     losses = 0
     n_tokens = 0
     steps = 0
-    trained_tokens = 0
+    trained_tokens = progress.trained_tokens
     train_time = 0
-    grad_accum = None
-    opt_step = 0
+    grad_accum = progress.grad_accum
+    opt_step = progress.optimizer_step
 
     # Main training loop
-    pbar = tqdm(range(1, args.iters + 1), desc="Training", disable=rank != 0)
+    pbar = tqdm(
+        range(progress.start_iteration, args.iters + 1),
+        desc="Training",
+        disable=rank != 0,
+    )
     for it in pbar:
         batch = next(
             iterate_batches(
@@ -768,9 +783,7 @@ def train_sft(
             val_time = time.perf_counter() - tic
             if rank == 0:
                 tqdm.write(
-                    f"Iter {it}: "
-                    f"Val loss {val_loss:.3f}, "
-                    f"Val took {val_time:.3f}s",
+                    f"Iter {it}: Val loss {val_loss:.3f}, Val took {val_time:.3f}s",
                 )
 
             if training_callback is not None:
@@ -855,20 +868,24 @@ def train_sft(
             steps = 0
             train_time = 0
 
-        if it % args.steps_per_save == 0 and rank == 0:
-            adapter_weights = dict(tree_flatten(model.trainable_parameters()))
-            mx.save_safetensors(str(args.adapter_file), adapter_weights)
-            checkpoint = (
-                Path(args.adapter_file).parent / f"{it:07d}_adapters.safetensors"
-            )
-            mx.save_safetensors(str(checkpoint), adapter_weights)
-            tqdm.write(
-                f"\n"
-                f"Iter {it}: Saved adapter weights to "
-                f"{args.adapter_file} and {checkpoint}."
+        if it % args.steps_per_save == 0:
+            save_checkpoint(
+                args,
+                it,
+                model=model,
+                optimizer=optimizer,
+                optimizer_step=opt_step,
+                grad_accum=grad_accum,
+                trained_tokens=trained_tokens,
             )
 
-    if rank == 0:
-        adapter_weights = dict(tree_flatten(model.trainable_parameters()))
-        mx.save_safetensors(str(args.adapter_file), adapter_weights)
-        tqdm.write(f"Saved final weights to {args.adapter_file}.")
+    save_checkpoint(
+        args,
+        max(args.iters, progress.iteration),
+        model=model,
+        optimizer=optimizer,
+        optimizer_step=opt_step,
+        grad_accum=grad_accum,
+        trained_tokens=trained_tokens,
+        final=True,
+    )

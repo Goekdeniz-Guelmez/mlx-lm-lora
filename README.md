@@ -865,8 +865,35 @@ See [QAT section above](#quantization-aware-training-qat) for usage examples.
 --adapter-path ./adapters        # Save/load path for adapters
 --save-every 100                 # Save frequency
 --resume-adapter-file <path>     # Resume from checkpoint
+--resume-checkpoint <directory>  # Resume full training state (all modes)
+--no-save-training-state         # Only save weights, no resumable state
 --fuse                           # Fuse and save trained model
 ```
+
+Every training mode writes a resumable `NNNNNNN_training_checkpoint/` directory
+next to each `--save-every` weight snapshot, plus `final_training_checkpoint/`
+when training finishes. A checkpoint holds the trainable weights, the optimizer
+state (including the learning-rate schedule step), the MLX and NumPy random
+states, partially accumulated gradients and the iteration counters. SFT, DPO,
+CPO, ORPO, Online DPO, XPO, PPO and RLHF-REINFORCE resume bit-identically to an
+uninterrupted run; DSLA, FTPO, GRPO and KLPO restore the same state but start a
+new shuffled pass over the training data. Resume with the original
+configuration and the original total `--iters`:
+
+```bash
+mlx_lm_lora.train --config config.yaml \
+  --resume-checkpoint adapters/0000500_training_checkpoint
+```
+
+Checkpoints work with distributed (`mlx.launch`) training: rank 0 writes the
+shared weights and optimizer state once, and every worker writes its own RNG
+state and pending gradients (`rank_NNNNN.*`). Resume with the same number of
+workers.
+
+`--resume-adapter-file` still loads weights only (a fresh optimizer and
+iteration count); the two flags cannot be combined. Checkpoint directories also
+store optimizer moments, so for large full fine-tunes pass
+`--no-save-training-state` if disk space matters more than resumability.
 
 ### Algorithm-Specific Parameters
 

@@ -1,6 +1,5 @@
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Optional
 
 import mlx.core as mx
@@ -12,6 +11,7 @@ from mlx_lm.tuner.callbacks import TrainingCallback
 from tqdm import tqdm
 
 from ..recurrent_patch import enable_memory_safe_recurrences, model_uses_recurrence
+from .checkpointing import resume_training, save_checkpoint
 from .judge import HumanPairwiseJudge, LLMPairwiseJudge
 from .online_dpo_trainer import (
     OnlineDPOTrainingArgs,
@@ -328,6 +328,7 @@ def train_xpo(
     if grad_accum_steps < 1:
         raise ValueError("gradient_accumulation_steps must be at least 1")
 
+    progress = resume_training(args, model, optimizer)
     state = [model.state, optimizer.state, mx.random.state]
     if ref_model is not None:
         ref_model.eval()
@@ -434,7 +435,7 @@ def train_xpo(
     rewards = mx.zeros((2,))
     n_tokens = 0
     steps = 0
-    trained_tokens = 0
+    trained_tokens = progress.trained_tokens
     accumulated_metrics = {
         "accuracies": 0,
         "margins": 0,
@@ -446,11 +447,15 @@ def train_xpo(
         "chosen_kl": 0,
         "rejected_kl": 0,
     }
-    grad_accum = None
+    grad_accum = progress.grad_accum
 
     start = time.perf_counter()
 
-    pbar = tqdm(range(1, args.iters + 1), desc="Training", disable=rank != 0)
+    pbar = tqdm(
+        range(progress.start_iteration, args.iters + 1),
+        desc="Training",
+        disable=rank != 0,
+    )
     for it in pbar:
         current_alpha = get_current_alpha(it, args.iters, args.alpha)
 
@@ -578,17 +583,24 @@ def train_xpo(
 
         # Save adapter weights
         if it % args.steps_per_save == 0:
-            adapter_weights = dict(tree_flatten(model.trainable_parameters()))
-            mx.save_safetensors(str(args.adapter_file), adapter_weights)
-            checkpoint = (
-                Path(args.adapter_file).parent / f"{it:07d}_adapters.safetensors"
-            )
-            mx.save_safetensors(str(checkpoint), adapter_weights)
-            tqdm.write(
-                f"Iter {it}: Saved adapter weights to "
-                f"{args.adapter_file} and {checkpoint}."
+            save_checkpoint(
+                args,
+                it,
+                model=model,
+                optimizer=optimizer,
+                grad_accum=grad_accum,
+                trained_tokens=trained_tokens,
             )
 
+    save_checkpoint(
+        args,
+        max(args.iters, progress.iteration),
+        model=model,
+        optimizer=optimizer,
+        grad_accum=grad_accum,
+        trained_tokens=trained_tokens,
+        final=True,
+    )
     # Save final weights
     adapter_weights = dict(tree_flatten(model.trainable_parameters()))
     mx.save_safetensors(str(args.adapter_file), adapter_weights)

@@ -1,6 +1,5 @@
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Iterator, List, Optional, Sequence, Tuple, Union
 
 import mlx.core as mx
@@ -13,6 +12,7 @@ from mlx_lm.tuner.callbacks import TrainingCallback
 from tqdm import tqdm
 
 from ..recurrent_patch import enable_memory_safe_recurrences, model_uses_recurrence
+from .checkpointing import resume_training, save_checkpoint
 from .grpo_reward_functions import (
     RewardFunctions,
     r1_accuracy_reward_func,
@@ -857,6 +857,7 @@ def train_grpo(
     if grad_accum_steps < 1:
         raise ValueError("gradient_accumulation_steps must be at least 1")
 
+    progress = resume_training(args, model, optimizer)
     state = [model.state, optimizer.state, mx.random.state]
 
     def step(
@@ -929,7 +930,7 @@ def train_grpo(
     losses = 0
     n_tokens = 0
     steps = 0
-    trained_tokens = 0
+    trained_tokens = progress.trained_tokens
     accumulated_metrics = {
         "total_rewards_mean": 0,
         "total_rewards_std": 0,
@@ -945,7 +946,7 @@ def train_grpo(
         "clip_ratio_high": 0,
         "clip_ratio_total": 0,
     }
-    grad_accum = None
+    grad_accum = progress.grad_accum
     for reward_func in reward_funcs:
         func_name = reward_func.__name__
         accumulated_metrics[f"{func_name}_mean"] = 0
@@ -953,7 +954,11 @@ def train_grpo(
         accumulated_metrics[f"{func_name}_coverage"] = 0
 
     start = time.perf_counter()
-    pbar = tqdm(range(1, args.iters + 1), desc="Training", disable=rank != 0)
+    pbar = tqdm(
+        range(progress.start_iteration, args.iters + 1),
+        desc="Training",
+        disable=rank != 0,
+    )
     batches = iter(
         iterate_batches(
             dataset=train_dataset,
@@ -999,9 +1004,7 @@ def train_grpo(
             val_time = time.perf_counter() - stop
             if rank == 0:
                 tqdm.write(
-                    f"Iter {it}: "
-                    f"Val loss {val_loss:.3f}, "
-                    f"Val took {val_time:.3f}s"
+                    f"Iter {it}: Val loss {val_loss:.3f}, Val took {val_time:.3f}s"
                 )
 
             if training_callback is not None:
@@ -1102,9 +1105,9 @@ def train_grpo(
                             f"cov={avg_metrics[cov_key]:.2%}\n"
                         )
                 tqdm.write(
-                    f"\n{'='*80}\n"
+                    f"\n{'=' * 80}\n"
                     f"Iter {it}:\n"
-                    f"{'-'*80}\n"
+                    f"{'-' * 80}\n"
                     f"Loss: {train_loss:.3f}\n"
                     f"Total Rewards:  μ={avg_metrics['total_rewards_mean']:.3f}, "
                     f"σ={avg_metrics['total_rewards_std']:.3f}\n"
@@ -1112,24 +1115,24 @@ def train_grpo(
                     f"σ={avg_metrics['grouped_rewards_std']:.3f}\n"
                     f"KL Divergence: {avg_metrics['kl']:.12f}\n"
                     f"KL saturation: {avg_metrics['kl_clip_ratio']:.2%}\n"
-                    f"{'-'*80}\n"
+                    f"{'-' * 80}\n"
                     f"Generation Stats:\n"
                     f"  • Avg tokens: {avg_metrics['average_generated_tokens']:.1f}\n"
                     f"  • Min tokens: {avg_metrics['min_generated_tokens']:.0f}\n"
                     f"  • Max tokens: {avg_metrics['max_generated_tokens']:.0f} "
                     f"(limit: {args.max_completion_length})\n"
                     f"  • Hit limit: {avg_metrics['hit_max_tokens_ratio']:.1%}\n"
-                    f"{'-'*80}\n"
+                    f"{'-' * 80}\n"
                     f"Individual Reward Functions:\n"
                     f"{reward_metrics_str}"
-                    f"{'-'*80}\n"
+                    f"{'-' * 80}\n"
                     f"Clipping:  low={avg_metrics['clip_ratio_low']:.3f}, "
                     f"high={avg_metrics['clip_ratio_high']:.3f}, "
                     f"total={avg_metrics['clip_ratio_total']:.3f}\n"
                     f"Learning Rate: {learning_rate:.4e}\n"
                     f"Speed: {it_sec:.3f} it/s, {tokens_sec:.1f} tok/s\n"
                     f"Memory: {peak_mem:.3f}GB\n"
-                    f"{'='*80}\n"
+                    f"{'=' * 80}\n"
                 )
 
             if training_callback is not None:
@@ -1152,18 +1155,21 @@ def train_grpo(
             start = time.perf_counter()
 
         if it % args.steps_per_save == 0:
-            adapter_weights = dict(tree_flatten(model.trainable_parameters()))
-            mx.save_safetensors(str(args.adapter_file), adapter_weights)
-            checkpoint = (
-                Path(args.adapter_file).parent / f"{it:07d}_adapters.safetensors"
-            )
-            mx.save_safetensors(str(checkpoint), adapter_weights)
-            tqdm.write(
-                f"\n"
-                f"Iter {it}: Saved adapter weights to "
-                f"{args.adapter_file} and {checkpoint}."
+            save_checkpoint(
+                args,
+                it,
+                model=model,
+                optimizer=optimizer,
+                grad_accum=grad_accum,
+                trained_tokens=trained_tokens,
             )
 
-    adapter_weights = dict(tree_flatten(model.trainable_parameters()))
-    mx.save_safetensors(str(args.adapter_file), adapter_weights)
-    tqdm.write(f"Saved final weights to {args.adapter_file}.")
+    save_checkpoint(
+        args,
+        max(args.iters, progress.iteration),
+        model=model,
+        optimizer=optimizer,
+        grad_accum=grad_accum,
+        trained_tokens=trained_tokens,
+        final=True,
+    )

@@ -1,18 +1,18 @@
 import time
 from functools import partial
-from pathlib import Path
 from typing import Any, Optional
 
 import mlx.core as mx
 import mlx.nn as nn
 import numpy as np
 from mlx.nn.utils import average_gradients
-from mlx.utils import tree_flatten, tree_map
+from mlx.utils import tree_map
 from mlx_lm.models.cache import make_prompt_cache
 from mlx_lm.tuner.callbacks import TrainingCallback
 from tqdm import tqdm
 
 from ..recurrent_patch import enable_memory_safe_recurrences, model_uses_recurrence
+from .checkpointing import resume_training, save_checkpoint
 from .dpo_trainer import DPOTrainingArgs as CPOTrainingArgs
 from .long_context import iter_cached_sft_chunks
 from .sft_trainer import grad_checkpoint, reset_prompt_cache
@@ -165,9 +165,12 @@ def iterate_cpo_batches(dataset, batch_size, max_seq_length, train=False):
                 chosen_masks[j, chosen_prompt_length:chosen_length] = 1.0
                 rejected_masks[j, rejected_prompt_length:rejected_length] = 1.0
 
-            yield mx.array(chosen_arr), mx.array(rejected_arr), mx.array(
-                chosen_masks
-            ), mx.array(rejected_masks)
+            yield (
+                mx.array(chosen_arr),
+                mx.array(rejected_arr),
+                mx.array(chosen_masks),
+                mx.array(rejected_masks),
+            )
 
         if not train:
             break
@@ -274,6 +277,7 @@ def train_cpo(
         cache = make_prompt_cache(model)
         seq_step_size = args.seq_step_size
 
+    progress = resume_training(args, model, optimizer)
     state = [model.state, optimizer.state, mx.random.state]
 
     @partial(mx.compile, inputs=state, outputs=state)
@@ -437,7 +441,7 @@ def train_cpo(
     rewards = mx.zeros((2,))
     n_tokens = 0
     steps = 0
-    trained_tokens = 0
+    trained_tokens = progress.trained_tokens
     accumulated_metrics = {
         "accuracies": 0,
         "margins": 0,
@@ -446,10 +450,14 @@ def train_cpo(
         "rejected_logits_mean": 0,
         "chosen_logits_mean": 0,
     }
-    grad_accum = None
+    grad_accum = progress.grad_accum
 
     start = time.perf_counter()
-    pbar = tqdm(range(1, args.iters + 1), desc="Training", disable=rank != 0)
+    pbar = tqdm(
+        range(progress.start_iteration, args.iters + 1),
+        desc="Training",
+        disable=rank != 0,
+    )
     for it in pbar:
         batch = next(
             iterate_cpo_batches(
@@ -586,17 +594,21 @@ def train_cpo(
             start = time.perf_counter()
 
         if it % args.steps_per_save == 0:
-            adapter_weights = dict(tree_flatten(model.trainable_parameters()))
-            mx.save_safetensors(str(args.adapter_file), adapter_weights)
-            checkpoint = (
-                Path(args.adapter_file).parent / f"{it:07d}_adapters.safetensors"
-            )
-            mx.save_safetensors(str(checkpoint), adapter_weights)
-            print(
-                f"Iter {it}: Saved adapter weights to "
-                f"{args.adapter_file} and {checkpoint}."
+            save_checkpoint(
+                args,
+                it,
+                model=model,
+                optimizer=optimizer,
+                grad_accum=grad_accum,
+                trained_tokens=trained_tokens,
             )
 
-    adapter_weights = dict(tree_flatten(model.trainable_parameters()))
-    mx.save_safetensors(str(args.adapter_file), adapter_weights)
-    print(f"Saved final weights to {args.adapter_file}.")
+    save_checkpoint(
+        args,
+        max(args.iters, progress.iteration),
+        model=model,
+        optimizer=optimizer,
+        grad_accum=grad_accum,
+        trained_tokens=trained_tokens,
+        final=True,
+    )

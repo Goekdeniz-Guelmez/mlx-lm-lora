@@ -4,18 +4,18 @@ import math
 import time
 from dataclasses import dataclass, field
 from functools import wraps
-from pathlib import Path
 from typing import Mapping, Tuple
 
 import mlx.core as mx
 import mlx.nn as nn
 import numpy as np
 from mlx.nn.utils import average_gradients
-from mlx.utils import tree_flatten, tree_map
+from mlx.utils import tree_map
 from mlx_lm.tuner.callbacks import TrainingCallback
 from tqdm import tqdm
 
 from ..recurrent_patch import enable_memory_safe_recurrences, model_uses_recurrence
+from .checkpointing import resume_training, save_checkpoint
 from .cpo_trainer import cpo_loss
 from .dpo_trainer import dpo_loss
 from .sft_trainer import (
@@ -422,9 +422,10 @@ def dsla_loss(
             delta=args.delta,
             loss_type=args.dpo_cpo_loss_type,
         )
-        reference_chosen, reference_rejected = mx.zeros_like(
-            chosen_score
-        ), mx.zeros_like(rejected_score)
+        reference_chosen, reference_rejected = (
+            mx.zeros_like(chosen_score),
+            mx.zeros_like(rejected_score),
+        )
         if args.loss_type == "dpo":
             reference_scores = []
             for tokens, mask in (
@@ -554,6 +555,7 @@ def train_dsla(
     if ref_model is not None:
         ref_model.eval()
     model.train()
+    progress = resume_training(args, model, optimizer)
     state = [model.state, optimizer.state, mx.random.state]
     # Include reference state as an input so compilation cannot bake in weights.
     if ref_model is not None:
@@ -582,13 +584,22 @@ def train_dsla(
         train_dataset, args.batch_size, args.max_seq_length, train=True
     )
     losses, rewards, tokens, metrics, steps = 0.0, mx.zeros((2,)), 0.0, {}, 0
-    grad, accumulated_steps, optimizer_step, trained_tokens = None, 0, 0, 0
+    grad = progress.grad_accum
+    # The final iteration flushes early, so only a pending gradient implies
+    # a partially filled accumulation window.
+    accumulated_steps = (
+        0 if grad is None else progress.iteration % args.gradient_accumulation_steps
+    )
+    optimizer_step = progress.optimizer_step
+    trained_tokens = progress.trained_tokens
     qat_installed = False
     start = time.perf_counter()
     qat_originals = {}
     try:
         for iteration in tqdm(
-            range(1, args.iters + 1), desc="DSLA training", disable=rank != 0
+            range(progress.start_iteration, args.iters + 1),
+            desc="DSLA training",
+            disable=rank != 0,
         ):
             if (
                 val_dataset is not None
@@ -702,19 +713,27 @@ def train_dsla(
                     0,
                 )
                 start = time.perf_counter()
-            if iteration % args.steps_per_save == 0 and rank == 0:
-                weights = dict(tree_flatten(model.trainable_parameters()))
-                mx.save_safetensors(str(args.adapter_file), weights)
-                checkpoint = (
-                    Path(args.adapter_file).parent
-                    / f"{iteration:07d}_adapters.safetensors"
+            if iteration % args.steps_per_save == 0:
+                save_checkpoint(
+                    args,
+                    iteration,
+                    model=model,
+                    optimizer=optimizer,
+                    optimizer_step=optimizer_step,
+                    grad_accum=grad,
+                    trained_tokens=trained_tokens,
                 )
-                mx.save_safetensors(str(checkpoint), weights)
-        if rank == 0:
-            mx.save_safetensors(
-                str(args.adapter_file), dict(tree_flatten(model.trainable_parameters()))
-            )
-            tqdm.write(f"Saved final weights to {args.adapter_file}.")
+
+        save_checkpoint(
+            args,
+            max(args.iters, progress.iteration),
+            model=model,
+            optimizer=optimizer,
+            optimizer_step=optimizer_step,
+            grad_accum=grad,
+            trained_tokens=trained_tokens,
+            final=True,
+        )
 
     finally:
         _restore_qat(qat_originals)

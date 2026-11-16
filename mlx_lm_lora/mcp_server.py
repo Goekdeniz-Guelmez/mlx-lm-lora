@@ -211,6 +211,15 @@ def build_config(
     for key in ("judge", "reference_model_path"):
         if cfg.get(key) is not None:
             cfg[key] = _resolve_source(cfg[key], key, errors, notes)
+    checkpoint = cfg.get("resume_checkpoint")
+    if checkpoint is not None:
+        path = Path(str(checkpoint)).expanduser().resolve()
+        if not (path / "state.json").is_file():
+            errors.append(
+                f"resume_checkpoint '{checkpoint}' is not a complete training "
+                "checkpoint directory (missing state.json)."
+            )
+        cfg["resume_checkpoint"] = str(path)
     for key in ("resume_adapter_file", "reward_functions_file"):
         value = cfg.get(key)
         if value is None:
