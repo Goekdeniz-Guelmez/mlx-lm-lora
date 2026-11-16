@@ -1,6 +1,6 @@
 """Resumable training checkpoints shared by every trainer.
 
-Each trainer only needs three calls:
+Each trainer only needs three calls, made on every rank:
 
 * ``progress = resume_training(args, model, optimizer)`` before the training
   step is compiled; start the loop at ``progress.start_iteration`` and seed the
@@ -13,6 +13,11 @@ A checkpoint directory holds the trainable parameters, the optimizer state
 (including the learning-rate schedule step), the MLX and NumPy RNG states,
 partially accumulated gradients and the loop counters.  ``state.json`` is
 written last, so a directory without it is incomplete and is never loaded.
+
+Under data-parallel training the weights and optimizer state are replicated,
+so rank 0 writes them once; RNG state and locally accumulated gradients differ
+per worker and are stored as ``rank_NNNNN.*`` files. A checkpoint must be
+resumed with the same world size.
 """
 
 import json
@@ -95,6 +100,15 @@ def _numpy_state_from_json(state: dict) -> None:
     )
 
 
+def _rank_file(path: Path, rank: int, suffix: str) -> Path:
+    return path / f"rank_{rank:05d}{suffix}"
+
+
+def _barrier(group) -> None:
+    if group.size() > 1:
+        mx.eval(mx.distributed.all_sum(mx.array(0), group=group))
+
+
 def save_training_state(
     path,
     *,
@@ -104,44 +118,68 @@ def save_training_state(
     optimizer_step: int = 0,
     grad_accum=None,
     trained_tokens: int = 0,
+    group=None,
 ) -> Path:
-    """Write the full training state to ``path`` (a directory)."""
+    """Write the full training state to ``path`` (a directory).
+
+    Must be called on every rank. Rank 0 writes the replicated state (weights,
+    optimizer, counters); every rank writes its own RNG state and pending
+    local gradients, which differ between data-parallel workers.
+    """
+    group = group or mx.distributed.init()
+    rank, world_size = group.rank(), group.size()
     path = Path(path)
     path.mkdir(parents=True, exist_ok=True)
-    # Invalidate an older checkpoint before replacing any of its tensor files.
-    (path / STATE_FILE).unlink(missing_ok=True)
+    if rank == 0:
+        # Invalidate an older checkpoint before replacing any of its files.
+        (path / STATE_FILE).unlink(missing_ok=True)
+    _barrier(group)
     mx.eval(model.trainable_parameters(), optimizer.state, mx.random.state, grad_accum)
 
-    _write_safetensors_atomic(
-        path / "model.safetensors", dict(tree_flatten(model.trainable_parameters()))
-    )
-    _write_safetensors_atomic(
-        path / "optimizer.safetensors", dict(tree_flatten(optimizer.state))
-    )
-    _write_safetensors_atomic(path / "random.safetensors", {"key": _mlx_rng_key()})
-    if grad_accum is not None:
+    if rank == 0:
         _write_safetensors_atomic(
-            path / "grad_accum.safetensors", dict(tree_flatten(grad_accum))
+            path / "model.safetensors",
+            dict(tree_flatten(model.trainable_parameters())),
         )
-    else:
-        (path / "grad_accum.safetensors").unlink(missing_ok=True)
+        _write_safetensors_atomic(
+            path / "optimizer.safetensors", dict(tree_flatten(optimizer.state))
+        )
 
+    rank_arrays = {"rng_key": _mlx_rng_key()}
+    if grad_accum is not None:
+        rank_arrays.update(
+            {f"grad.{name}": value for name, value in tree_flatten(grad_accum)}
+        )
+    _write_safetensors_atomic(_rank_file(path, rank, ".safetensors"), rank_arrays)
     _write_json_atomic(
-        path / STATE_FILE,
+        _rank_file(path, rank, ".json"),
         {
-            "version": CHECKPOINT_VERSION,
-            "iteration": int(iteration),
-            "optimizer_step": int(optimizer_step),
-            "trained_tokens": int(trained_tokens),
             "has_grad_accum": grad_accum is not None,
             "numpy_random_state": _numpy_state_to_json(),
         },
     )
+
+    # state.json is the commit marker: only write it once every rank is done.
+    _barrier(group)
+    if rank == 0:
+        _write_json_atomic(
+            path / STATE_FILE,
+            {
+                "version": CHECKPOINT_VERSION,
+                "world_size": world_size,
+                "iteration": int(iteration),
+                "optimizer_step": int(optimizer_step),
+                "trained_tokens": int(trained_tokens),
+            },
+        )
+    _barrier(group)
     return path
 
 
-def load_training_state(path, *, model, optimizer) -> TrainingProgress:
-    """Restore a directory written by :func:`save_training_state`."""
+def load_training_state(path, *, model, optimizer, group=None) -> TrainingProgress:
+    """Restore a directory written by :func:`save_training_state` on every rank."""
+    group = group or mx.distributed.init()
+    rank = group.rank()
     path = Path(path)
     state_file = path / STATE_FILE
     if not state_file.exists():
@@ -154,6 +192,11 @@ def load_training_state(path, *, model, optimizer) -> TrainingProgress:
             f"Unsupported checkpoint version {metadata.get('version')!r}; "
             f"expected {CHECKPOINT_VERSION}."
         )
+    if metadata["world_size"] != group.size():
+        raise ValueError(
+            f"Checkpoint was written by {metadata['world_size']} worker(s) but "
+            f"this run has {group.size()}; resume with the same world size."
+        )
 
     model.load_weights(str(path / "model.safetensors"), strict=False)
     # The setter marks the optimizer uninitialised; ``init`` later only fills
@@ -162,16 +205,17 @@ def load_training_state(path, *, model, optimizer) -> TrainingProgress:
         list(mx.load(str(path / "optimizer.safetensors")).items())
     )
 
-    _set_mlx_rng_key(mx.load(str(path / "random.safetensors"))["key"])
-    _numpy_state_from_json(metadata["numpy_random_state"])
+    rank_arrays = mx.load(str(_rank_file(path, rank, ".safetensors")))
+    rank_meta = json.loads(_rank_file(path, rank, ".json").read_text(encoding="utf-8"))
+    _set_mlx_rng_key(rank_arrays["rng_key"])
+    _numpy_state_from_json(rank_meta["numpy_random_state"])
 
     grad_accum = None
-    if metadata["has_grad_accum"]:
+    if rank_meta["has_grad_accum"]:
         # Rebuild on the parameter tree so empty sub-trees (dropped when
         # flattening) line up with freshly computed gradients.
-        flat = mx.load(str(path / "grad_accum.safetensors"))
         grad_accum = tree_map_with_path(
-            lambda name, _: flat[name], model.trainable_parameters()
+            lambda name, _: rank_arrays[f"grad.{name}"], model.trainable_parameters()
         )
     mx.eval(model.trainable_parameters(), optimizer.state, mx.random.state, grad_accum)
     return TrainingProgress(
@@ -208,26 +252,28 @@ def save_checkpoint(
     trained_tokens: int = 0,
     final: bool = False,
 ) -> None:
-    """Save trained weights and the resumable state (rank 0 only).
+    """Save trained weights and the resumable state.
 
-    Writes ``args.adapter_file`` plus, for periodic saves, a numbered weight
-    snapshot and ``NNNNNNN_training_checkpoint/``; for the final save,
-    ``final_training_checkpoint/``.
+    Call on every rank: weight files are written by rank 0, per-rank state by
+    each worker. Writes ``args.adapter_file`` plus, for periodic saves, a
+    numbered weight snapshot and ``NNNNNNN_training_checkpoint/``; for the
+    final save, ``final_training_checkpoint/``.
     """
-    if mx.distributed.init().rank() != 0:
-        return
+    rank = mx.distributed.init().rank()
     adapter_file = Path(args.adapter_file)
-    weights = dict(tree_flatten(model.trainable_parameters()))
-    mx.save_safetensors(str(adapter_file), weights)
-
     if final:
         state_dir = adapter_file.parent / FINAL_CHECKPOINT_NAME
         written = [str(adapter_file)]
     else:
         snapshot = adapter_file.parent / f"{iteration:07d}_adapters.safetensors"
-        mx.save_safetensors(str(snapshot), weights)
         state_dir = checkpoint_dir(adapter_file, iteration)
         written = [str(adapter_file), str(snapshot)]
+
+    if rank == 0:
+        weights = dict(tree_flatten(model.trainable_parameters()))
+        mx.save_safetensors(str(adapter_file), weights)
+        if not final:
+            mx.save_safetensors(str(snapshot), weights)
 
     if getattr(args, "save_training_state", True):
         save_training_state(
@@ -241,5 +287,6 @@ def save_checkpoint(
         )
         written.append(str(state_dir))
 
-    label = "final weights" if final else f"Iter {iteration}: weights"
-    tqdm.write(f"\nSaved {label} to {', '.join(written)}.")
+    if rank == 0:
+        label = "final weights" if final else f"Iter {iteration}: weights"
+        tqdm.write(f"\nSaved {label} to {', '.join(written)}.")

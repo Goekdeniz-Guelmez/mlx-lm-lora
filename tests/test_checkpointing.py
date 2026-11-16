@@ -96,10 +96,14 @@ class CheckpointStateTest(unittest.TestCase):
             save_training_state(
                 directory, model=model, optimizer=optimizer, iteration=1
             )
+            self.assertTrue((Path(directory) / "rank_00000.safetensors").exists())
             state_file = Path(directory) / "state.json"
             state = json.loads(state_file.read_text())
             state_file.write_text(json.dumps({**state, "version": 999}))
             with self.assertRaises(ValueError):
+                load_training_state(directory, model=model, optimizer=optimizer)
+            state_file.write_text(json.dumps({**state, "world_size": 2}))
+            with self.assertRaisesRegex(ValueError, "same world size"):
                 load_training_state(directory, model=model, optimizer=optimizer)
 
     def test_resume_is_a_no_op_without_a_checkpoint(self):
@@ -124,7 +128,8 @@ class ResumeMatchesUninterruptedTrainingTest(unittest.TestCase):
             self.assertTrue((root / "full" / FINAL_CHECKPOINT_NAME).exists())
             # Iteration 3 is mid-accumulation, as if the run had crashed there.
             checkpoint = checkpoint_dir(root / "full" / "adapters.safetensors", 3)
-            self.assertTrue((checkpoint / "grad_accum.safetensors").exists())
+            rank_state = mx.load(str(checkpoint / "rank_00000.safetensors"))
+            self.assertTrue(any(name.startswith("grad.") for name in rank_state))
 
             _seed(42)  # Must not matter: RNG state comes from the checkpoint.
             resumed = _tiny_model()

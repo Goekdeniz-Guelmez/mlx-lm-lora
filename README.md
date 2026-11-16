@@ -885,6 +885,11 @@ mlx_lm_lora.train --config config.yaml \
   --resume-checkpoint adapters/0000500_training_checkpoint
 ```
 
+Checkpoints work with distributed (`mlx.launch`) training: rank 0 writes the
+shared weights and optimizer state once, and every worker writes its own RNG
+state and pending gradients (`rank_NNNNN.*`). Resume with the same number of
+workers.
+
 `--resume-adapter-file` still loads weights only (a fresh optimizer and
 iteration count); the two flags cannot be combined. Checkpoint directories also
 store optimizer moments, so for large full fine-tunes pass
