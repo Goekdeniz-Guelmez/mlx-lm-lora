@@ -1,6 +1,6 @@
 import time
 from dataclasses import dataclass, field
-from functools import partial
+from functools import partial, wraps
 from pathlib import Path
 from typing import Any, Optional
 
@@ -161,7 +161,10 @@ class SFTTrainingArgs:
     )
     qat_mode: str = field(
         default="affine",
-        metadata={"help": "QAT projection mode. Currently only 'affine' is supported."},
+        metadata={
+            "help": "QAT mode. Only 'affine' (the mx.quantize grid used by "
+            "mlx_lm convert -q) is supported."
+        },
     )
     qat_start_step: int = field(
         default=1,
@@ -173,85 +176,250 @@ class SFTTrainingArgs:
     )
 
 
-def _symmetric_fake_quantize_tensor(x, bits: int, group_size: int):
-    qmax = (1 << (bits - 1)) - 1
-    qmin = -qmax - 1
-    eps = 1e-8
+_MX_QUANTIZE_BITS = {2, 3, 4, 5, 6, 8}
+_MX_QUANTIZE_GROUP_SIZES = {32, 64, 128}
 
-    if group_size is None or group_size <= 0 or x.ndim == 0:
-        max_abs = mx.maximum(mx.max(mx.abs(x)), eps)
-        scale = max_abs / qmax
-        q = mx.clip(mx.round(x / scale), qmin, qmax)
-        return q * scale
 
+def _affine_fake_quantize_groups(x, bits: int):
+    """Affine quantize-dequantize along the last axis, mirroring ``mx.quantize``.
+
+    Used only for configurations ``mx.quantize`` does not support (per-tensor
+    groups, odd group sizes or bit-widths).
+    """
+    dtype = x.dtype
+    x = x.astype(mx.float32)
+    n_bins = (1 << bits) - 1
+    w_max = mx.max(x, axis=-1, keepdims=True)
+    w_min = mx.min(x, axis=-1, keepdims=True)
+    mask = mx.abs(w_min) > mx.abs(w_max)
+    scale = mx.maximum((w_max - w_min) / n_bins, 1e-7)
+    scale = mx.where(mask, scale, -scale)
+    edge = mx.where(mask, w_min, w_max)
+    q0 = mx.round(edge / scale)
+    scale = mx.where(q0 != 0, edge / mx.where(q0 != 0, q0, 1), scale)
+    bias = mx.where(q0 == 0, 0, edge)
+    q = mx.clip(mx.round((x - bias) / scale), 0, n_bins)
+    return (q * scale + bias).astype(dtype)
+
+
+def _affine_fake_quantize_tensor(x, bits: int, group_size: int):
+    """Round ``x`` onto the grid ``mlx_lm convert -q`` stores (scale + bias per group).
+
+    Uses ``mx.quantize``/``mx.dequantize`` directly whenever the configuration
+    is supported, so the simulated weights equal the deployed weights exactly.
+    """
+    if x.ndim == 0:
+        return x
     last_dim = x.shape[-1]
+    if (
+        x.ndim >= 2
+        and bits in _MX_QUANTIZE_BITS
+        and group_size in _MX_QUANTIZE_GROUP_SIZES
+        and last_dim % group_size == 0
+    ):
+        wq, scales, biases = mx.quantize(x, group_size=group_size, bits=bits)
+        return mx.dequantize(
+            wq, scales, biases, group_size=group_size, bits=bits
+        ).astype(x.dtype)
+
+    if group_size is None or group_size <= 0:
+        return _affine_fake_quantize_groups(x.reshape(1, -1), bits).reshape(x.shape)
     if group_size >= last_dim:
-        max_abs = mx.maximum(mx.max(mx.abs(x), axis=-1, keepdims=True), eps)
-        scale = max_abs / qmax
-        q = mx.clip(mx.round(x / scale), qmin, qmax)
-        return q * scale
+        return _affine_fake_quantize_groups(x, bits)
 
     num_groups = (last_dim + group_size - 1) // group_size
     pad = num_groups * group_size - last_dim
-
     if pad > 0:
-        pad_width = [(0, 0)] * x.ndim
-        pad_width[-1] = (0, pad)
-        x = mx.pad(x, pad_width)
-
-    leading = int(np.prod(x.shape[:-1])) if x.ndim > 1 else 1
-    x_2d = x.reshape((leading, x.shape[-1]))
-    x_groups = x_2d.reshape((leading, num_groups, group_size))
-    max_abs = mx.maximum(mx.max(mx.abs(x_groups), axis=-1, keepdims=True), eps)
-    scale = max_abs / qmax
-    q = mx.clip(mx.round(x_groups / scale), qmin, qmax)
-    x_q = (q * scale).reshape((leading, num_groups * group_size))
-
+        # Pad with the row's first value so padding never widens a group's range.
+        pad_vals = mx.broadcast_to(x[..., :1], x.shape[:-1] + (pad,))
+        x = mx.concatenate([x, pad_vals], axis=-1)
+    groups = x.reshape(x.shape[:-1] + (num_groups, group_size))
+    x_q = _affine_fake_quantize_groups(groups, bits).reshape(x.shape)
     if pad > 0:
-        x_q = x_q[:, :last_dim]
+        x_q = x_q[..., :last_dim]
+    return x_q
 
-    return x_q.reshape(x.shape[:-1] + (last_dim,))
+
+# Backwards-compatible alias; the quantizer is affine, matching ``--qat-mode affine``.
+_symmetric_fake_quantize_tensor = _affine_fake_quantize_tensor
+
+
+def _ste_fake_quantize(w, bits: int, group_size: int):
+    """Straight-through estimator: forward sees rounded ``w``, backward is identity."""
+    return w + mx.stop_gradient(_affine_fake_quantize_tensor(w, bits, group_size) - w)
+
+
+def _dequantized(layer):
+    weight = layer.weight
+    if isinstance(layer, (nn.QuantizedLinear, nn.QuantizedEmbedding)):
+        weight = mx.dequantize(
+            weight,
+            layer.scales,
+            layer.biases,
+            group_size=layer.group_size,
+            bits=layer.bits,
+            mode=layer.mode,
+        )
+    return weight
+
+
+def _adapter_kind(module):
+    """Return ``"linear"``/``"embedding"`` for LoRA/DoRA adapters, else ``None``."""
+    if not all(hasattr(module, name) for name in ("lora_a", "lora_b", "scale")):
+        return None
+    base = getattr(module, "linear", None)
+    if isinstance(base, (nn.Linear, nn.QuantizedLinear)):
+        return "linear"
+    base = getattr(module, "embedding", None)
+    if isinstance(base, (nn.Embedding, nn.QuantizedEmbedding)):
+        return "embedding"
+    return None
+
+
+def _adapter_merged_weight(module, kind=None):
+    """The weight ``mlx_lm fuse`` would store for a LoRA or DoRA adapter."""
+    kind = kind or _adapter_kind(module)
+    if kind == "linear":
+        weight = _dequantized(module.linear)
+        delta = (module.scale * module.lora_b.T) @ module.lora_a.T
+    else:
+        weight = _dequantized(module.embedding)
+        delta = (module.scale * module.lora_a) @ module.lora_b
+    weight = weight + delta.astype(weight.dtype)
+    if hasattr(module, "m"):  # DoRA: rescale rows to the learned magnitude
+        norm_scale = module.m / mx.linalg.norm(weight, axis=1)
+        weight = norm_scale[:, None].astype(weight.dtype) * weight
+    return weight
+
+
+# Kept for callers that only care about LoRA linear layers.
+def _lora_merged_weight(module):
+    return _adapter_merged_weight(module, "linear")
+
+
+_ACTIVE_QAT: list = []
+
+
+def _install_qat(model, bits: int, group_size: int):
+    """Install STE fake-quantization on ``model``'s instances; return class originals.
+
+    Every layer is rounded the way ``mlx_lm fuse`` + ``convert -q`` will store it:
+
+    * ``nn.Linear`` / ``nn.Embedding``: the weight is rounded.
+    * LoRA and DoRA adapters (linear and embedding): the *merged* weight
+      (``base + scale * delta``, rescaled to ``m`` for DoRA) is rounded.
+      Adapter dropout is skipped while QAT is active.
+
+    Only modules of ``model`` are affected, so a reference model sharing the
+    same classes keeps its full-precision forward.  Restore with
+    ``_restore_qat(originals)``.
+    """
+    if bits < 2 or bits > 16:
+        raise ValueError("qat_bits must be in [2, 16]")
+
+    adapter_kinds, linear_ids, embed_ids = {}, set(), set()
+    for _, module in model.named_modules():
+        kind = _adapter_kind(module)
+        if kind is not None:
+            adapter_kinds[id(module)] = kind
+        elif isinstance(module, nn.Linear):
+            linear_ids.add(id(module))
+        elif isinstance(module, nn.Embedding):
+            embed_ids.add(id(module))
+
+    originals = {}
+
+    def _patch(cls, attr, make):
+        key = (cls, attr)
+        if key in originals or not hasattr(cls, attr):
+            return
+        originals[key] = getattr(cls, attr)
+        setattr(cls, attr, make(originals[key]))
+
+    def _rounded_adapter(self, kind):
+        weight = _adapter_merged_weight(self, kind)
+        return _ste_fake_quantize(weight, bits, group_size)
+
+    def _make_adapter_call(orig):
+        def fwd(self, x):
+            kind = adapter_kinds.get(id(self))
+            if kind is None:
+                return orig(self, x)
+            w = _rounded_adapter(self, kind)
+            if kind == "embedding":
+                return w[x]
+            y = x @ w.astype(x.dtype).T
+            if "bias" in self.linear:
+                y = y + self.linear.bias
+            return y
+
+        return fwd
+
+    def _make_adapter_as_linear(orig):
+        def fwd(self, x):
+            if adapter_kinds.get(id(self)) != "embedding":
+                return orig(self, x)
+            return x @ _rounded_adapter(self, "embedding").astype(x.dtype).T
+
+        return fwd
+
+    def _make_weight_swap(ids):
+        def make(orig):
+            def fwd(self, *a, **kw):
+                if id(self) not in ids:
+                    return orig(self, *a, **kw)
+                w = self.weight
+                self.weight = _ste_fake_quantize(w, bits, group_size)
+                try:
+                    return orig(self, *a, **kw)
+                finally:
+                    self.weight = w  # optimizer keeps full-precision weights
+
+            return fwd
+
+        return make
+
+    for _, module in model.named_modules():
+        mid, cls = id(module), type(module)
+        if mid in adapter_kinds:
+            _patch(cls, "__call__", _make_adapter_call)
+            if adapter_kinds[mid] == "embedding":
+                _patch(cls, "as_linear", _make_adapter_as_linear)
+        elif mid in linear_ids:
+            _patch(cls, "__call__", _make_weight_swap(linear_ids))
+        elif mid in embed_ids:
+            _patch(cls, "__call__", _make_weight_swap(embed_ids))
+            _patch(cls, "as_linear", _make_weight_swap(embed_ids))
+    return originals
+
+
+def _restore_qat(originals):
+    for (cls, attr), original in originals.items():
+        setattr(cls, attr, original)
 
 
 def _install_qat_hooks(model, args: SFTTrainingArgs):
-    """Patch nn.Linear layers with a STE fake-quantize hook in their forward pass.
-
-    The STE trick `w + stop_gradient(quantize(w) - w)` runs inside the
-    computation graph so gradients flow straight through while the model sees
-    quantization noise during every forward pass.  Must be called once;
-    `self.weight` is restored after each forward so the optimizer still
-    operates on full-precision weights.
-    """
+    """Enable QAT on ``model`` (see ``_install_qat``). Must be called once."""
     if not args.qat_enable:
-        return
-    if args.qat_bits < 2 or args.qat_bits > 16:
-        raise ValueError("qat_bits must be in [2, 16]")
+        return {}
+    originals = _install_qat(model, args.qat_bits, args.qat_group_size)
+    _ACTIVE_QAT.append(originals)
+    return originals
 
-    bits, gs = args.qat_bits, args.qat_group_size
-    seen: set = set()
 
-    def _patch(_, module):
-        if not isinstance(module, nn.Linear):
-            return
-        cls = type(module)
-        if cls in seen:
-            return
-        seen.add(cls)
-        _orig = cls.__call__
+def restores_qat_hooks(train_fn):
+    """Undo any ``_install_qat_hooks`` done during ``train_fn``, even on error."""
 
-        def _qat_fwd(self, x):
-            w = self.weight
-            # STE: forward = quantized weight, backward = identity
-            self.weight = w + mx.stop_gradient(
-                _symmetric_fake_quantize_tensor(w, bits, gs) - w
-            )
-            out = _orig(self, x)
-            self.weight = w  # restore so the optimizer sees full-precision weights
-            return out
+    @wraps(train_fn)
+    def wrapper(*args, **kwargs):
+        depth = len(_ACTIVE_QAT)
+        try:
+            return train_fn(*args, **kwargs)
+        finally:
+            while len(_ACTIVE_QAT) > depth:
+                _restore_qat(_ACTIVE_QAT.pop())
 
-        cls.__call__ = _qat_fwd
-
-    model.apply_to_modules(_patch)
+    return wrapper
 
 
 def default_loss(model, batch, lengths, cache=None):
@@ -441,6 +609,7 @@ def evaluate_sft(
     return (all_losses / ntokens).item(), int(ntokens.item())
 
 
+@restores_qat_hooks
 def train_sft(
     model,
     optimizer,
