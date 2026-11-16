@@ -13,6 +13,7 @@ from tqdm import tqdm
 
 from ..recurrent_patch import enable_memory_safe_recurrences, model_uses_recurrence
 from .checkpointing import resume_training, save_checkpoint
+from .distributed import reduce_metrics, shard
 from .dpo_trainer import DPOTrainingArgs as CPOTrainingArgs
 from .long_context import iter_cached_sft_chunks
 from .sft_trainer import grad_checkpoint, reset_prompt_cache
@@ -62,17 +63,21 @@ def cpo_loss(
     num_rejected_tokens = rejected_masks[:, 1:].sum(-1)
     num_tokens = (num_chosen_tokens + num_rejected_tokens).sum()
 
-    chosen_reward = beta * mx.mean(policy_chosen_score)
-    rejected_reward = beta * mx.mean(policy_rejected_score)
+    # Reuse these means in the metrics: recomputing them creates duplicate
+    # graph nodes that mx.compile merges, which breaks the compiled step.
+    chosen_mean = mx.mean(policy_chosen_score)
+    rejected_mean = mx.mean(policy_rejected_score)
+    chosen_reward = beta * chosen_mean
+    rejected_reward = beta * rejected_mean
     reward = mx.stack([chosen_reward, rejected_reward])
 
     # Metrics
     metrics = {
         "accuracies": mx.mean((chosen_reward > rejected_reward).astype(mx.float32)),
         "margins": mx.mean(chosen_reward - rejected_reward),
-        "policy_rejected_logps": mx.mean(policy_rejected_score),
+        "policy_rejected_logps": rejected_mean,
         "policy_chosen_logps": mx.mean(policy_chosen_score / num_chosen_tokens),
-        "chosen_logits_mean": mx.mean(policy_chosen_score),
+        "chosen_logits_mean": chosen_mean,
     }
 
     mx.clear_cache()
@@ -116,7 +121,7 @@ def iterate_cpo_batches(dataset, batch_size, max_seq_length, train=False):
         raise ValueError("Batch size must be divisible by workers")
 
     batch_idx = [
-        idx[i : i + batch_size : step]
+        shard(idx[i : i + batch_size])
         for i in range(0, len(idx) - batch_size + 1, batch_size)
     ]
 
@@ -541,9 +546,7 @@ def train_cpo(
             train_loss = mx.distributed.all_sum(losses).item() / (steps * world_size)
             train_rewards = mx.distributed.all_sum(rewards).tolist()
             train_rewards = [r / (steps * world_size) for r in train_rewards]
-            avg_metrics = {
-                k: v / (steps * world_size) for k, v in accumulated_metrics.items()
-            }
+            avg_metrics = reduce_metrics(accumulated_metrics, steps)
             n_tokens = mx.distributed.all_sum(n_tokens).item()
             learning_rate = optimizer.learning_rate.item()
             it_sec = args.steps_per_report / (stop - start)

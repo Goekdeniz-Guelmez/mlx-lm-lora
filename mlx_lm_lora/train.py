@@ -21,6 +21,13 @@ from mlx_lm.utils import load, load_tokenizer
 from .chat_template import ensure_chat_template
 from .trainer.cpo_trainer import CPOTrainingArgs, evaluate_cpo, train_cpo
 from .trainer.datasets import CacheDataset, load_dataset
+from .trainer.distributed import (
+    BACKENDS,
+    init_distributed,
+    is_main_process,
+    local_batch_size,
+    silence_worker_stdout,
+)
 from .trainer.dpo_trainer import DPOTrainingArgs, evaluate_dpo, train_dpo
 from .trainer.dsla_trainer import DSLATrainingArgs, evaluate_dsla, train_dsla
 from .trainer.ftpo_trainer import FTPOTrainingArgs, evaluate_ftpo, train_ftpo
@@ -92,6 +99,7 @@ CONFIG_DEFAULTS = {
     "optimizer_config": {"adam": {}, "adamw": {}, "muon": {}},
     "data": "data/",
     "seed": 0,
+    "distributed_backend": "any",
     "num_layers": -1,
     "batch_size": 1,
     "iters": None,
@@ -414,6 +422,18 @@ def build_parser():
         help="WandB project name to report training metrics. Disabled if None.",
     )
     parser.add_argument("--seed", type=int, help="The PRNG seed")
+    parser.add_argument(
+        "--distributed-backend",
+        type=str,
+        choices=BACKENDS,
+        default=None,
+        help=(
+            "MLX distributed backend used under mlx.launch: 'ring' (TCP, e.g. "
+            "over Thunderbolt IP links), 'jaccl' (RDMA over Thunderbolt 5, "
+            "macOS 26.2+), 'mpi', or 'any' (default) to use whatever mlx.launch "
+            "set up."
+        ),
+    )
     parser.add_argument(
         "--fuse",
         action="store_true",
@@ -1405,9 +1425,12 @@ def build_lora_config(args):
 
 
 def run(args, training_callback: TrainingCallback = None):
+    # Seed both RNGs before the model (and its LoRA layers) is built so every
+    # rank starts from identical weights and walks the data in the same order.
     np.random.seed(args.seed)
+    mx.random.seed(args.seed)
 
-    if args.wandb is not None:
+    if args.wandb is not None and is_main_process():
         training_callback = WandBCallback(
             project_name=args.wandb,
             log_dir=args.adapter_path,
@@ -1483,7 +1506,7 @@ def run(args, training_callback: TrainingCallback = None):
     mx.clear_cache()
     del reference_model, judge_model, judge_tokenizer
 
-    if args.fuse and args.train:
+    if args.fuse and args.train and is_main_process():
         print_section("Fusing Model")
         if args.lm_studio_name is not None:
             save_to_lmstudio_merged(
@@ -1519,8 +1542,6 @@ def main(args=None):
 
     os.environ["TOKENIZERS_PARALLELISM"] = "true"
 
-    print_banner()
-
     if args is None:
         parser = build_parser()
         args = parser.parse_args()
@@ -1540,7 +1561,20 @@ def main(args=None):
         if getattr(args, k, None) is None:
             setattr(args, k, v)
 
+    group = init_distributed(args.distributed_backend)
+    silence_worker_stdout()
+    local_batch_size(args.batch_size, group.size())
+    if group.size() > 1 and getattr(args, "judge", None) == "human":
+        raise ValueError("The human judge cannot be used in distributed training")
+    print_banner()
+
     print_section("Configuration Summary")
+    if group.size() > 1:
+        print(
+            f"{Colors.WHITE}Distributed:{Colors.RESET} {group.size()} processes "
+            f"(global batch {args.batch_size}, "
+            f"{args.batch_size // group.size()} per process)"
+        )
     print(f"{Colors.WHITE}Model:{Colors.RESET} {args.model}")
     print(f"{Colors.WHITE}Training Mode:{Colors.RESET} {args.train_mode.upper()}")
     print(f"{Colors.WHITE}Training Type:{Colors.RESET} {args.train_type}")

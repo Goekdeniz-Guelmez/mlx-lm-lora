@@ -11,6 +11,7 @@ from tqdm import tqdm
 
 from ..recurrent_patch import enable_memory_safe_recurrences, model_uses_recurrence
 from .checkpointing import resume_training, save_checkpoint
+from .distributed import global_mean_std, reduce_metrics
 from .judge import HumanPairwiseJudge, LLMPairwiseJudge
 from .online_dpo_trainer import (
     OnlineDPOTrainingArgs,
@@ -51,9 +52,9 @@ def ppo_loss(
     # Compute advantages (difference between chosen and rejected rewards)
     advantages = policy_chosen_score - policy_rejected_score
 
-    # Normalize advantages
-    advantage_mean = mx.mean(advantages)
-    advantage_std = mx.sqrt(mx.var(advantages) + 1e-8)
+    # Normalize advantages with statistics over the whole global batch, so
+    # data-parallel ranks match a single process.
+    advantage_mean, advantage_std = global_mean_std(advantages)
     normalized_advantages = (advantages - advantage_mean) / advantage_std
 
     # PPO clipped objective for chosen sequences
@@ -499,9 +500,7 @@ def train_ppo(
             stop = time.perf_counter()
 
             train_loss = mx.distributed.all_sum(losses).item() / (steps * world_size)
-            avg_metrics = {
-                k: v / (steps * world_size) for k, v in accumulated_metrics.items()
-            }
+            avg_metrics = reduce_metrics(accumulated_metrics, steps)
             n_tokens = mx.distributed.all_sum(n_tokens).item()
             learning_rate = optimizer.learning_rate.item()
             it_sec = args.steps_per_report / (stop - start)
