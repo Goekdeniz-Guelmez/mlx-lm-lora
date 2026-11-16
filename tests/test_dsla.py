@@ -502,8 +502,7 @@ class DSLAIntegrationTest(unittest.TestCase):
             self.assertFalse(mx.allclose(policy(tokens), policy_logits).item())
             self.assertTrue(mx.allclose(reference(tokens), reference_logits).item())
         finally:
-            for cls, original in originals.items():
-                cls.__call__ = original
+            dsla_trainer._restore_qat(originals)
 
     def test_checkpointing_preserves_intermediate_layer_gradients(self):
         model, batch = _model(), _batch()
